@@ -1,0 +1,47 @@
+{
+  "nav": {
+    "rooms": "Rooms",
+    "amenities": "Amenities",
+    "gallery": "Gallery",
+    "contact": "Contact",
+    "book": "Book Now"
+  },
+  "hero": {
+    "title": "Welcome to Bastille Hotel",
+    "subtitle": "Luxury, comfort and hospitality in every detail",
+    "cta": "View Rooms"
+  },
+  "rooms": {
+    "title": "Our Rooms",
+    "subtitle": "Spaces designed for your comfort",
+    "suitesTitle": "Suites",
+    "suitesSubtitle": "Premium experiences for special stays",
+    "perNight": "/ night",
+    "bookNow": "Book Now",
+    "pet": "Pet friendly · small pets: 20 Bs/night",
+    "names": {
+      "simple": "Single Room",
+      "matrimonial": "Double Room",
+      "double": "Twin Room",
+      "suiteSimple": "Suite Single",
+      "suiteMatrimonial": "Suite Double",
+      "suiteDouble": "Suite Twin",
+      "suiteTriple": "Suite Triple"
+    },
+    "amenities": {
+      "wifi": "Free WiFi",
+      "tv": "Smart TV",
+      "shower": "Rain Shower",
+      "desk": "Work Desk",
+      "closet": "Closet",
+      "fan": "Ceiling Fan",
+      "breakfast": "Breakfast",
+      "hairdryer": "Hair dryer",
+      "towels": "Towels",
+      "iron": "Iron",
+      "laundry": "Laundry (+fee)",
+      "minibar": "Mini fridge",
+      "streetview": "Street view"
+    }
+  }
+}

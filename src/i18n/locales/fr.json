@@ -1,0 +1,47 @@
+{
+  "nav": {
+    "rooms": "Chambres",
+    "amenities": "Services",
+    "gallery": "Galerie",
+    "contact": "Contact",
+    "book": "Réserver"
+  },
+  "hero": {
+    "title": "Bienvenue au Bastille Hotel",
+    "subtitle": "Luxe, confort et hospitalité dans chaque détail",
+    "cta": "Voir les chambres"
+  },
+  "rooms": {
+    "title": "Nos Chambres",
+    "subtitle": "Des espaces conçus pour votre confort",
+    "suitesTitle": "Suites",
+    "suitesSubtitle": "Des expériences premium pour des séjours spéciaux",
+    "perNight": "/ nuit",
+    "bookNow": "Réserver",
+    "pet": "Animaux acceptés · petits animaux: 20 Bs/nuit",
+    "names": {
+      "simple": "Chambre Simple",
+      "matrimonial": "Chambre Double",
+      "double": "Chambre Twin",
+      "suiteSimple": "Suite Simple",
+      "suiteMatrimonial": "Suite Double",
+      "suiteDouble": "Suite Twin",
+      "suiteTriple": "Suite Triple"
+    },
+    "amenities": {
+      "wifi": "WiFi gratuit",
+      "tv": "Smart TV",
+      "shower": "Douche à effet pluie",
+      "desk": "Bureau de travail",
+      "closet": "Placard",
+      "fan": "Ventilateur",
+      "breakfast": "Petit-déjeuner",
+      "hairdryer": "Sèche-cheveux",
+      "towels": "Serviettes",
+      "iron": "Fer à repasser",
+      "laundry": "Blanchisserie (+coût)",
+      "minibar": "Mini-réfrigérateur",
+      "streetview": "Vue sur la rue"
+    }
+  }
+}
