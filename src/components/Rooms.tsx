@@ -68,7 +68,7 @@ export default function Rooms({ filters }: Props) {
                   viewport={{ once: true }}
                   variants={cardVariants}
                 >
-                  <RoomCard room={room} />
+                  <RoomCard room={room} filters={filters} />
                 </motion.div>
               ))}
             </div>
@@ -96,28 +96,28 @@ export default function Rooms({ filters }: Props) {
                   viewport={{ once: true }}
                   variants={cardVariants}
                 >
-                  <RoomCard room={room} />
+                  <RoomCard room={room} filters={filters} />
                 </motion.div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Pet friendly note */}
+        {/* Pet friendly badge */}
         {!noResults && (
           <div
             data-testid="rooms-pet-note"
-            className={`flex items-center justify-center gap-2 text-sm rounded-xl py-4 px-6 w-fit mx-auto border transition-colors ${
-              filters.hasPet
-                ? "bg-amber-50 border-amber-300 text-amber-700 font-medium"
-                : "bg-white border-gray-200 text-gray-500"
-            }`}
+            className="flex items-center justify-center gap-4 bg-green-50 border border-green-200 rounded-2xl py-4 px-8 w-fit mx-auto"
           >
-            <PawPrint
-              size={18}
-              className={filters.hasPet ? "text-amber-500" : "text-amber-400"}
-            />
-            <span>{t("rooms.pet")}</span>
+            <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center shrink-0">
+              <PawPrint size={22} className="text-white" />
+            </div>
+            <div>
+              <p className="font-bold text-green-700 text-sm uppercase tracking-wide">
+                Pet Friendly
+              </p>
+              <p className="text-green-600 text-xs">{t("rooms.pet")}</p>
+            </div>
           </div>
         )}
       </div>

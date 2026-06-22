@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
+import type { BookingFilters } from "./BookingSearch";
 import {
   Wifi,
   Tv,
@@ -38,11 +40,16 @@ const amenityIcons: Record<AmenityKey, React.ReactNode> = {
 
 interface RoomCardProps {
   room: Room;
+  filters?: BookingFilters;
 }
 
-export default function RoomCard({ room }: RoomCardProps) {
+export default function RoomCard({ room, filters }: RoomCardProps) {
   const { t } = useTranslation();
   const [current, setCurrent] = useState(0);
+
+  const totalAdults = filters?.rooms.reduce((s, r) => s + r.adults, 0) ?? 1;
+  const totalChildren = filters?.rooms.reduce((s, r) => s + r.children, 0) ?? 0;
+  const bookingUrl = `/booking?room=${room.id}&checkIn=${filters?.checkIn ?? ""}&checkOut=${filters?.checkOut ?? ""}&adults=${totalAdults}&children=${totalChildren}&pet=${filters?.hasPet ?? false}`;
 
   const prev = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -171,13 +178,13 @@ export default function RoomCard({ room }: RoomCardProps) {
               ≈ {room.price} Bs
             </p>
           </div>
-          <a
+          <Link
             data-testid={"room-card-" + room.id + "-btn-book"}
-            href="#booking"
+            to={bookingUrl}
             className="bg-amber-400 hover:bg-amber-300 text-black font-semibold px-5 py-2 rounded-lg transition-colors"
           >
             {t("rooms.bookNow")}
-          </a>
+          </Link>
         </div>
       </div>
     </div>

@@ -111,22 +111,23 @@ export default function DateRangePicker({ checkIn, checkOut, onChange }: Props) 
             if (!day) return <div key={`e-${i}`} />;
             const ds = toStr(year, month, day);
             const past = ds < today;
+            const isToday = ds === today;
             const start = isStart(ds);
             const end = isEnd(ds);
             const range = inRange(ds);
 
             let cls =
-              "h-9 w-full text-sm flex items-center justify-center transition-all ";
+              "h-9 w-full text-sm flex items-center justify-center transition-all relative ";
             if (past) {
               cls += "text-gray-300 cursor-not-allowed ";
             } else if (start || end) {
-              cls +=
-                "bg-amber-400 text-black font-bold rounded-full cursor-pointer z-10 relative ";
+              cls += "bg-amber-400 text-black font-bold rounded-full cursor-pointer z-10 ";
             } else if (range) {
               cls += "bg-amber-100 text-gray-800 cursor-pointer ";
+            } else if (isToday) {
+              cls += "text-amber-500 font-bold cursor-pointer hover:bg-amber-50 hover:rounded-full ";
             } else {
-              cls +=
-                "text-gray-700 cursor-pointer hover:bg-amber-50 hover:rounded-full ";
+              cls += "text-gray-700 cursor-pointer hover:bg-amber-50 hover:rounded-full ";
             }
 
             return (
@@ -139,6 +140,9 @@ export default function DateRangePicker({ checkIn, checkOut, onChange }: Props) 
                 className={cls}
               >
                 {day}
+                {isToday && !start && !end && (
+                  <span className="absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-amber-400 rounded-full" />
+                )}
               </button>
             );
           })}
