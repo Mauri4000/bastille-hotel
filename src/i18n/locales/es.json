@@ -4,12 +4,28 @@
     "amenities": "Servicios",
     "gallery": "Galería",
     "contact": "Contacto",
-    "book": "Reservar"
+    "book": "Reservar",
+    "offers": "Ofertas Especiales",
+    "signin": "Iniciar Sesión"
   },
   "hero": {
     "title": "Bienvenido al Bastille Hotel",
     "subtitle": "Lujo, confort y hospitalidad en cada detalle",
     "cta": "Ver habitaciones"
+  },
+  "search": {
+    "dates": "Fechas",
+    "guests": "Huéspedes y habitaciones",
+    "guestsLabel": "huéspedes",
+    "roomsLabel": "habitaciones",
+    "room": "Habitación",
+    "adults": "Adultos",
+    "children": "Niños",
+    "childrenAge": "Hasta 17 años",
+    "addRoom": "Agregar habitación",
+    "pet": "Mascota",
+    "cta": "Buscar",
+    "noResults": "No hay habitaciones disponibles para tu búsqueda. Intenta reducir el número de huéspedes."
   },
   "rooms": {
     "title": "Nuestras Habitaciones",

@@ -3,8 +3,8 @@ import { motion } from "framer-motion";
 import { PawPrint } from "lucide-react";
 import RoomCard from "./RoomCard";
 import { rooms } from "../data/rooms";
+import type { BookingFilters } from "./BookingSearch";
 
-// Animation variant for staggered card entrance
 const cardVariants = {
   hidden: { opacity: 0, y: 30 },
   visible: (i: number) => ({
@@ -14,83 +14,79 @@ const cardVariants = {
   }),
 };
 
-export default function Rooms() {
+interface Props {
+  filters: BookingFilters;
+}
+
+export default function Rooms({ filters }: Props) {
   const { t } = useTranslation();
 
-  const standardRooms = rooms.filter((r) => r.category === "room");
-  const suites = rooms.filter((r) => r.category === "suite");
+  // Max occupancy needed in any single booking room
+  const maxPerRoom = Math.max(
+    ...filters.rooms.map((r) => r.adults + r.children)
+  );
+
+  const filtered = rooms.filter((r) => r.capacity >= maxPerRoom);
+  const standardRooms = filtered.filter((r) => r.category === "room");
+  const suites = filtered.filter((r) => r.category === "suite");
+  const noResults = filtered.length === 0;
 
   return (
     <section
       id="rooms"
       data-testid="rooms-section"
-      className="bg-gray-50 py-20 px-6"
+      className="bg-gray-50 pt-16 pb-20 px-6"
     >
       <div data-testid="rooms-container" className="max-w-6xl mx-auto">
+
+        {/* No results message */}
+        {noResults && (
+          <div
+            data-testid="rooms-no-results"
+            className="text-center py-20 text-gray-400"
+          >
+            <p className="text-lg">{t("search.noResults")}</p>
+          </div>
+        )}
+
         {/* Standard rooms */}
-        <div data-testid="rooms-standard" className="mb-20">
-          <div
-            data-testid="rooms-standard-header"
-            className="text-center mb-12"
-          >
-            <h2
-              data-testid="rooms-standard-title"
-              className="text-4xl font-bold text-gray-900 mb-3"
-            >
-              {t("rooms.title")}
-            </h2>
-            <p
-              data-testid="rooms-standard-subtitle"
-              className="text-gray-500 text-lg"
-            >
-              {t("rooms.subtitle")}
-            </p>
+        {standardRooms.length > 0 && (
+          <div data-testid="rooms-standard" className="mb-20">
+            <div className="text-center mb-12">
+              <h2 className="text-4xl font-bold text-gray-900 mb-3">
+                {t("rooms.title")}
+              </h2>
+              <p className="text-gray-500 text-lg">{t("rooms.subtitle")}</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {standardRooms.map((room, i) => (
+                <motion.div
+                  key={room.id}
+                  custom={i}
+                  initial="hidden"
+                  whileInView="visible"
+                  viewport={{ once: true }}
+                  variants={cardVariants}
+                >
+                  <RoomCard room={room} />
+                </motion.div>
+              ))}
+            </div>
           </div>
+        )}
 
-          <div
-            data-testid="rooms-standard-grid"
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
-          >
-            {standardRooms.map((room, i) => (
-              <motion.div
-                key={room.id}
-                custom={i}
-                initial="hidden"
-                whileInView="visible"
-                viewport={{ once: true }}
-                variants={cardVariants}
-              >
-                <RoomCard room={room} />
-              </motion.div>
-            ))}
-          </div>
-        </div>
-
-        {/* Suites — only shown when there's data */}
+        {/* Suites */}
         {suites.length > 0 && (
           <div data-testid="rooms-suites" className="mb-16">
-            <div
-              data-testid="rooms-suites-header"
-              className="text-center mb-12"
-            >
-              <h2
-                data-testid="rooms-suites-title"
-                className="text-4xl font-bold text-gray-900 mb-3"
-              >
+            <div className="text-center mb-12">
+              <h2 className="text-4xl font-bold text-gray-900 mb-3">
                 {t("rooms.suitesTitle")}
               </h2>
-              <p
-                data-testid="rooms-suites-subtitle"
-                className="text-gray-500 text-lg"
-              >
+              <p className="text-gray-500 text-lg">
                 {t("rooms.suitesSubtitle")}
               </p>
             </div>
-
-            <div
-              data-testid="rooms-suites-grid"
-              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
-            >
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
               {suites.map((room, i) => (
                 <motion.div
                   key={room.id}
@@ -108,13 +104,22 @@ export default function Rooms() {
         )}
 
         {/* Pet friendly note */}
-        <div
-          data-testid="rooms-pet-note"
-          className="flex items-center justify-center gap-2 text-gray-500 text-sm bg-white border border-gray-200 rounded-xl py-4 px-6 w-fit mx-auto"
-        >
-          <PawPrint size={18} className="text-amber-400" />
-          <span>{t("rooms.pet")}</span>
-        </div>
+        {!noResults && (
+          <div
+            data-testid="rooms-pet-note"
+            className={`flex items-center justify-center gap-2 text-sm rounded-xl py-4 px-6 w-fit mx-auto border transition-colors ${
+              filters.hasPet
+                ? "bg-amber-50 border-amber-300 text-amber-700 font-medium"
+                : "bg-white border-gray-200 text-gray-500"
+            }`}
+          >
+            <PawPrint
+              size={18}
+              className={filters.hasPet ? "text-amber-500" : "text-amber-400"}
+            />
+            <span>{t("rooms.pet")}</span>
+          </div>
+        )}
       </div>
     </section>
   );

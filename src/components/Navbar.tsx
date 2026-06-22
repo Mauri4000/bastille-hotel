@@ -46,7 +46,7 @@ export default function Navbar() {
         ))}
       </div>
 
-      {/* Language switcher + book button */}
+      {/* Language switcher + offers + book button */}
       <div
         data-testid="navbar-desktop-right"
         className="hidden md:flex items-center gap-4"
@@ -67,6 +67,19 @@ export default function Navbar() {
             </button>
           ))}
         </div>
+        <a
+          data-testid="nav-btn-offers"
+          href="#offers"
+          className="border border-white/40 hover:border-amber-400 hover:text-amber-400 text-white px-4 py-2 rounded text-sm font-semibold transition-colors"
+        >
+          🌟 {t("nav.offers")}
+        </a>
+        <button
+          data-testid="nav-btn-signin"
+          className="border border-white/40 hover:border-white text-white px-4 py-2 rounded text-sm font-semibold transition-colors"
+        >
+          👤 {t("nav.signin")}
+        </button>
         <a
           data-testid="nav-btn-book"
           href="#booking"
@@ -104,6 +117,28 @@ export default function Navbar() {
               {t(`nav.${key}`)}
             </a>
           ))}
+          <a
+            data-testid="nav-mobile-btn-offers"
+            href="#offers"
+            onClick={() => setMenuOpen(false)}
+            className="border border-white/40 hover:border-amber-400 hover:text-amber-400 px-4 py-2 rounded text-sm font-semibold transition-colors"
+          >
+            🌟 {t("nav.offers")}
+          </a>
+          <button
+            data-testid="nav-mobile-btn-signin"
+            className="border border-white/40 px-4 py-2 rounded text-sm font-semibold transition-colors"
+          >
+            👤 {t("nav.signin")}
+          </button>
+          <a
+            data-testid="nav-mobile-btn-book"
+            href="#booking"
+            onClick={() => setMenuOpen(false)}
+            className="bg-amber-400 text-black px-4 py-2 rounded text-sm font-semibold hover:bg-amber-300 transition-colors"
+          >
+            {t("nav.book")}
+          </a>
           <div data-testid="navbar-mobile-lang-switcher" className="flex gap-2">
             {languages.map((lang) => (
               <button
