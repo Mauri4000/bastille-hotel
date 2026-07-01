@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { ShiftHandover, ShiftType } from '../types';
 import { MONTH_NAMES } from '../constants';
+import CustomSelect from '../components/CustomSelect';
 
 const SHIFTS: ShiftType[] = ['MAÑANA', 'TARDE', 'NOCHE'];
 
@@ -198,12 +199,9 @@ export default function ShiftPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Turno</label>
-                  <select value={form.shift}
-                    onChange={e => setForm(f => ({ ...f, shift: e.target.value as ShiftType }))}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  >
-                    {SHIFTS.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  <CustomSelect value={form.shift} onChange={v => setForm(f => ({ ...f, shift: v as ShiftType }))}
+                    options={SHIFTS.map(s => ({ value: s, label: s }))}
+                    placeholder="— Seleccionar —" />
                 </div>
               </div>
 

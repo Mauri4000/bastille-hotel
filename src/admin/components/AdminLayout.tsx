@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, CalendarDays, ArrowLeftRight, Wallet,
-  ClipboardList, AlertTriangle, Users, LogOut, Menu, X, Hotel, BarChart2,
+  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -12,7 +12,6 @@ const navItems = [
   { to: '/admin/transactions',icon: ArrowLeftRight,  label: 'Ingresos / Egresos' },
   { to: '/admin/petty-cash',  icon: Wallet,          label: 'Caja Chica' },
   { to: '/admin/shift',       icon: ClipboardList,   label: 'Cambio de Turno' },
-  { to: '/admin/banknotes',   icon: AlertTriangle,   label: 'Billetes' },
   { to: '/admin/reportes',    icon: BarChart2,       label: 'Reportes' },
 ];
 

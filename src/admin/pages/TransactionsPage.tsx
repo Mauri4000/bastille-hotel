@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Transaction, TransactionType, CajaType } from '../types';
 import { INCOME_CATEGORIES, EXPENSE_CATEGORIES, MONTH_NAMES } from '../constants';
+import CustomSelect from '../components/CustomSelect';
 
 const CAJAS: CajaType[] = ['CAJA MAYOR', 'CAJA CHICA', 'CUENTA BNB'];
 
@@ -178,36 +179,19 @@ export default function TransactionsPage() {
           <Filter size={14} className="text-gray-400" />
           <span className="text-sm text-gray-500 font-medium">Filtros:</span>
         </div>
-        <select
-          value={filterType}
-          onChange={e => setFilterType(e.target.value as any)}
-          className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-        >
-          <option value="all">Todos</option>
-          <option value="ingreso">Ingresos</option>
-          <option value="egreso">Egresos</option>
-        </select>
-        <select
-          value={filterCaja}
-          onChange={e => setFilterCaja(e.target.value as any)}
-          className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-        >
-          <option value="all">Todas las cajas</option>
-          {CAJAS.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <select
-          value={filterCat}
-          onChange={e => setFilterCat(e.target.value)}
-          className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-        >
-          <option value="all">Todas las categorías</option>
-          <optgroup label="Ingresos">
-            {INCOME_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </optgroup>
-          <optgroup label="Egresos">
-            {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </optgroup>
-        </select>
+        <CustomSelect size="sm" value={filterType} onChange={v => setFilterType(v as any)}
+          options={[{ value:'all', label:'Todos' },{ value:'ingreso', label:'Ingresos' },{ value:'egreso', label:'Egresos' }]}
+          placeholder="Todos" />
+        <CustomSelect size="sm" value={filterCaja} onChange={v => setFilterCaja(v as any)}
+          options={[{ value:'all', label:'Todas las cajas' }, ...CAJAS.map(c => ({ value: c, label: c }))]}
+          placeholder="Todas las cajas" />
+        <CustomSelect size="sm" value={filterCat} onChange={v => setFilterCat(v)}
+          options={[
+            { value:'all', label:'Todas las categorías' },
+            ...INCOME_CATEGORIES.map(c => ({ value: c, label: `↑ ${c}` })),
+            ...EXPENSE_CATEGORIES.map(c => ({ value: c, label: `↓ ${c}` })),
+          ]}
+          placeholder="Todas las categorías" />
       </div>
 
       {/* Table */}
@@ -322,24 +306,17 @@ export default function TransactionsPage() {
               {/* Category */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Categoría *</label>
-                <select value={form.category}
-                  onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                >
-                  <option value="">— Seleccionar —</option>
-                  {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <CustomSelect value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))}
+                  options={categories.map(c => ({ value: c, label: c }))}
+                  placeholder="— Seleccionar —" />
               </div>
 
               {/* Caja */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Caja</label>
-                <select value={form.caja}
-                  onChange={e => setForm(f => ({ ...f, caja: e.target.value as CajaType }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                >
-                  {CAJAS.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <CustomSelect value={form.caja} onChange={v => setForm(f => ({ ...f, caja: v as CajaType }))}
+                  options={CAJAS.map(c => ({ value: c, label: c }))}
+                  placeholder="— Seleccionar —" />
               </div>
 
               {/* Description */}
