@@ -1,12 +1,15 @@
 {
   "nav": {
-    "rooms": "Habitaciones",
+    "rooms": "Suites & Habitaciones",
     "amenities": "Servicios",
     "gallery": "Galería",
     "contact": "Contacto",
     "book": "Reservar",
     "offers": "Ofertas Especiales",
-    "signin": "Iniciar Sesión"
+    "signin": "Iniciar Sesión",
+    "conference": "Conferencias",
+    "rooftop": "Rooftop Soir d'Été",
+    "spanishSchool": "Spanish School"
   },
   "hero": {
     "title": "Bienvenido al Bastille Hotel",
@@ -197,6 +200,19 @@
       "laundry": "Lavandería (+costo)",
       "minibar": "Frigobar",
       "streetview": "Vista a la calle"
+    }
+  },
+  "gallery": {
+    "title": "Galería",
+    "subtitle": "Un vistazo a nuestros espacios",
+    "pending": "Próximamente",
+    "cat": {
+      "all": "Todos",
+      "conference": "Salón de Conferencias",
+      "terrace": "Terraza & Comedor",
+      "buffet": "Menú Buffet",
+      "pets": "Perritos",
+      "hallway": "Pasillo"
     }
   }
 }
