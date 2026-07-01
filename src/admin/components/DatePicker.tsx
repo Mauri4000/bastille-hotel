@@ -21,6 +21,7 @@ export default function DatePicker({
 }: Props) {
   const [open, setOpen]     = useState(false);
   const [mode, setMode]     = useState<'days' | 'years'>('days');
+  const [typed, setTyped]   = useState('');
   const ref = useRef<HTMLDivElement>(null);
 
   const today = new Date();
@@ -37,8 +38,35 @@ export default function DatePicker({
   const yearRange = Array.from({ length: 20 }, (_, i) => decadeStart + i);
 
   useEffect(() => {
-    if (sel) { setVy(sel.getFullYear()); setVm(sel.getMonth()); }
+    if (sel) {
+      setVy(sel.getFullYear());
+      setVm(sel.getMonth());
+      // sync typed display when value set externally (e.g. from calendar click)
+      const [y, m, d] = value.split('-');
+      setTyped(`${d}/${m}/${y}`);
+    } else {
+      setTyped('');
+    }
   }, [value]); // eslint-disable-line
+
+  function handleTyped(raw: string) {
+    // strip everything except digits
+    const digits = raw.replace(/\D/g, '').slice(0, 8);
+    let fmt = '';
+    for (let i = 0; i < digits.length; i++) {
+      if (i === 2 || i === 4) fmt += '/';
+      fmt += digits[i];
+    }
+    setTyped(fmt);
+    if (fmt.length === 10) {
+      const [dd, mm, yyyy] = fmt.split('/').map(Number);
+      if (dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12 && yyyy >= 1900 && yyyy <= 2200) {
+        onChange(`${yyyy}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}`);
+        setOpen(false);
+      }
+    }
+    if (fmt.length === 0) onChange('');
+  }
 
   useEffect(() => {
     const fn = (e: MouseEvent) => {
@@ -83,24 +111,28 @@ export default function DatePicker({
   return (
     <div className="relative" ref={ref}>
       {/* Trigger */}
-      <button
-        type="button"
-        onClick={() => { setOpen(o => !o); setMode('days'); }}
-        className={`w-full flex items-center gap-2 border rounded-xl px-3 py-2.5 text-sm bg-white transition-all ${
+      <div
+        className={`w-full flex items-center gap-2 border rounded-xl px-3 py-2 text-sm bg-white transition-all ${
           open ? `${accentClass} ring-2` : 'border-gray-200 hover:border-gray-300'
         }`}
       >
-        <span className="text-base select-none">📅</span>
-        <span className={`flex-1 text-left ${display ? 'text-gray-900 font-medium' : 'text-gray-400'}`}>
-          {display ?? placeholder}
-        </span>
-        {display && (
-          <span
-            className="text-gray-300 hover:text-gray-500 text-xs ml-auto leading-none"
-            onClick={e => { e.stopPropagation(); onChange(''); }}
-          >✕</span>
+        <button type="button" onClick={() => { setOpen(o => !o); setMode('days'); }} className="text-base select-none leading-none">📅</button>
+        <input
+          type="text"
+          value={typed}
+          onChange={e => handleTyped(e.target.value)}
+          onFocus={() => { setOpen(true); setMode('days'); }}
+          placeholder={placeholder}
+          maxLength={10}
+          className="flex-1 bg-transparent outline-none text-sm text-gray-900 placeholder-gray-400 min-w-0"
+        />
+        {typed && (
+          <button type="button"
+            className="text-gray-300 hover:text-gray-500 text-xs leading-none"
+            onClick={() => { onChange(''); setTyped(''); }}
+          >✕</button>
         )}
-      </button>
+      </div>
 
       {/* Calendar popup */}
       {open && (

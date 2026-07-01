@@ -52,7 +52,7 @@ interface AdditionalGuest {
   purpose:        string;
   origin:         string;
   next_dest:      string;
-  transport:      '' | 'T' | 'A' | 'B';
+  transport:      '' | 'T' | 'A';
 }
 
 const emptyAdditionalGuest = (): AdditionalGuest => ({
@@ -102,7 +102,7 @@ const emptyForm = {
   guest_purpose:        '',
   guest_origin:         '',
   guest_next_dest:      '',
-  guest_transport:      '' as '' | 'T' | 'A' | 'B',
+  guest_transport:      '' as '' | 'T' | 'A',
 };
 
 export default function CalendarPage() {
@@ -141,6 +141,7 @@ export default function CalendarPage() {
   // Checkout modal
   const [checkoutModal, setCheckoutModal] = useState({
     open: false, res: null as Reservation | null, departure_time: '',
+    is_invoice: false, siaat_number: '',
   });
 
   // Additional guests for confirm arrival modal
@@ -521,6 +522,8 @@ export default function CalendarPage() {
     setCheckoutModal({
       open: true, res,
       departure_time: (res as any).departure_time ?? '',
+      is_invoice: res.wants_invoice ?? false,
+      siaat_number: (res as any).siaat_number ?? '',
     });
   }
 
@@ -530,6 +533,8 @@ export default function CalendarPage() {
 
     await supabase.from('reservations').update({
       departure_time: checkoutModal.departure_time || null,
+      wants_invoice:  checkoutModal.is_invoice,
+      siaat_number:   checkoutModal.is_invoice ? (checkoutModal.siaat_number || null) : null,
       updated_at:     new Date().toISOString(),
     }).eq('id', res.id);
 
@@ -836,7 +841,7 @@ export default function CalendarPage() {
                             {isCheckIn ? (
                               /* ── First day: full name + flags + arrival time ── */
                               <>
-                                <div className="text-xs font-bold truncate leading-tight">
+                                <div className="text-xs font-bold leading-tight break-words">
                                   {res.guest_name}
                                 </div>
                                 <div className="flex items-center gap-1 mt-1 flex-wrap">
@@ -851,7 +856,7 @@ export default function CalendarPage() {
                             ) : isCheckOut ? (
                               /* ── Last day: short name + departure time ── */
                               <>
-                                <div className="text-xs font-bold truncate leading-tight opacity-80">
+                                <div className="text-xs font-bold leading-tight opacity-80 break-words">
                                   {shortName}
                                 </div>
                                 {departureTime && (
@@ -1548,7 +1553,7 @@ export default function CalendarPage() {
                               className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                             <CustomSelect size="sm" value={form.guest_transport}
                               onChange={v => setForm(f => ({ ...f, guest_transport: v as any }))}
-                              options={[{ value:'T', label:'T' },{ value:'A', label:'A' },{ value:'B', label:'B' }]}
+                              options={[{ value:'T', label:'T' },{ value:'A', label:'A' }]}
                               placeholder="Vía —" />
                           </div>
                         </div>
@@ -1799,7 +1804,7 @@ export default function CalendarPage() {
                       className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                     <CustomSelect size="sm" value={confirmModal.guest_transport}
                       onChange={v => setConfirmModal(m => ({ ...m, guest_transport: v }))}
-                      options={[{ value:'T', label:'T' },{ value:'A', label:'A' },{ value:'B', label:'B' }]}
+                      options={[{ value:'T', label:'T' },{ value:'A', label:'A' }]}
                       placeholder="Vía —" accent="green" />
                   </div>
 
@@ -1858,7 +1863,7 @@ export default function CalendarPage() {
                           className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                         <CustomSelect size="sm" value={ag.transport} accent="green"
                           onChange={v => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, transport: v as any } : g))}
-                          options={[{ value:'T', label:'T' },{ value:'A', label:'A' },{ value:'B', label:'B' }]} placeholder="Vía" />
+                          options={[{ value:'T', label:'T' },{ value:'A', label:'A' }]} placeholder="Vía" />
                       </div>
                     </div>
                   ))}
@@ -1943,6 +1948,33 @@ export default function CalendarPage() {
                   placeholder="-- : --" emoji="🛫"
                   accentClass="border-orange-400 ring-orange-100"
                 />
+              </div>
+
+              {/* Factura */}
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 cursor-pointer select-none">
+                  <div
+                    onClick={() => setCheckoutModal(m => ({ ...m, is_invoice: !m.is_invoice, siaat_number: '' }))}
+                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-colors ${
+                      checkoutModal.is_invoice ? 'bg-green-500 border-green-500' : 'border-gray-300'
+                    }`}
+                  >
+                    {checkoutModal.is_invoice && <span className="text-white text-xs font-bold">✓</span>}
+                  </div>
+                  <span className="text-sm font-medium text-gray-700">🧾 ¿Requiere factura?</span>
+                </label>
+                {checkoutModal.is_invoice && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">N° SIAAT</label>
+                    <input
+                      type="text"
+                      value={checkoutModal.siaat_number}
+                      onChange={e => setCheckoutModal(m => ({ ...m, siaat_number: e.target.value }))}
+                      placeholder="Ej. 12345678"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Resumen financiero */}
