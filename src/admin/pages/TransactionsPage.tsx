@@ -7,6 +7,7 @@ import { INCOME_CATEGORIES, EXPENSE_CATEGORIES, MONTH_NAMES } from '../constants
 import CustomSelect from '../components/CustomSelect';
 import DatePicker from '../components/DatePicker';
 import TimePicker from '../components/TimePicker';
+import { logActivity } from '../../lib/logActivity';
 
 const CAJAS: CajaType[] = ['CAJA MAYOR', 'CAJA CHICA', 'CUENTA BNB'];
 
@@ -30,6 +31,7 @@ export default function TransactionsPage() {
   const [month, setMonth] = useState(today.getMonth());
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [balances,     setBalances]     = useState<Record<CajaType, number>>({ 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0 });
   const [loading,      setLoading]      = useState(true);
 
   // filters
@@ -59,6 +61,23 @@ export default function TransactionsPage() {
   }, [year, month]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // All-time caja running balances
+  useEffect(() => {
+    async function fetchBalances() {
+      const { data } = await supabase
+        .from('transactions')
+        .select('type, amount, caja');
+      if (!data) return;
+      const totals: Record<CajaType, number> = { 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0 };
+      for (const t of data) {
+        if (!(t.caja in totals)) continue;
+        totals[t.caja as CajaType] += t.type === 'ingreso' ? t.amount : -t.amount;
+      }
+      setBalances(totals);
+    }
+    fetchBalances();
+  }, []);
 
   // ── computed ──
   const filtered = transactions.filter(t => {
@@ -110,8 +129,19 @@ export default function TransactionsPage() {
 
     setSaving(false);
     if (error) { setFormError('Error: ' + error.message); return; }
+    logActivity(profile?.id, profile?.name, form.type === 'ingreso' ? 'Ingreso registrado' : 'Egreso registrado', 'transaction', undefined, `${form.category} — Bs. ${form.amount} (${form.caja})`);
     setModalOpen(false);
     fetchData();
+    // refresh running balances
+    const { data: allTx } = await supabase.from('transactions').select('type, amount, caja');
+    if (allTx) {
+      const totals: Record<CajaType, number> = { 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0 };
+      for (const t of allTx) {
+        if (!(t.caja in totals)) continue;
+        totals[t.caja as CajaType] += t.type === 'ingreso' ? t.amount : -t.amount;
+      }
+      setBalances(totals);
+    }
   }
 
   // ── month nav ──
@@ -124,7 +154,7 @@ export default function TransactionsPage() {
     else setMonth(m => m + 1);
   }
 
-  const fmtAmount = (n: number) => `$${n.toFixed(2)}`;
+  const fmtAmount = (n: number) => `Bs. ${n.toFixed(2)}`;
 
   return (
     <div className="space-y-5">
@@ -173,6 +203,27 @@ export default function TransactionsPage() {
             {fmtAmount(balance)}
           </p>
         </div>
+      </div>
+
+      {/* Caja running balances */}
+      <div className="grid grid-cols-3 gap-4">
+        {CAJAS.map(caja => {
+          const bal = balances[caja];
+          const isPos = bal >= 0;
+          const emoji = caja === 'CAJA MAYOR' ? '🏦' : caja === 'CAJA CHICA' ? '💵' : '🏧';
+          return (
+            <div key={caja} className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-base">{emoji}</span>
+                <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">{caja}</span>
+              </div>
+              <p className={`text-xl font-bold ${isPos ? 'text-gray-900' : 'text-red-500'}`}>
+                {fmtAmount(bal)}
+              </p>
+              <p className="text-[11px] text-gray-400 mt-1">Saldo acumulado</p>
+            </div>
+          );
+        })}
       </div>
 
       {/* Filters */}
@@ -319,30 +370,4 @@ export default function TransactionsPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
                 <input type="text" value={form.description}
-                  onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  placeholder="Detalle del movimiento..."
-                />
-              </div>
-
-              {formError && (
-                <p className="text-red-500 text-sm bg-red-50 rounded-lg px-3 py-2">{formError}</p>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
-              <button onClick={() => setModalOpen(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                Cancelar
-              </button>
-              <button onClick={handleSave} disabled={saving}
-                className="px-5 py-2 text-sm font-semibold bg-amber-400 hover:bg-amber-300 text-gray-900 rounded-lg transition-colors disabled:opacity-50">
-                {saving ? 'Guardando...' : 'Guardar'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+           
