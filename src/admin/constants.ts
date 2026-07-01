@@ -15,6 +15,7 @@ export const INCOME_CATEGORIES = [
   'SALDO EFECTIVO',
   'VARIOS',
   'ALQUILER DE SALÓN Y COMEDOR',
+  'REPOSICION DOÑA SONIA',
 ] as const;
 
 export const EXPENSE_CATEGORIES = [

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { CalendarDays, Users, Wallet, BedDouble, TrendingUp, TrendingDown, PawPrint, Building2, Globe } from 'lucide-react';
+import { CalendarDays, Wallet, BedDouble, TrendingUp, TrendingDown, PawPrint, Building2, Globe } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import type { Reservation } from '../types';
+import type { Reservation, Room } from '../types';
 import { STATUS_CONFIG } from '../constants';
 
 // ── Donut chart ──────────────────────────────────────────────────────────────
@@ -74,6 +74,7 @@ export default function DashboardPage() {
   const todayStr = today.toISOString().split('T')[0];
   const firstDay = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-01`;
 
+  const [rooms,          setRooms]          = useState<Room[]>([]);
   const [occupied,       setOccupied]       = useState<Reservation[]>([]);
   const [dirty,          setDirty]          = useState<Reservation[]>([]);
   const [cajaMayor,      setCajaMayor]      = useState(0);
@@ -91,6 +92,10 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function load() {
+      // 0. All rooms
+      const { data: roomsData } = await supabase.from('rooms').select('*').eq('is_active', true).neq('id', 'SALON');
+      setRooms(roomsData ?? []);
+
       // 1. Occupied rooms today
       const { data: resData } = await supabase.from('reservations').select('*')
         .lte('check_in', todayStr).gt('check_out', todayStr)
@@ -164,7 +169,9 @@ export default function DashboardPage() {
     load();
   }, [isAdmin]); // eslint-disable-line
 
-  const totalGuests = occupied.filter(r => r.room_id !== 'SALON').reduce((s, r) => s + r.num_guests, 0);
+  const totalGuests   = occupied.filter(r => r.room_id !== 'SALON').reduce((s, r) => s + r.num_guests, 0);
+  const busyRoomIds   = new Set([...occupied, ...dirty].map(r => r.room_id));
+  const freeRooms     = rooms.filter(r => !busyRoomIds.has(r.id));
   const month = today.toLocaleDateString('es', { month: 'long', year: 'numeric' });
 
   if (loading) return (
@@ -183,12 +190,91 @@ export default function DashboardPage() {
         </p>
       </div>
 
+      {/* ── ROOM STATUS GRID (top) ── */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+        {/* Ocupadas */}
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center">
+              <CalendarDays size={16} className="text-green-600" />
+            </div>
+            <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Ocupadas</span>
+            <span className="ml-auto text-2xl font-bold text-gray-900">{occupied.length}</span>
+          </div>
+          {occupied.length === 0
+            ? <p className="text-sm text-gray-400">Ninguna habitación ocupada hoy.</p>
+            : <div className="space-y-2">
+                {occupied.map(res => {
+                  const cfg = STATUS_CONFIG[res.status];
+                  return (
+                    <div key={res.id} className={`rounded-lg px-3 py-2.5 ${cfg.bg} ${cfg.text}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-sm">{res.room_id}</span>
+                        <span className="text-[11px] opacity-80">{res.num_guests} 👤</span>
+                      </div>
+                      <div className="text-xs font-medium mt-0.5 truncate opacity-90">{res.guest_name}</div>
+                      <div className="text-[11px] opacity-70 mt-0.5">hasta {res.check_out}</div>
+                      <div className="flex gap-1 mt-1 flex-wrap">
+                        {res.is_empresa    && <span className="text-[10px] bg-white/30 rounded px-1">🏢</span>}
+                        {res.has_pet       && <span className="text-[10px] bg-white/30 rounded px-1">🐾</span>}
+                        {res.wants_invoice && <span className="text-[10px] bg-white/30 rounded px-1">📄</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+          }
+        </div>
+
+        {/* Habilitaciones */}
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
+              <BedDouble size={16} className="text-blue-500" />
+            </div>
+            <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Habilitación</span>
+            <span className="ml-auto text-2xl font-bold text-gray-900">{dirty.length}</span>
+          </div>
+          {dirty.length === 0
+            ? <p className="text-sm text-gray-400">No hay habitaciones en habilitación.</p>
+            : <div className="space-y-2">
+                {dirty.map(res => (
+                  <div key={res.id} className="rounded-lg px-3 py-2.5 bg-blue-400 text-white">
+                    <span className="font-bold text-sm">{res.room_id}</span>
+                    <div className="text-xs opacity-80 mt-0.5">pendiente de limpieza</div>
+                  </div>
+                ))}
+              </div>
+          }
+        </div>
+
+        {/* Libres */}
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center">
+              <BedDouble size={16} className="text-gray-400" />
+            </div>
+            <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Libres</span>
+            <span className="ml-auto text-2xl font-bold text-gray-900">{freeRooms.length}</span>
+          </div>
+          {freeRooms.length === 0
+            ? <p className="text-sm text-gray-400">No hay habitaciones libres hoy.</p>
+            : <div className="flex flex-wrap gap-2">
+                {freeRooms.map(room => (
+                  <div key={room.id} className="rounded-lg px-3 py-2 bg-gray-50 border border-gray-200 text-center min-w-[60px]">
+                    <div className="font-bold text-sm text-gray-700">{room.id}</div>
+                    <div className="text-[10px] text-gray-400 truncate max-w-[80px]">{room.type.split('/')[0]}</div>
+                  </div>
+                ))}
+              </div>
+          }
+        </div>
+
+      </div>
+
       {/* ── STAT CARDS ── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard icon={CalendarDays} iconBg="bg-green-100" iconColor="text-green-600"
-          label="Ocupadas hoy" value={occupied.length} sub={`${totalGuests} huéspedes`} />
-        <StatCard icon={BedDouble} iconBg="bg-blue-100" iconColor="text-blue-600"
-          label="Hab. sucias" value={dirty.length} sub="pendientes de limpieza" />
         <StatCard icon={Wallet} iconBg="bg-amber-100" iconColor="text-amber-600"
           label="Caja Mayor" value={`Bs. ${cajaMayor.toFixed(0)}`} sub="saldo acumulado" />
         <StatCard icon={Wallet} iconBg="bg-purple-100" iconColor="text-purple-600"
@@ -206,32 +292,6 @@ export default function DashboardPage() {
         </>)}
       </div>
 
-      {/* ── ROOM LIST ── */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-        <h2 className="font-semibold text-gray-800 mb-4">Habitaciones activas hoy</h2>
-        {occupied.length === 0 ? (
-          <p className="text-sm text-gray-400">No hay habitaciones ocupadas ni con reserva hoy.</p>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {occupied.map(res => {
-              const cfg = STATUS_CONFIG[res.status];
-              return (
-                <div key={res.id} className={`rounded-lg p-3 ${cfg.bg} ${cfg.text}`}>
-                  <div className="font-bold text-base">{res.room_id}</div>
-                  <div className="text-sm font-medium mt-0.5 truncate">{res.guest_name}</div>
-                  <div className="text-xs opacity-80 mt-1">{res.num_guests} huésped{res.num_guests !== 1 ? 'es' : ''}</div>
-                  <div className="text-xs opacity-70 mt-0.5">{res.check_in} → {res.check_out}</div>
-                  <div className="flex gap-1 mt-1.5 flex-wrap">
-                    {res.is_empresa    && <span className="text-[10px] bg-white/30 rounded px-1 py-0.5">Empresa</span>}
-                    {res.has_pet       && <span className="text-[10px] bg-white/30 rounded px-1 py-0.5">🐾</span>}
-                    {res.wants_invoice && <span className="text-[10px] bg-white/30 rounded px-1 py-0.5">Factura</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
 
       {/* ── ADMIN CHARTS ── */}
       {isAdmin && (

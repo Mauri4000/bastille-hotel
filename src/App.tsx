@@ -25,6 +25,7 @@ import TransactionsPage from "./admin/pages/TransactionsPage";
 import PettyCashPage from "./admin/pages/PettyCashPage";
 import ShiftPage from "./admin/pages/ShiftPage";
 import ReportesPage from "./admin/pages/ReportesPage";
+import HistorialPage from "./admin/pages/HistorialPage";
 
 const defaultFilters: BookingFilters = {
   checkIn: "",
@@ -56,6 +57,7 @@ function AdminApp() {
         <Route path="petty-cash"   element={<PettyCashPage />} />
         <Route path="shift"        element={<ShiftPage />} />
         <Route path="reportes"     element={<ReportesPage />} />
+        <Route path="historial"    element={<HistorialPage />} />
       </Routes>
     </AdminLayout>
   );

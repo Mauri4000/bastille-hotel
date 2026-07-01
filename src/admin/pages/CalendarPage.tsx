@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Plus, X, Building2, Trash2, Receipt, PlayCircle, MoreHorizontal, CheckSquare } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { logActivity } from '../../lib/logActivity';
 import type { Reservation, ReservationStatus, Room } from '../types';
 import { STATUS_CONFIG, MONTH_NAMES, DAY_NAMES } from '../constants';
 import DatePicker from '../components/DatePicker';
@@ -416,6 +417,7 @@ export default function CalendarPage() {
 
     setSaving(false);
     if (error) { setFormError('Error al guardar: ' + error.message); return; }
+    logActivity(profile?.id, profile?.name, editingId ? 'Reserva editada' : 'Reserva creada', 'reservation', editingId ?? undefined, `${form.room_id} — ${resolvedName} (${form.check_in} → ${form.check_out})`);
     setModalOpen(false);
     fetchData();
   }
@@ -429,7 +431,9 @@ export default function CalendarPage() {
       title: 'Eliminar reserva',
       body: 'Esta acción no se puede deshacer.',
       onConfirm: async () => {
+        const { data: del } = await supabase.from('reservations').select('room_id,guest_name').eq('id', id).single();
         await supabase.from('reservations').delete().eq('id', id);
+        logActivity(profile?.id, profile?.name, 'Reserva eliminada', 'reservation', id, `${del?.room_id} — ${del?.guest_name}`);
         setModalOpen(false);
         fetchData();
       },
@@ -504,6 +508,7 @@ export default function CalendarPage() {
       additional_guests:    confirmAdditionalGuests,
       updated_at:           new Date().toISOString(),
     }).eq('id', confirmModal.res.id);
+    logActivity(profile?.id, profile?.name, 'Llegada confirmada', 'reservation', confirmModal.res.id, `${confirmModal.res.room_id} — ${confirmModal.guest_name_edit || confirmModal.res.guest_name}`);
     setConfirmModal(m => ({ ...m, open: false }));
     setConfirmAdditionalGuests([]);
     fetchData();
@@ -546,6 +551,7 @@ export default function CalendarPage() {
       });
     }
 
+    logActivity(profile?.id, profile?.name, 'Salida registrada', 'reservation', res.id, `${res.room_id} — ${res.guest_name}`);
     setCheckoutModal(m => ({ ...m, open: false }));
     fetchData();
   }

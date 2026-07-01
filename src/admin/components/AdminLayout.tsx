@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, CalendarDays, ArrowLeftRight, Wallet,
-  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2,
+  LayoutDashboard, CalendarDays, ArrowLeftRight,
+  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -10,9 +10,9 @@ const navItems = [
   { to: '/admin',             icon: LayoutDashboard, label: 'Dashboard',       exact: true },
   { to: '/admin/calendar',    icon: CalendarDays,    label: 'Calendario' },
   { to: '/admin/transactions',icon: ArrowLeftRight,  label: 'Ingresos / Egresos' },
-  { to: '/admin/petty-cash',  icon: Wallet,          label: 'Caja Chica' },
   { to: '/admin/shift',       icon: ClipboardList,   label: 'Cambio de Turno' },
   { to: '/admin/reportes',    icon: BarChart2,       label: 'Reportes' },
+  { to: '/admin/historial',   icon: History,         label: 'Historial', adminOnly: true },
 ];
 
 const adminItems = [
@@ -51,7 +51,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-        {navItems.map(({ to, icon: Icon, label, exact }) => (
+        {navItems.filter(item => !('adminOnly' in item) || profile?.role === 'admin').map(({ to, icon: Icon, label, exact }) => (
           <NavLink
             key={to}
             to={to}
