@@ -5,6 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import type { Transaction, TransactionType, CajaType } from '../types';
 import { INCOME_CATEGORIES, EXPENSE_CATEGORIES, MONTH_NAMES } from '../constants';
 import CustomSelect from '../components/CustomSelect';
+import DatePicker from '../components/DatePicker';
+import TimePicker from '../components/TimePicker';
 
 const CAJAS: CajaType[] = ['CAJA MAYOR', 'CAJA CHICA', 'CUENTA BNB'];
 
@@ -279,23 +281,17 @@ export default function TransactionsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Fecha *</label>
-                  <input type="date" value={form.date}
-                    onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  />
+                  <DatePicker value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} placeholder="Seleccionar fecha" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Hora</label>
-                  <input type="time" value={form.time}
-                    onChange={e => setForm(f => ({ ...f, time: e.target.value }))}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  />
+                  <TimePicker value={form.time} onChange={v => setForm(f => ({ ...f, time: v }))} />
                 </div>
               </div>
 
               {/* Amount */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Monto (USD) *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Monto (Bs.) *</label>
                 <input type="number" min={0} step={0.01} value={form.amount}
                   onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
