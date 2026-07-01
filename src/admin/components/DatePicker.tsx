@@ -104,10 +104,6 @@ export default function DatePicker({
   const daysCount = new Date(vy, vm + 1, 0).getDate();
   const prevCount = new Date(vy, vm, 0).getDate();
 
-  const display = sel
-    ? sel.toLocaleDateString('es-BO', { day: 'numeric', month: 'short', year: 'numeric' })
-    : null;
-
   return (
     <div className="relative" ref={ref}>
       {/* Trigger */}
