@@ -169,7 +169,7 @@ export default function DashboardPage() {
     load();
   }, [isAdmin]); // eslint-disable-line
 
-  const totalGuests   = occupied.filter(r => r.room_id !== 'SALON').reduce((s, r) => s + r.num_guests, 0);
+  const totalGuests   = occupied.filter(r => r.room_id !== 'SALON').reduce((s, r) => s + r.num_guests, 0); void totalGuests;
   const busyRoomIds   = new Set([...occupied, ...dirty].map(r => r.room_id));
   const freeRooms     = rooms.filter(r => !busyRoomIds.has(r.id));
   const month = today.toLocaleDateString('es', { month: 'long', year: 'numeric' });
