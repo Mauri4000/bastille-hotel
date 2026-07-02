@@ -8,6 +8,7 @@ import CustomSelect from '../components/CustomSelect';
 import DatePicker from '../components/DatePicker';
 import TimePicker from '../components/TimePicker';
 import { logActivity } from '../../lib/logActivity';
+import VitrinaProductPicker from '../components/VitrinaProductPicker';
 
 const CAJAS: CajaType[] = ['CAJA MAYOR', 'CAJA CHICA', 'CUENTA BNB'];
 
@@ -45,6 +46,15 @@ export default function TransactionsPage() {
   const [saving,    setSaving]    = useState(false);
   const [formError, setFormError] = useState('');
 
+  // Hospedaje room picker
+  const [occupiedRooms,  setOccupiedRooms]  = useState<any[]>([]);
+  const [selectedRoomId, setSelectedRoomId] = useState('');
+
+  // Vitrina product picker
+  const [showVitrinaPicker,    setShowVitrinaPicker]    = useState(false);
+  const [vitrinaSaleProductId, setVitrinaSaleProductId] = useState<string | null>(null);
+  const [vitrinaSellQty,       setVitrinaSellQty]       = useState(1);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     const firstDay = `${year}-${String(month + 1).padStart(2,'0')}-01`;
@@ -61,6 +71,18 @@ export default function TransactionsPage() {
   }, [year, month]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Fetch occupied/reserved rooms when HOSPEDAJE is selected
+  useEffect(() => {
+    if (form.category !== 'H01-HOSPEDAJE') { setOccupiedRooms([]); setSelectedRoomId(''); return; }
+    const todayStr = new Date().toISOString().split('T')[0];
+    supabase.from('reservations')
+      .select('id, room_id, guest_name, check_in, check_out, price_per_night, adelanto, num_guests, status')
+      .in('status', ['ocupado', 'reserva'])
+      .gte('check_out', todayStr)
+      .order('check_in')
+      .then(({ data }) => setOccupiedRooms(data ?? []));
+  }, [form.category]);
 
   // All-time caja running balances
   useEffect(() => {
@@ -103,6 +125,10 @@ export default function TransactionsPage() {
       category: '',
     });
     setFormError('');
+    setSelectedRoomId('');
+    setOccupiedRooms([]);
+    setVitrinaSaleProductId(null);
+    setVitrinaSellQty(1);
     setModalOpen(true);
   }
 
@@ -129,6 +155,20 @@ export default function TransactionsPage() {
 
     setSaving(false);
     if (error) { setFormError('Error: ' + error.message); return; }
+
+    // If vitrina sale, decrement product stock
+    if (form.category === 'H03-VENTA DE VITRINAS' && vitrinaSaleProductId) {
+      const { data: prod } = await supabase
+        .from('vitrina_products').select('quantity').eq('id', vitrinaSaleProductId).single();
+      if (prod) {
+        await supabase.from('vitrina_products')
+          .update({ quantity: Math.max(0, prod.quantity - vitrinaSellQty), updated_at: new Date().toISOString() })
+          .eq('id', vitrinaSaleProductId);
+      }
+      setVitrinaSaleProductId(null);
+      setVitrinaSellQty(1);
+    }
+
     logActivity(profile?.id, profile?.name, form.type === 'ingreso' ? 'Ingreso registrado' : 'Egreso registrado', 'transaction', undefined, `${form.category} — Bs. ${form.amount} (${form.caja})`);
     setModalOpen(false);
     fetchData();
@@ -358,6 +398,109 @@ export default function TransactionsPage() {
                   placeholder="— Seleccionar —" />
               </div>
 
+              {/* Room picker for HOSPEDAJE */}
+              {form.category === 'H01-HOSPEDAJE' && occupiedRooms.length > 0 && (() => {
+                const sel = occupiedRooms.find(r => r.room_id === selectedRoomId);
+                const nights = sel ? Math.max(1, Math.round(
+                  (new Date(sel.check_out + 'T00:00:00').getTime() - new Date(sel.check_in + 'T00:00:00').getTime()) / 86400000
+                )) : 0;
+                const total  = sel ? (sel.price_per_night ?? 0) * nights : 0;
+                const adelanto = sel ? (sel.adelanto ?? 0) : 0;
+                const saldo  = total - adelanto;
+                return (
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Habitación
+                    </label>
+                    <CustomSelect
+                      value={selectedRoomId}
+                      onChange={v => {
+                        setSelectedRoomId(v);
+                        const r = occupiedRooms.find(x => x.room_id === v);
+                        if (r) {
+                          const n = Math.max(1, Math.round((new Date(r.check_out+'T00:00:00').getTime()-new Date(r.check_in+'T00:00:00').getTime())/86400000));
+                          const t = (r.price_per_night ?? 0) * n;
+                          const s = t - (r.adelanto ?? 0);
+                          // For reserva: auto-fill with the adelanto amount agreed
+                          const autoAmount = r.status === 'reserva'
+                            ? (r.adelanto > 0 ? r.adelanto.toFixed(2) : '')
+                            : Math.max(0, s).toFixed(2);
+                          setForm(f => ({ ...f, amount: autoAmount, description: `${r.room_id} — ${r.guest_name}`, room_id: r.room_id }));
+                        }
+                      }}
+                      options={occupiedRooms.map(r => ({
+                        value: r.room_id,
+                        label: `${r.room_id} — ${r.guest_name}${r.status === 'reserva' ? ' 📅' : ''}`,
+                      }))}
+                      placeholder="— Seleccionar habitación —"
+                    />
+                    {sel && (
+                      <div className={`border rounded-xl px-4 py-3 text-xs space-y-1 ${sel.status === 'reserva' ? 'bg-amber-50 border-amber-200' : 'bg-blue-50 border-blue-100'}`}>
+                        {sel.status === 'reserva' && (
+                          <div className="flex items-center gap-1.5 text-amber-700 font-semibold mb-1">
+                            <span>📅 Reserva pendiente — registrando adelanto</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-gray-600">
+                          <span>📅 {sel.check_in} → {sel.check_out}</span>
+                          <span className="font-semibold">{nights} noche{nights !== 1 ? 's' : ''}</span>
+                        </div>
+                        {sel.price_per_night > 0 && <>
+                          <div className="flex justify-between text-gray-600">
+                            <span>Precio / noche</span><span>Bs. {sel.price_per_night.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between font-semibold text-gray-800 border-t border-blue-200 pt-1">
+                            <span>Total</span><span>Bs. {total.toFixed(2)}</span>
+                          </div>
+                          {adelanto > 0 && <div className="flex justify-between text-green-700">
+                            <span>Adelanto ya pagado</span><span>− Bs. {adelanto.toFixed(2)}</span>
+                          </div>}
+                          <div className={`flex justify-between font-bold text-base border-t pt-1 ${sel.status === 'reserva' ? 'border-amber-200 text-amber-700' : 'border-blue-200 text-blue-700'}`}>
+                            <span>{sel.status === 'reserva' ? 'Saldo pendiente' : 'Saldo a cobrar'}</span><span>Bs. {Math.max(0,saldo).toFixed(2)}</span>
+                          </div>
+                        </>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Vitrina product picker button */}
+              {form.category === 'H03-VENTA DE VITRINAS' && form.type === 'ingreso' && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-700">Producto vendido</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowVitrinaPicker(true)}
+                    className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-amber-300 rounded-xl py-3 text-amber-700 hover:bg-amber-50 font-semibold text-sm transition-colors"
+                  >
+                    🛒 Seleccionar producto de vitrina
+                  </button>
+                  {form.description && vitrinaSaleProductId && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm text-amber-800 flex items-center justify-between">
+                      <span>✓ {form.description}</span>
+                      <span className="font-bold">Bs. {form.amount}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Adelanto reserva: confirm banner */}
+              {form.category === 'H01-HOSPEDAJE' && selectedRoomId && (() => {
+                const sel = occupiedRooms.find(r => r.room_id === selectedRoomId);
+                if (!sel || sel.status !== 'reserva' || !sel.adelanto) return null;
+                return (
+                  <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm">
+                    <p className="font-semibold text-green-800">
+                      ✓ Confirmar pago de adelanto: Bs. {sel.adelanto.toFixed(2)}
+                    </p>
+                    <p className="text-green-600 text-xs mt-0.5">
+                      El monto se pre-cargó con el adelanto acordado. Ajústalo si es diferente.
+                    </p>
+                  </div>
+                );
+              })()}
+
               {/* Caja */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Caja</label>
@@ -393,6 +536,22 @@ export default function TransactionsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Vitrina Product Picker */}
+      {showVitrinaPicker && (
+        <VitrinaProductPicker
+          onClose={() => setShowVitrinaPicker(false)}
+          onSelect={(product, qty, total) => {
+            setVitrinaSaleProductId(product.id);
+            setVitrinaSellQty(qty);
+            setForm(f => ({
+              ...f,
+              amount:      total.toFixed(2),
+              description: qty > 1 ? `${product.name} x${qty}` : product.name,
+            }));
+          }}
+        />
       )}
     </div>
   );

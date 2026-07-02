@@ -27,6 +27,7 @@ import ShiftPage from "./admin/pages/ShiftPage";
 import ReportesPage from "./admin/pages/ReportesPage";
 import HistorialPage from "./admin/pages/HistorialPage";
 import GuestDatabasePage from "./admin/pages/GuestDatabasePage";
+import VitrinaPage from "./admin/pages/VitrinaPage";
 
 const defaultFilters: BookingFilters = {
   checkIn: "",
@@ -60,6 +61,7 @@ function AdminApp() {
         <Route path="reportes"     element={<ReportesPage />} />
         <Route path="historial"    element={<HistorialPage />} />
         <Route path="guests"       element={<GuestDatabasePage />} />
+        <Route path="vitrina"      element={<VitrinaPage />} />
       </Routes>
     </AdminLayout>
   );

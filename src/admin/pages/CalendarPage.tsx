@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Plus, X, Building2, Trash2, Receipt, PlayCircle, MoreHorizontal, CheckSquare } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X, Building2, Trash2, Receipt, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../../lib/logActivity';
@@ -27,6 +27,13 @@ function subtypeOptions(roomType: string): string[] {
   if (roomType.includes('DOBLE/FAM')) return ['Doble', 'Familiar'];
   if (roomType.includes('S/M')) return ['Simple', 'Matrimonial'];
   return [];
+}
+
+// ────── guess gender from first name (ends in 'a' → F, else M) ──────
+function guessGender(name: string): 'M' | 'F' | '' {
+  const first = name.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+  if (!first) return '';
+  return first.endsWith('a') ? 'F' : 'M';
 }
 
 // ────── age from birthdate ──────
@@ -141,8 +148,13 @@ export default function CalendarPage() {
   // Checkout modal
   const [checkoutModal, setCheckoutModal] = useState({
     open: false, res: null as Reservation | null, departure_time: '',
-    is_invoice: false, siaat_number: '',
+    is_invoice: false, siaat_number: '', is_blacklist: false,
   });
+
+  // Late checkout popup (from card menu)
+  const [lateCheckoutModal, setLateCheckoutModal] = useState<{
+    res: Reservation; time: string; extra_price: string;
+  } | null>(null);
 
   // Additional guests for confirm arrival modal
   const [confirmAdditionalGuests, setConfirmAdditionalGuests] = useState<AdditionalGuest[]>([]);
@@ -151,6 +163,13 @@ export default function CalendarPage() {
   const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean; title: string; body: string; onConfirm: () => void;
   }>({ open: false, title: '', body: '', onConfirm: () => {} });
+
+  // Quick action menu for empty cells
+  const [quickMenu, setQuickMenu] = useState<{ roomId: string; day: number; x: number; y: number } | null>(null);
+  // Context menu when clicking a filled card
+  const [cardMenu, setCardMenu] = useState<{ res: Reservation; x: number; y: number } | null>(null);
+  // Mantenimiento creation form
+  const [maintenanceForm, setMaintenanceForm] = useState<{ roomId: string; day: number; detail: string; endDate: string } | null>(null);
 
   // Multi-select mode
   const [selectMode,     setSelectMode]     = useState(false);
@@ -272,14 +291,34 @@ export default function CalendarPage() {
   }
 
   // ── open modal ──
-  function openNew(roomId: string, day: number) {
+  function openNew(roomId: string, day: number, statusOverride?: ReservationStatus, arrivalType?: 'reserva' | 'directo') {
     const date = toDateStr(new Date(year, month, day));
     const next = toDateStr(new Date(year, month, day + 1));
-    setForm({ ...emptyForm, room_id: roomId, check_in: date, check_out: next });
+    setForm({
+      ...emptyForm,
+      room_id: roomId,
+      check_in: date,
+      check_out: next,
+      status: statusOverride ?? 'reserva',
+      arrival_type: arrivalType ?? 'reserva',
+    });
     setAdditionalGuests([]);
     setEditingId(null);
     setFormError('');
+    setQuickMenu(null);
     setModalOpen(true);
+  }
+
+  async function quickCreateStatus(roomId: string, day: number, status: ReservationStatus, name: string) {
+    const date = toDateStr(new Date(year, month, day));
+    const next = toDateStr(new Date(year, month, day + 1));
+    await supabase.from('reservations').insert({
+      room_id: roomId, guest_name: name, num_guests: 0,
+      check_in: date, check_out: next, status,
+      updated_at: new Date().toISOString(),
+    });
+    setQuickMenu(null);
+    fetchData();
   }
 
   function openEdit(res: Reservation) {
@@ -524,6 +563,7 @@ export default function CalendarPage() {
       departure_time: (res as any).departure_time ?? '',
       is_invoice: res.wants_invoice ?? false,
       siaat_number: (res as any).siaat_number ?? '',
+      is_blacklist: (res as any).is_blacklist ?? false,
     });
   }
 
@@ -535,6 +575,7 @@ export default function CalendarPage() {
       departure_time: checkoutModal.departure_time || null,
       wants_invoice:  checkoutModal.is_invoice,
       siaat_number:   checkoutModal.is_invoice ? (checkoutModal.siaat_number || null) : null,
+      is_blacklist:   checkoutModal.is_blacklist,
       updated_at:     new Date().toISOString(),
     }).eq('id', res.id);
 
@@ -810,11 +851,6 @@ export default function CalendarPage() {
                       : null;
                     const isCheckOut = res && checkOutMinusOne === dateStr;
 
-                    // Short name for middle cells
-                    const shortName = res
-                      ? (res.guest_name.split(' ')[0] ?? res.guest_name)
-                      : '';
-
                     // Arrival / departure times
                     const arrivalTime   = (res as any)?.arrival_time   ? (res as any).arrival_time.slice(0,5)   : null;
                     const departureTime = (res as any)?.departure_time ? (res as any).departure_time.slice(0,5) : null;
@@ -827,7 +863,10 @@ export default function CalendarPage() {
                         {res ? (
                           <div className={`relative w-full h-full group ${selectMode && selectedType && selectedType !== res.status ? 'opacity-30' : ''}`}>
                           <button
-                            onClick={() => selectMode ? toggleCellSelect(res) : openEdit(res)}
+                            onClick={e => {
+                              if (selectMode) { toggleCellSelect(res); return; }
+                              setCardMenu({ res, x: e.clientX, y: e.clientY });
+                            }}
                             className={`w-full h-full rounded-lg px-2 py-1 text-left transition-all ${cfg?.bg ?? 'bg-gray-400'} ${cfg?.text ?? 'text-white'} ${
                               selectMode
                                 ? selectedIds.has(res.id)
@@ -838,40 +877,55 @@ export default function CalendarPage() {
                                 : 'hover:opacity-80 cursor-pointer'
                             }`}
                           >
-                            {isCheckIn ? (
+                            {res.status === 'mantenimiento' ? (
+                              <div className="text-xs font-bold leading-tight break-words">
+                                🔧 {(res as any).notes || 'Mantenimiento'}
+                              </div>
+                            ) : res.status === 'habilitacion' ? (
+                              <div className="flex flex-col items-center justify-center h-full text-center">
+                                <div className="text-base leading-none">🧹</div>
+                                <div className="text-[10px] font-bold mt-0.5 opacity-90">Habilitación</div>
+                              </div>
+                            ) : isCheckIn ? (
                               /* ── First day: full name + flags + arrival time ── */
                               <>
                                 <div className="text-xs font-bold leading-tight break-words">
                                   {res.guest_name}
                                 </div>
-                                <div className="flex items-center gap-1 mt-1 flex-wrap">
+                                <div className="flex items-center justify-center gap-1 mt-1 flex-wrap">
                                   <span className="text-[10px] opacity-80 font-semibold">{res.num_guests}p</span>
                                   {res.is_empresa    && <Building2 size={9} className="opacity-80" />}
                                   {res.has_pet       && <span className="text-[10px] opacity-80">🐾</span>}
                                   {res.wants_invoice && <span className="text-[10px] opacity-80">🧾</span>}
                                   {(res as any).is_blacklist && <span className="text-[10px]">🚫</span>}
-                                  {arrivalTime && <span className="text-[10px] opacity-90 ml-auto font-bold">⬇ {arrivalTime}</span>}
-                                </div>
-                              </>
-                            ) : isCheckOut ? (
-                              /* ── Last day: short name + departure time ── */
-                              <>
-                                <div className="text-xs font-bold leading-tight opacity-80 break-words">
-                                  {shortName}
-                                </div>
-                                {departureTime && (
-                                  <div className="mt-1">
-                                    <span className="inline-flex items-center gap-0.5 bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
-                                      ⬆ {departureTime}
+                                  {(res as any).late_checkout && (
+                                    <span className="text-[10px] font-bold bg-red-600 text-white rounded px-0.5 py-px leading-none">
+                                      🌙{departureTime ? ` ${departureTime}` : ' LC'}
                                     </span>
-                                  </div>
-                                )}
+                                  )}
+                                  {arrivalTime && <span className="text-[10px] opacity-90 font-bold">⬇ {arrivalTime}</span>}
+                                </div>
                               </>
                             ) : (
-                              /* ── Middle days: short name ── */
-                              <div className="flex items-end h-full pb-0.5">
-                                <span className="text-xs font-semibold opacity-70 truncate">{shortName}</span>
-                              </div>
+                              /* ── Middle / last day: full name + icons, no arrival time ── */
+                              <>
+                                <div className="text-xs font-bold leading-tight break-words">
+                                  {res.guest_name}
+                                </div>
+                                <div className="flex items-center justify-center gap-1 mt-1 flex-wrap">
+                                  {res.num_guests > 0 && <span className="text-[10px] opacity-80 font-semibold">{res.num_guests}p</span>}
+                                  {res.is_empresa    && <Building2 size={9} className="opacity-80" />}
+                                  {res.has_pet       && <span className="text-[10px] opacity-80">🐾</span>}
+                                  {res.wants_invoice && <span className="text-[10px] opacity-80">🧾</span>}
+                                  {(res as any).late_checkout ? (
+                                    <span className="text-[10px] font-bold bg-red-600 text-white rounded px-0.5 py-px leading-none">
+                                      🌙{departureTime ? ` ${departureTime}` : ' LC'}
+                                    </span>
+                                  ) : isCheckOut && departureTime ? (
+                                    <span className="text-[10px] opacity-90 font-bold">⬆ {departureTime}</span>
+                                  ) : null}
+                                </div>
+                              </>
                             )}
                           </button>
 
@@ -889,68 +943,13 @@ export default function CalendarPage() {
                               )}
                             </div>
                           )}
-
-                          {/* ── PlayCircle action menu (check-in day) ── */}
-                          {!selectMode && isCheckIn && (
-                            <div className="absolute top-0.5 right-0.5 z-10" onClick={e => e.stopPropagation()}>
-                              <button
-                                onClick={e => { e.stopPropagation(); setMenuOpenId(menuOpenId === res.id ? null : res.id); }}
-                                title="Acciones"
-                                className="opacity-0 group-hover:opacity-100 transition-opacity w-6 h-6 flex items-center justify-center"
-                              >
-                                <PlayCircle size={16} className="text-white/80 hover:text-white drop-shadow" />
-                              </button>
-                              {menuOpenId === res.id && (
-                                <div className="absolute right-0 bottom-full mb-1 bg-white rounded-xl shadow-2xl border border-gray-100 py-1.5 w-48 z-[100]">
-                                  {res.status === 'reserva' && (
-                                    <button
-                                      onClick={async e => {
-                                        e.stopPropagation();
-                                        setMenuOpenId(null);
-                                        if (res.room_id === 'SALON') {
-                                          // SALON: confirm directly, no popup
-                                          await supabase.from('reservations').update({ status: 'ocupado', updated_at: new Date().toISOString() }).eq('id', res.id);
-                                          fetchData();
-                                        } else {
-                                          openConfirmModal(e, res);
-                                        }
-                                      }}
-                                      className="w-full text-left px-4 py-2 text-xs font-semibold text-green-700 hover:bg-green-50 flex items-center gap-2">
-                                      ✓ Confirmar llegada
-                                    </button>
-                                  )}
-                                  {res.status === 'ocupado' && (
-                                    <button onClick={e => openCheckoutModal(e, res)}
-                                      className="w-full text-left px-4 py-2 text-xs font-semibold text-orange-600 hover:bg-orange-50 flex items-center gap-2">
-                                      ⬆ Registrar salida
-                                    </button>
-                                  )}
-                                  <div className="border-t border-gray-100 my-1" />
-                                  <button onClick={e => handleDeleteRes(e, res.id)}
-                                    className="w-full text-left px-4 py-2 text-xs text-red-500 hover:bg-red-50 flex items-center gap-2">
-                                    🗑 Borrar reserva
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* ── Checkout button on last day (multi-night stays) ── */}
-                          {!selectMode && res.status === 'ocupado' && isCheckOut && !isCheckIn && (
-                            <div className="absolute top-0.5 right-0.5 z-10">
-                              <button
-                                onClick={e => openCheckoutModal(e, res)}
-                                title="Registrar salida"
-                                className="opacity-0 group-hover:opacity-100 transition-opacity w-6 h-6 flex items-center justify-center"
-                              >
-                                <PlayCircle size={16} className="text-white/80 hover:text-white drop-shadow" />
-                              </button>
-                            </div>
-                          )}
                           </div>
                         ) : (
                           <button
-                            onClick={() => openNew(room.id, d)}
+                            onClick={e => {
+                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              setQuickMenu({ roomId: room.id, day: d, x: rect.left, y: rect.bottom });
+                            }}
                             className="w-full h-full rounded-lg hover:bg-amber-50 transition-colors group"
                           >
                             <Plus size={14} className="mx-auto text-gray-300 group-hover:text-amber-400 transition-colors" />
@@ -1266,6 +1265,7 @@ export default function CalendarPage() {
                         ) : (
                           <input type="text" value={form.guest_name}
                             onChange={e => setForm(f => ({ ...f, guest_name: e.target.value }))}
+                            onBlur={e => { if (!form.guest_gender) setForm(f => ({ ...f, guest_gender: guessGender(e.target.value) })); }}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                             placeholder="Nombre del huésped que reserva" />
                         )}
@@ -1456,7 +1456,7 @@ export default function CalendarPage() {
                           {([
                             ['has_pet',       '🐾', 'Mascota',      'bg-orange-50 border-orange-400 text-orange-700'],
                             ['wants_invoice', '🧾', 'Factura',      'bg-green-50 border-green-400 text-green-700'],
-                            ['late_checkout', '🌙', 'Late Checkout','bg-purple-50 border-purple-400 text-purple-700'],
+                            ...( form.arrival_type !== 'directo' ? [['late_checkout', '🌙', 'Late Checkout','bg-purple-50 border-purple-400 text-purple-700']] : []),
                           ] as [keyof typeof form, string, string, string][]).map(([key, emoji, label, activeClass]) => (
                             <button key={key} type="button"
                               onClick={() => setForm(f => ({ ...f, [key]: !f[key as keyof typeof f] }))}
@@ -1466,12 +1466,14 @@ export default function CalendarPage() {
                               <span>{emoji}</span><span>{label}</span>
                             </button>
                           ))}
-                          <button type="button" onClick={() => setForm(f => ({ ...f, is_blacklist: !f.is_blacklist }))}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-sm font-medium transition-all select-none ${
-                              form.is_blacklist ? 'bg-red-50 border-red-400 text-red-700' : 'bg-white border-gray-200 text-gray-500 hover:border-red-300'
-                            }`}>
-                            <span>🚫</span><span>Lista negra</span>
-                          </button>
+                          {form.arrival_type !== 'directo' && (
+                            <button type="button" onClick={() => setForm(f => ({ ...f, is_blacklist: !f.is_blacklist }))}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-sm font-medium transition-all select-none ${
+                                form.is_blacklist ? 'bg-red-50 border-red-400 text-red-700' : 'bg-white border-gray-200 text-gray-500 hover:border-red-300'
+                              }`}>
+                              <span>🚫</span><span>Lista negra</span>
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -1494,12 +1496,12 @@ export default function CalendarPage() {
                           <div className="grid grid-cols-2 gap-2">
                             <input type="tel" placeholder="Celular"
                               value={form.guest_phone}
-                              onChange={e => setForm(f => ({ ...f, guest_phone: e.target.value }))}
+                              onChange={e => setForm(f => ({ ...f, guest_phone: e.target.value.replace(/\D/g, '') }))}
                               onBlur={e => lookupGuest(e.target.value, 'guest_phone')}
                               className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                             <input type="text" placeholder="CI / Pasaporte"
                               value={form.guest_document}
-                              onChange={e => setForm(f => ({ ...f, guest_document: e.target.value }))}
+                              onChange={e => setForm(f => ({ ...f, guest_document: e.target.value.replace(/[^a-zA-Z0-9]/g, '') }))}
                               onBlur={e => lookupGuest(e.target.value, 'guest_document')}
                               className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                           </div>
@@ -1564,14 +1566,15 @@ export default function CalendarPage() {
                             <p className="text-[11px] font-semibold text-amber-700 uppercase tracking-wide">Huésped {idx + 2}</p>
                             <input type="text" placeholder="Nombre y apellidos" value={ag.name}
                               onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, name: e.target.value } : g))}
+                              onBlur={e => { if (!ag.gender) setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, gender: guessGender(e.target.value) as any } : g)); }}
                               className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                             <div className="grid grid-cols-2 gap-2">
                               <input type="tel" placeholder="Celular" value={ag.phone}
-                                onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, phone: e.target.value } : g))}
+                                onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, phone: e.target.value.replace(/\D/g, '') } : g))}
                                 onBlur={e => lookupAdditionalGuest(e.target.value, 'guest_phone', idx)}
                                 className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                               <input type="text" placeholder="CI / Pasaporte" value={ag.document}
-                                onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, document: e.target.value } : g))}
+                                onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, document: e.target.value.replace(/[^a-zA-Z0-9]/g, '') } : g))}
                                 onBlur={e => lookupAdditionalGuest(e.target.value, 'guest_document', idx)}
                                 className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                             </div>
@@ -1798,12 +1801,14 @@ export default function CalendarPage() {
                   <div className="grid grid-cols-3 gap-2">
                     <input type="text" placeholder="Procedencia" value={confirmModal.guest_origin}
                       onChange={e => setConfirmModal(m => ({ ...m, guest_origin: e.target.value }))}
+                      onBlur={e => { const v = e.target.value; if (v) setConfirmAdditionalGuests(p => p.map(ag => ({ ...ag, origin: ag.origin || v }))); }}
                       className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                     <input type="text" placeholder="Próx. Destino" value={confirmModal.guest_next_dest}
                       onChange={e => setConfirmModal(m => ({ ...m, guest_next_dest: e.target.value }))}
+                      onBlur={e => { const v = e.target.value; if (v) setConfirmAdditionalGuests(p => p.map(ag => ({ ...ag, next_dest: ag.next_dest || v }))); }}
                       className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                     <CustomSelect size="sm" value={confirmModal.guest_transport}
-                      onChange={v => setConfirmModal(m => ({ ...m, guest_transport: v }))}
+                      onChange={v => { setConfirmModal(m => ({ ...m, guest_transport: v })); setConfirmAdditionalGuests(p => p.map(ag => ({ ...ag, transport: (ag.transport || v) as any }))); }}
                       options={[{ value:'T', label:'T' },{ value:'A', label:'A' }]}
                       placeholder="Vía —" accent="green" />
                   </div>
@@ -1928,7 +1933,7 @@ export default function CalendarPage() {
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-orange-50 rounded-t-2xl">
               <div>
-                <h3 className="font-bold text-gray-900">Registrar salida</h3>
+                <h3 className="font-bold text-gray-900">Check out</h3>
                 <p className="text-xs text-orange-700 font-semibold mt-0.5">
                   {checkoutModal.res.room_id} — {checkoutModal.res.guest_name}
                 </p>
@@ -1949,6 +1954,19 @@ export default function CalendarPage() {
                   accentClass="border-orange-400 ring-orange-100"
                 />
               </div>
+
+              {/* Lista negra */}
+              <label className="flex items-center gap-3 cursor-pointer select-none">
+                <div
+                  onClick={() => setCheckoutModal(m => ({ ...m, is_blacklist: !m.is_blacklist }))}
+                  className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-colors ${
+                    checkoutModal.is_blacklist ? 'bg-red-500 border-red-500' : 'border-gray-300'
+                  }`}
+                >
+                  {checkoutModal.is_blacklist && <span className="text-white text-xs font-bold">✓</span>}
+                </div>
+                <span className="text-sm font-medium text-gray-700">💀 Agregar a lista negra</span>
+              </label>
 
               {/* Factura */}
               <div className="space-y-3">
@@ -2030,11 +2048,218 @@ export default function CalendarPage() {
               </button>
               <button onClick={handleCheckout}
                 className="px-6 py-2 text-sm font-semibold bg-orange-500 hover:bg-orange-400 text-white rounded-lg transition-colors">
-                ⬆ Registrar salida
+                ✓ Check out
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Card context menu ── */}
+      {cardMenu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setCardMenu(null)} />
+          <div
+            className="fixed z-50 bg-white rounded-xl shadow-2xl border border-gray-100 py-1.5 w-52"
+            style={{ top: Math.min(cardMenu.y + 4, window.innerHeight - 200), left: Math.min(cardMenu.x, window.innerWidth - 216) }}
+          >
+            {cardMenu.res.status === 'reserva' && (
+              <button onClick={async e => {
+                setCardMenu(null);
+                if (cardMenu.res.room_id === 'SALON') {
+                  await supabase.from('reservations').update({ status: 'ocupado', updated_at: new Date().toISOString() }).eq('id', cardMenu.res.id);
+                  fetchData();
+                } else { openConfirmModal(e as any, cardMenu.res); }
+              }} className="w-full text-left px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-50">
+                ✓ Confirmar llegada
+              </button>
+            )}
+            {cardMenu.res.status === 'ocupado' && (<>
+              <button onClick={e => { setCardMenu(null); openCheckoutModal(e as any, cardMenu.res); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-orange-600 hover:bg-orange-50">
+                ⬆ Check out
+              </button>
+              <button onClick={() => { setLateCheckoutModal({ res: cardMenu.res, time: '', extra_price: '' }); setCardMenu(null); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-purple-600 hover:bg-purple-50">
+                🌙 Late Checkout
+              </button>
+            </>)}
+            {cardMenu.res.status === 'habilitacion' && (
+              <button onClick={async () => {
+                await supabase.from('reservations').delete().eq('id', cardMenu.res.id);
+                setCardMenu(null); fetchData();
+              }} className="w-full text-left px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50">
+                ✅ Ya está limpio
+              </button>
+            )}
+            {cardMenu.res.status === 'mantenimiento' && (
+              <button onClick={async () => {
+                await supabase.from('reservations').delete().eq('id', cardMenu.res.id);
+                setCardMenu(null); fetchData();
+              }} className="w-full text-left px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50">
+                🔧 Ya está arreglado
+              </button>
+            )}
+            <div className="border-t border-gray-100 my-1" />
+            <button onClick={() => { setCardMenu(null); openEdit(cardMenu.res); }}
+              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+              ✏️ Editar
+            </button>
+            <button onClick={e => { setCardMenu(null); handleDeleteRes(e as any, cardMenu.res.id); }}
+              className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50">
+              🗑 Borrar
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* ── Mantenimiento creation popup ── */}
+      {maintenanceForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-red-50 rounded-t-2xl">
+              <h3 className="font-bold text-gray-900">🔧 Mantenimiento — {maintenanceForm.roomId}</h3>
+              <button onClick={() => setMaintenanceForm(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Detalle del problema *</label>
+                <textarea
+                  value={maintenanceForm.detail}
+                  onChange={e => setMaintenanceForm(f => f ? { ...f, detail: e.target.value } : f)}
+                  rows={3}
+                  placeholder="Ej: Ducha sin agua caliente, cerradura rota..."
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Fecha estimada de arreglo</label>
+                <DatePicker
+                  value={maintenanceForm.endDate}
+                  onChange={v => setMaintenanceForm(f => f ? { ...f, endDate: v } : f)}
+                  accentClass="border-red-400 ring-red-100"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setMaintenanceForm(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                disabled={!maintenanceForm.detail.trim()}
+                onClick={async () => {
+                  const date = toDateStr(new Date(year, month, maintenanceForm.day));
+                  const endDate = maintenanceForm.endDate || toDateStr(new Date(year, month, maintenanceForm.day + 1));
+                  await supabase.from('reservations').insert({
+                    room_id: maintenanceForm.roomId, guest_name: 'Mantenimiento',
+                    num_guests: 0, check_in: date, check_out: endDate,
+                    status: 'mantenimiento', notes: maintenanceForm.detail,
+                    updated_at: new Date().toISOString(),
+                  });
+                  setMaintenanceForm(null);
+                  fetchData();
+                }}
+                className="px-5 py-2 text-sm font-semibold bg-red-500 hover:bg-red-400 text-white rounded-lg disabled:opacity-40">
+                Crear
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Late Checkout popup ── */}
+      {lateCheckoutModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-purple-50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-900">🌙 Late Checkout</h3>
+                <p className="text-xs text-purple-700 font-semibold mt-0.5">
+                  {lateCheckoutModal.res.room_id} — {lateCheckoutModal.res.guest_name}
+                </p>
+              </div>
+              <button onClick={() => setLateCheckoutModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Hora de salida</label>
+                <TimePicker
+                  value={lateCheckoutModal.time}
+                  onChange={v => setLateCheckoutModal(m => m ? { ...m, time: v } : m)}
+                  placeholder="-- : --" emoji="🕐"
+                  accentClass="border-purple-400 ring-purple-100"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Precio extra a cobrar (Bs.)</label>
+                <input
+                  type="number" min={0} step={0.5}
+                  value={lateCheckoutModal.extra_price}
+                  onChange={e => setLateCheckoutModal(m => m ? { ...m, extra_price: e.target.value } : m)}
+                  placeholder="0.00"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+                />
+              </div>
+              {lateCheckoutModal.extra_price && parseFloat(lateCheckoutModal.extra_price) > 0 && (
+                <div className="bg-purple-50 border border-purple-100 rounded-xl px-4 py-3 text-sm font-semibold text-purple-700 flex justify-between">
+                  <span>Total a cobrar por late checkout</span>
+                  <span>Bs. {parseFloat(lateCheckoutModal.extra_price).toFixed(2)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setLateCheckoutModal(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const r = lateCheckoutModal.res;
+                  await supabase.from('reservations').update({
+                    late_checkout: true,
+                    departure_time: lateCheckoutModal.time || null,
+                    updated_at: new Date().toISOString(),
+                  }).eq('id', r.id);
+                  setLateCheckoutModal(null);
+                  fetchData();
+                }}
+                className="px-5 py-2 text-sm font-semibold bg-purple-600 hover:bg-purple-500 text-white rounded-lg">
+                ✓ Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Quick action menu for empty cells ── */}
+      {quickMenu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setQuickMenu(null)} />
+          <div
+            className="fixed z-50 bg-white rounded-xl shadow-2xl border border-gray-100 py-1.5 w-44"
+            style={{ top: quickMenu.y + 4, left: Math.min(quickMenu.x, window.innerWidth - 184) }}
+          >
+            {[
+              { label: '📅 Reserva',         action: () => openNew(quickMenu.roomId, quickMenu.day, 'reserva', 'reserva') },
+              { label: '✅ Check-in directo', action: () => openNew(quickMenu.roomId, quickMenu.day, 'ocupado', 'directo') },
+              { label: '🔧 Mantenimiento',   action: () => { setMaintenanceForm({ roomId: quickMenu.roomId, day: quickMenu.day, detail: '', endDate: toDateStr(new Date(year, month, quickMenu.day + 1)) }); setQuickMenu(null); } },
+              { label: '🧹 Habilitación',    action: () => quickCreateStatus(quickMenu.roomId, quickMenu.day, 'habilitacion', 'Habilitación') },
+            ].map(opt => (
+              <button
+                key={opt.label}
+                onClick={opt.action}
+                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-amber-50 hover:text-amber-800 transition-colors"
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
