@@ -8,8 +8,8 @@ export async function logActivity(
   entityId?: string,
   details?: string,
 ) {
-  if (!userId) return;
-  await supabase.from('activity_log').insert({
+  if (!userId) { console.warn('[logActivity] No userId, skipping'); return; }
+  const { error } = await supabase.from('activity_log').insert({
     user_id:     userId,
     user_name:   userName ?? 'Desconocido',
     action,
@@ -17,4 +17,5 @@ export async function logActivity(
     entity_id:   entityId ?? null,
     details:     details ?? null,
   });
+  if (error) console.error('[logActivity] Insert error:', error);
 }

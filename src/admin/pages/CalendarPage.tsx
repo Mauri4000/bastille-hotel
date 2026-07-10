@@ -8,6 +8,7 @@ import { STATUS_CONFIG, MONTH_NAMES, DAY_NAMES } from '../constants';
 import DatePicker from '../components/DatePicker';
 import TimePicker from '../components/TimePicker';
 import CustomSelect from '../components/CustomSelect';
+import VitrinaProductPicker from '../components/VitrinaProductPicker';
 
 // ────── helpers ──────
 function toLocalDate(dateStr: string) {
@@ -84,7 +85,6 @@ const emptyForm = {
   has_pet:           false,
   wants_invoice:     false,
   price_per_night:   '',
-  adelanto:          '',
   notes:             '',
   room_id:           '',
   // Arrival type (UI only — not saved)
@@ -148,13 +148,115 @@ export default function CalendarPage() {
   // Checkout modal
   const [checkoutModal, setCheckoutModal] = useState({
     open: false, res: null as Reservation | null, departure_time: '',
-    is_invoice: false, siaat_number: '', is_blacklist: false,
+    is_invoice: false, siaat_number: '', invoice_number: '', is_blacklist: false,
   });
 
   // Late checkout popup (from card menu)
   const [lateCheckoutModal, setLateCheckoutModal] = useState<{
-    res: Reservation; time: string; extra_price: string;
+    res: Reservation; time: string; extra_price: string; caja: string;
   } | null>(null);
+
+  // Vitrina sale from card menu
+  type VitrinaProduct = { id: string; name: string; price: number; quantity: number; image_filename: string };
+  const [vitrinaSaleRes,  setVitrinaSaleRes]  = useState<Reservation | null>(null);
+  const [vitrinaConfirm,  setVitrinaConfirm]  = useState<{
+    res: Reservation; product: VitrinaProduct; qty: number; total: number; caja: string;
+  } | null>(null);
+
+  async function handleVitrinaSale() {
+    if (!vitrinaConfirm) return;
+    const { res, product, qty, total, caja } = vitrinaConfirm;
+    // Create transaction
+    await supabase.from('transactions').insert({
+      date:           new Date().toISOString().split('T')[0],
+      type:           'ingreso',
+      category:       'H03-VENTA DE VITRINAS',
+      room_id:        res.room_id,
+      amount:         total,
+      description:    `${product.name}${qty > 1 ? ` x${qty}` : ''} — ${res.guest_name}`,
+      caja,
+      responsible_id: profile?.id ?? null,
+    });
+    // Decrement stock
+    const { data: prod } = await supabase.from('vitrina_products').select('quantity').eq('id', product.id).single();
+    if (prod) {
+      await supabase.from('vitrina_products')
+        .update({ quantity: Math.max(0, prod.quantity - qty), updated_at: new Date().toISOString() })
+        .eq('id', product.id);
+    }
+    logActivity(profile?.id, profile?.name, 'Ingreso registrado', 'transaction', res.id,
+      `Vitrina: ${product.name}${qty > 1 ? ` x${qty}` : ''} — ${res.room_id} ${res.guest_name} · Bs. ${total.toFixed(2)} (${caja})`);
+    setVitrinaConfirm(null);
+  }
+
+  // Calendar hover highlight
+  const [hoveredCell, setHoveredCell] = useState<{ roomId: string; day: number } | null>(null);
+
+  // Pagos Pendientes panel
+  const [pagosOpen, setPagosOpen] = useState(false);
+  type PagoRow = { res: Reservation; total: number; paid: number; pending: number };
+  const [pagoRows, setPagoRows]   = useState<PagoRow[]>([]);
+  const [pagosLoading, setPagosLoading] = useState(false);
+  const [pagoForm, setPagoForm] = useState<{ resId: string; amount: string; caja: string } | null>(null);
+
+  async function openPagosPanel() {
+    setPagosOpen(true);
+    setPagosLoading(true);
+    // Fetch all active (ocupado) reservations with price
+    const { data: activas } = await supabase
+      .from('reservations')
+      .select('*')
+      .eq('status', 'ocupado')
+      .not('price_per_night', 'is', null);
+    if (!activas?.length) { setPagoRows([]); setPagosLoading(false); return; }
+    // Fetch H01-HOSPEDAJE ingresos for those rooms
+    const roomIds = [...new Set(activas.map(r => r.room_id))];
+    const { data: txs } = await supabase
+      .from('transactions')
+      .select('room_id, amount')
+      .in('room_id', roomIds)
+      .eq('type', 'ingreso')
+      .eq('category', 'H01-HOSPEDAJE');
+    const paidByRoom: Record<string, number> = {};
+    for (const t of txs ?? []) {
+      paidByRoom[t.room_id] = (paidByRoom[t.room_id] ?? 0) + t.amount;
+    }
+    const rows: PagoRow[] = activas.map(res => {
+      const ciDate  = new Date(res.check_in  + 'T00:00:00');
+      const coDate  = new Date(res.check_out + 'T00:00:00');
+      const nights  = Math.max(1, Math.round((coDate.getTime() - ciDate.getTime()) / 86400000));
+      const total   = (res.price_per_night ?? 0) * nights;
+      const paid    = paidByRoom[res.room_id] ?? 0;
+      const pending = Math.max(0, total - paid);
+      return { res, total, paid, pending };
+    });
+    // Sort: pending first
+    rows.sort((a, b) => b.pending - a.pending);
+    setPagoRows(rows);
+    setPagosLoading(false);
+  }
+
+  async function confirmarPago() {
+    if (!pagoForm) return;
+    const amount = parseFloat(pagoForm.amount);
+    if (!amount || amount <= 0 || !pagoForm.caja) return;
+    const row = pagoRows.find(r => r.res.id === pagoForm.resId);
+    if (!row) return;
+    await supabase.from('transactions').insert({
+      date:           new Date().toISOString().split('T')[0],
+      type:           'ingreso',
+      category:       'H01-HOSPEDAJE',
+      room_id:        row.res.room_id,
+      amount,
+      description:    `Hospedaje — ${row.res.guest_name}`,
+      caja:           pagoForm.caja,
+      responsible_id: profile?.id ?? null,
+    });
+    logActivity(profile?.id, profile?.name, 'Pago registrado', 'transaction', row.res.id, `${row.res.room_id} — ${row.res.guest_name} · Bs. ${amount.toFixed(2)} (${pagoForm.caja})`);
+    setPagoForm(null);
+    // Refresh rows
+    openPagosPanel();
+  }
 
   // Additional guests for confirm arrival modal
   const [confirmAdditionalGuests, setConfirmAdditionalGuests] = useState<AdditionalGuest[]>([]);
@@ -257,10 +359,34 @@ export default function CalendarPage() {
     const needed = Math.max(0, form.num_guests - 1);
     setAdditionalGuests(prev => {
       if (prev.length === needed) return prev;
-      if (prev.length < needed) return [...prev, ...Array(needed - prev.length).fill(null).map(emptyAdditionalGuest)];
+      if (prev.length < needed) {
+        const newGuests = Array(needed - prev.length).fill(null).map(() => ({
+          ...emptyAdditionalGuest(),
+          country:   form.guest_country   || 'Boliviana',
+          purpose:   form.guest_purpose   || '',
+          origin:    form.guest_origin    || '',
+          next_dest: form.guest_next_dest || '',
+          transport: form.guest_transport || '',
+        }));
+        return [...prev, ...newGuests];
+      }
       return prev.slice(0, needed);
     });
   }, [form.num_guests, modalOpen]); // eslint-disable-line
+
+  // When guest 1 fields change, sync to existing additional guests that still have them empty
+  useEffect(() => {
+    if (!modalOpen) return;
+    setAdditionalGuests(prev =>
+      prev.map(g => ({
+        ...g,
+        purpose:   g.purpose   || form.guest_purpose   || '',
+        origin:    g.origin    || form.guest_origin    || '',
+        next_dest: g.next_dest || form.guest_next_dest || '',
+        transport: g.transport || form.guest_transport || '',
+      }))
+    );
+  }, [form.guest_purpose, form.guest_origin, form.guest_next_dest, form.guest_transport]); // eslint-disable-line
 
   // ── build cell map: cellMap[roomId][day] = Reservation ──
   const cellMap: Record<string, Record<number, Reservation>> = {};
@@ -339,7 +465,6 @@ export default function CalendarPage() {
       has_pet:           res.has_pet,
       wants_invoice:     res.wants_invoice,
       price_per_night:   res.price_per_night?.toString() ?? '',
-      adelanto:          (r.adelanto?.toString() ?? ''),
       notes:             res.notes ?? '',
       room_id:           res.room_id,
       start_time:        r.start_time ?? '',
@@ -412,7 +537,9 @@ export default function CalendarPage() {
 
     const payload = {
       room_id:         form.room_id,
-      guest_name:      resolvedName,
+      guest_name:      form.is_empresa
+        ? (form.guest_name.trim() || form.empresa_name.trim())
+        : form.guest_name.trim(),
       num_guests:      form.num_guests,
       check_in:        form.check_in,
       check_out:       isSalon ? form.check_in : form.check_out,
@@ -426,7 +553,6 @@ export default function CalendarPage() {
       has_pet:         isSalon ? false : form.has_pet,
       wants_invoice:   form.wants_invoice,
       price_per_night: form.price_per_night ? parseFloat(form.price_per_night) : null,
-      adelanto:        form.adelanto ? parseFloat(form.adelanto) : null,
       notes:           form.notes || null,
       start_time:      isSalon && form.start_time ? form.start_time : null,
       end_time:        isSalon && form.end_time   ? form.end_time   : null,
@@ -458,6 +584,7 @@ export default function CalendarPage() {
     setSaving(false);
     if (error) { setFormError('Error al guardar: ' + error.message); return; }
     logActivity(profile?.id, profile?.name, editingId ? 'Reserva editada' : 'Reserva creada', 'reservation', editingId ?? undefined, `${form.room_id} — ${resolvedName} (${form.check_in} → ${form.check_out})`);
+
     setModalOpen(false);
     fetchData();
   }
@@ -555,14 +682,32 @@ export default function CalendarPage() {
   }
 
   // ── open checkout modal ──
-  function openCheckoutModal(e: React.MouseEvent, res: Reservation) {
+  async function openCheckoutModal(e: React.MouseEvent, res: Reservation) {
     e.stopPropagation();
     setMenuOpenId(null);
+
+    let siaat   = (res as any).siaat_number   ?? '';
+    let invoice = (res as any).invoice_number ?? '';
+    let wantInv = res.wants_invoice ?? false;
+
+    // Auto-fill SIAAT from guest's previous stays
+    if (!siaat && (res as any).guest_document) {
+      const { data } = await supabase
+        .from('reservations')
+        .select('siaat_number')
+        .eq('guest_document', (res as any).guest_document)
+        .not('siaat_number', 'is', null)
+        .order('check_out', { ascending: false })
+        .limit(1);
+      if (data?.[0]?.siaat_number) { siaat = data[0].siaat_number; wantInv = true; }
+    }
+
     setCheckoutModal({
       open: true, res,
       departure_time: (res as any).departure_time ?? '',
-      is_invoice: res.wants_invoice ?? false,
-      siaat_number: (res as any).siaat_number ?? '',
+      is_invoice: wantInv,
+      siaat_number:   siaat,
+      invoice_number: invoice,
       is_blacklist: (res as any).is_blacklist ?? false,
     });
   }
@@ -574,7 +719,8 @@ export default function CalendarPage() {
     await supabase.from('reservations').update({
       departure_time: checkoutModal.departure_time || null,
       wants_invoice:  checkoutModal.is_invoice,
-      siaat_number:   checkoutModal.is_invoice ? (checkoutModal.siaat_number || null) : null,
+      siaat_number:   checkoutModal.is_invoice ? (checkoutModal.siaat_number   || null) : null,
+      invoice_number: checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
       is_blacklist:   checkoutModal.is_blacklist,
       updated_at:     new Date().toISOString(),
     }).eq('id', res.id);
@@ -735,6 +881,10 @@ export default function CalendarPage() {
 
           {/* Select + 3-dot actions */}
           <div className="flex items-center gap-2">
+            <button onClick={openPagosPanel}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg border border-green-300 text-green-700 bg-green-50 hover:bg-green-100 transition-colors">
+              💰 Pagos
+            </button>
             <button onClick={toggleSelectMode}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg border transition-colors ${
                 selectMode
@@ -816,8 +966,14 @@ export default function CalendarPage() {
                     <th
                       key={d}
                       data-day={d}
-                      className={`text-center border-b-2 border-r border-gray-200 px-2 py-2.5 w-[116px] min-w-[116px] ${
-                        isToday ? 'bg-amber-50 border-b-amber-300' : isWeekend ? 'bg-gray-100 border-b-gray-300' : 'bg-gray-50 border-b-gray-300'
+                      className={`text-center border-b-2 border-r border-gray-300 px-2 py-2.5 w-[116px] min-w-[116px] transition-colors ${
+                        isToday
+                          ? 'bg-amber-50 border-b-amber-400'
+                          : isWeekend
+                          ? 'bg-gray-100 border-b-gray-400'
+                          : hoveredCell?.day === d
+                          ? 'bg-amber-50 border-b-amber-400'
+                          : 'bg-gray-50 border-b-gray-400'
                       }`}
                     >
                       <div className={`text-sm font-bold ${isToday ? 'text-amber-600' : 'text-gray-700'}`}>{d}</div>
@@ -833,8 +989,10 @@ export default function CalendarPage() {
               {rooms.map((room, ri) => (
                 <tr key={room.id} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
                   {/* Room label */}
-                  <td className="sticky left-0 z-10 bg-inherit border-r-2 border-b border-gray-300 px-4 py-2 w-32">
-                    <div className="font-bold text-sm text-gray-900">{room.id}</div>
+                  <td className={`sticky left-0 z-10 border-r-2 border-b border-gray-300 px-4 py-2 w-32 transition-colors ${
+                    hoveredCell?.roomId === room.id ? 'bg-amber-50' : ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                  }`}>
+                    <div className={`font-bold text-sm transition-colors ${hoveredCell?.roomId === room.id ? 'text-amber-700' : 'text-gray-900'}`}>{room.id}</div>
                     <div className="text-xs text-gray-400 truncate mt-0.5">{room.type}</div>
                   </td>
 
@@ -858,10 +1016,22 @@ export default function CalendarPage() {
                     return (
                       <td
                         key={d}
-                        className="border-r border-b border-gray-200 p-1 h-16 align-top"
+                        className={`border-r border-b border-gray-300 p-1 h-16 align-top transition-colors ${
+                          hoveredCell?.roomId === room.id && hoveredCell?.day === d
+                            ? 'bg-amber-100/60'
+                            : hoveredCell?.roomId === room.id
+                            ? 'bg-amber-50/50'
+                            : hoveredCell?.day === d
+                            ? 'bg-amber-50/40'
+                            : ''
+                        }`}
                       >
                         {res ? (
-                          <div className={`relative w-full h-full group ${selectMode && selectedType && selectedType !== res.status ? 'opacity-30' : ''}`}>
+                          <div
+                            className={`relative w-full h-full group ${selectMode && selectedType && selectedType !== res.status ? 'opacity-30' : ''}`}
+                            onMouseEnter={() => setHoveredCell({ roomId: room.id, day: d })}
+                            onMouseLeave={() => setHoveredCell(null)}
+                          >
                           <button
                             onClick={e => {
                               if (selectMode) { toggleCellSelect(res); return; }
@@ -887,31 +1057,45 @@ export default function CalendarPage() {
                                 <div className="text-[10px] font-bold mt-0.5 opacity-90">Habilitación</div>
                               </div>
                             ) : isCheckIn ? (
-                              /* ── First day: full name + flags + arrival time ── */
+                              /* ── First day: full name + flags + both times ── */
                               <>
-                                <div className="text-xs font-bold leading-tight break-words">
-                                  {res.guest_name}
+                                <div className="text-xs font-bold leading-tight line-clamp-2">
+                                  {res.is_empresa && (res as any).empresa_name ? (res as any).empresa_name : res.guest_name}
                                 </div>
+                                {res.is_empresa && (res as any).empresa_name && res.guest_name && res.guest_name !== (res as any).empresa_name && (
+                                  <div className="text-[10px] leading-tight opacity-90 truncate">{res.guest_name}</div>
+                                )}
                                 <div className="flex items-center justify-center gap-1 mt-1 flex-wrap">
                                   <span className="text-[10px] opacity-80 font-semibold">{res.num_guests}p</span>
                                   {res.is_empresa    && <Building2 size={9} className="opacity-80" />}
                                   {res.has_pet       && <span className="text-[10px] opacity-80">🐾</span>}
                                   {res.wants_invoice && <span className="text-[10px] opacity-80">🧾</span>}
                                   {(res as any).is_blacklist && <span className="text-[10px]">🚫</span>}
-                                  {(res as any).late_checkout && (
+                                  {arrivalTime && (
+                                    <span className="text-[10px] font-bold bg-green-700 text-white rounded px-0.5 py-px leading-none">
+                                      ⬇ {arrivalTime}
+                                    </span>
+                                  )}
+                                  {(res as any).late_checkout ? (
                                     <span className="text-[10px] font-bold bg-red-600 text-white rounded px-0.5 py-px leading-none">
                                       🌙{departureTime ? ` ${departureTime}` : ' LC'}
                                     </span>
-                                  )}
-                                  {arrivalTime && <span className="text-[10px] opacity-90 font-bold">⬇ {arrivalTime}</span>}
+                                  ) : departureTime ? (
+                                    <span className="text-[10px] font-bold bg-red-600 text-white rounded px-0.5 py-px leading-none">
+                                      ⬆ {departureTime}
+                                    </span>
+                                  ) : null}
                                 </div>
                               </>
                             ) : (
                               /* ── Middle / last day: full name + icons, no arrival time ── */
                               <>
-                                <div className="text-xs font-bold leading-tight break-words">
-                                  {res.guest_name}
+                                <div className="text-xs font-bold leading-tight line-clamp-2">
+                                  {res.is_empresa && (res as any).empresa_name ? (res as any).empresa_name : res.guest_name}
                                 </div>
+                                {res.is_empresa && (res as any).empresa_name && res.guest_name && res.guest_name !== (res as any).empresa_name && (
+                                  <div className="text-[10px] leading-tight opacity-90 truncate">{res.guest_name}</div>
+                                )}
                                 <div className="flex items-center justify-center gap-1 mt-1 flex-wrap">
                                   {res.num_guests > 0 && <span className="text-[10px] opacity-80 font-semibold">{res.num_guests}p</span>}
                                   {res.is_empresa    && <Building2 size={9} className="opacity-80" />}
@@ -922,7 +1106,9 @@ export default function CalendarPage() {
                                       🌙{departureTime ? ` ${departureTime}` : ' LC'}
                                     </span>
                                   ) : isCheckOut && departureTime ? (
-                                    <span className="text-[10px] opacity-90 font-bold">⬆ {departureTime}</span>
+                                    <span className="text-[10px] font-bold bg-red-600 text-white rounded px-0.5 py-px leading-none">
+                                      ⬆ {departureTime}
+                                    </span>
                                   ) : null}
                                 </div>
                               </>
@@ -1247,7 +1433,7 @@ export default function CalendarPage() {
                         </div>
                         <label className="flex items-center gap-2 cursor-pointer select-none">
                           <input type="checkbox" checked={form.is_empresa}
-                            onChange={e => setForm(f => ({ ...f, is_empresa: e.target.checked }))}
+                            onChange={e => setForm(f => ({ ...f, is_empresa: e.target.checked, ...(e.target.checked ? { guest_purpose: 'Trabajo' } : {}) }))}
                             className="w-4 h-4 rounded accent-blue-500" />
                           <Building2 size={15} className="text-blue-600" />
                           <span className="text-sm font-medium text-gray-700">Es Empresa</span>
@@ -1261,6 +1447,12 @@ export default function CalendarPage() {
                             <datalist id="empresas-list">
                               {empresas.map((name, i) => <option key={i} value={name} />)}
                             </datalist>
+                            <label className="block text-xs font-medium text-gray-500 mt-1">Nombre del huésped</label>
+                            <input type="text" value={form.guest_name}
+                              onChange={e => setForm(f => ({ ...f, guest_name: e.target.value }))}
+                              onBlur={e => { if (!form.guest_gender) setForm(f => ({ ...f, guest_gender: guessGender(e.target.value) })); }}
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                              placeholder="Nombre del huésped que reserva" />
                           </>
                         ) : (
                           <input type="text" value={form.guest_name}
@@ -1283,8 +1475,8 @@ export default function CalendarPage() {
                         </div>
                       </div>
 
-                      {/* N° noches + precio + adelanto */}
-                      <div className="grid grid-cols-3 gap-3">
+                      {/* N° noches + precio */}
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">N° noches <span className="text-red-400">*</span></label>
                           <input type="number" min={1} max={60} value={form.num_nights}
@@ -1298,25 +1490,14 @@ export default function CalendarPage() {
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                             placeholder="0.00" />
                         </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Adelanto (Bs.)</label>
-                          <input type="number" min={0} step={0.5} value={form.adelanto}
-                            onChange={e => setForm(f => ({ ...f, adelanto: e.target.value }))}
-                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
-                            placeholder="0.00" />
-                        </div>
                       </div>
 
                       {/* Resumen rápido del total */}
                       {form.price_per_night && form.num_nights > 0 && (() => {
                         const total = parseFloat(form.price_per_night) * form.num_nights;
-                        const adel  = parseFloat(form.adelanto) || 0;
-                        const saldo = total - adel;
                         return (
                           <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-sm">
                             <span className="text-gray-500">Total: <strong>Bs. {total.toFixed(2)}</strong></span>
-                            {adel > 0 && <><span className="text-gray-400">—</span><span className="text-green-700">Adelanto: Bs. {adel.toFixed(2)}</span></>}
-                            {adel > 0 && <><span className="text-gray-400">—</span><span className="font-bold text-amber-800">Saldo: Bs. {Math.max(0, saldo).toFixed(2)}</span></>}
                           </div>
                         );
                       })()}
@@ -1351,6 +1532,7 @@ export default function CalendarPage() {
                           <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del huésped <span className="text-red-400">*</span></label>
                           <input type="text" value={form.guest_name}
                             onChange={e => setForm(f => ({ ...f, guest_name: e.target.value }))}
+                            onBlur={e => { if (!form.guest_gender) setForm(f => ({ ...f, guest_gender: guessGender(e.target.value) })); }}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                             placeholder="Ej: García López" autoFocus />
                         </div>
@@ -1374,8 +1556,8 @@ export default function CalendarPage() {
                         </div>
                       </div>
 
-                      {/* N° noches + precio + adelanto */}
-                      <div className="grid grid-cols-3 gap-3">
+                      {/* N° noches + precio */}
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">N° noches <span className="text-red-400">*</span></label>
                           <input type="number" min={1} max={60} value={form.num_nights}
@@ -1389,26 +1571,16 @@ export default function CalendarPage() {
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                             placeholder="0.00" />
                         </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Adelanto (Bs.)</label>
-                          <input type="number" min={0} step={0.5} value={form.adelanto}
-                            onChange={e => setForm(f => ({ ...f, adelanto: e.target.value }))}
-                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
-                            placeholder="0.00" />
-                        </div>
                       </div>
 
                       {/* Resumen rápido */}
                       {form.price_per_night && form.num_nights > 0 && (() => {
                         const total = parseFloat(form.price_per_night) * form.num_nights;
-                        const adel  = parseFloat(form.adelanto) || 0;
-                        const saldo = total - adel;
                         return (
                           <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 text-sm">
                             <span className="text-gray-500">📅 {form.check_in || '?'} → <strong>{form.check_out || '?'}</strong></span>
                             <span className="text-gray-400">·</span>
                             <span className="text-gray-500">Total: <strong>Bs. {total.toFixed(2)}</strong></span>
-                            {adel > 0 && <><span className="text-gray-400">—</span><span className="text-green-700">Adelanto: Bs. {adel.toFixed(2)}</span><span className="text-gray-400">—</span><span className="font-bold text-blue-800">Saldo: Bs. {Math.max(0, saldo).toFixed(2)}</span></>}
                           </div>
                         );
                       })()}
@@ -1431,7 +1603,7 @@ export default function CalendarPage() {
                       <div className="rounded-xl border border-gray-200 p-3 space-y-2">
                         <label className="flex items-center gap-2 cursor-pointer select-none">
                           <input type="checkbox" checked={form.is_empresa}
-                            onChange={e => setForm(f => ({ ...f, is_empresa: e.target.checked }))}
+                            onChange={e => setForm(f => ({ ...f, is_empresa: e.target.checked, ...(e.target.checked ? { guest_purpose: 'Trabajo' } : {}) }))}
                             className="w-4 h-4 rounded accent-blue-500" />
                           <Building2 size={15} className="text-blue-600" />
                           <span className="text-sm font-medium text-gray-700">Es Empresa</span>
@@ -1515,7 +1687,7 @@ export default function CalendarPage() {
                               <label className="block text-xs font-medium text-gray-600 mb-1">Género</label>
                               <CustomSelect size="sm" value={form.guest_gender}
                                 onChange={v => setForm(f => ({ ...f, guest_gender: v as any }))}
-                                options={[{ value: 'M', label: 'M — Masculino' }, { value: 'F', label: 'F — Femenino' }]}
+                                options={[{ value: 'M', label: 'M' }, { value: 'F', label: 'F' }]}
                                 placeholder="—" />
                             </div>
                             <div>
@@ -1528,7 +1700,7 @@ export default function CalendarPage() {
                               <label className="block text-xs font-medium text-gray-600 mb-1">Est. Civil</label>
                               <CustomSelect size="sm" value={form.guest_marital_status}
                                 onChange={v => setForm(f => ({ ...f, guest_marital_status: v as any }))}
-                                options={[{ value:'S', label:'S — Soltero' },{ value:'C', label:'C — Casado' },{ value:'D', label:'D — Divorciado' },{ value:'V', label:'V — Viudo' }]}
+                                options={[{ value:'S', label:'S' },{ value:'C', label:'C' },{ value:'D', label:'D' },{ value:'V', label:'V' }]}
                                 placeholder="—" />
                             </div>
                           </div>
@@ -1622,7 +1794,7 @@ export default function CalendarPage() {
                                 className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                               <CustomSelect size="sm" value={ag.transport}
                                 onChange={v => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, transport: v as any } : g))}
-                                options={[{ value:'T', label:'Terrestre' },{ value:'A', label:'Aéreo' },{ value:'F', label:'Fluvial' }]}
+                                options={[{ value:'T', label:'T' },{ value:'A', label:'A' },{ value:'F', label:'F' }]}
                                 placeholder="Vía —" />
                             </div>
                           </div>
@@ -1982,15 +2154,27 @@ export default function CalendarPage() {
                   <span className="text-sm font-medium text-gray-700">🧾 ¿Requiere factura?</span>
                 </label>
                 {checkoutModal.is_invoice && (
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">N° SIAAT</label>
-                    <input
-                      type="text"
-                      value={checkoutModal.siaat_number}
-                      onChange={e => setCheckoutModal(m => ({ ...m, siaat_number: e.target.value }))}
-                      placeholder="Ej. 12345678"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
-                    />
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">N° SIAAT</label>
+                      <input
+                        type="text"
+                        value={checkoutModal.siaat_number}
+                        onChange={e => setCheckoutModal(m => ({ ...m, siaat_number: e.target.value }))}
+                        placeholder="Ej. 12345678"
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">N° Factura</label>
+                      <input
+                        type="text"
+                        value={checkoutModal.invoice_number}
+                        onChange={e => setCheckoutModal(m => ({ ...m, invoice_number: e.target.value }))}
+                        placeholder="Ej. 001-001-00000001"
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                      />
+                    </div>
                   </div>
                 )}
               </div>
@@ -2079,9 +2263,13 @@ export default function CalendarPage() {
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-orange-600 hover:bg-orange-50">
                 ⬆ Check out
               </button>
-              <button onClick={() => { setLateCheckoutModal({ res: cardMenu.res, time: '', extra_price: '' }); setCardMenu(null); }}
+              <button onClick={() => { setLateCheckoutModal({ res: cardMenu.res, time: '', extra_price: '', caja: 'CAJA MAYOR' }); setCardMenu(null); }}
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-purple-600 hover:bg-purple-50">
                 🌙 Late Checkout
+              </button>
+              <button onClick={() => { setVitrinaSaleRes(cardMenu.res); setCardMenu(null); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-amber-600 hover:bg-amber-50">
+                🛒 Vitrina
               </button>
             </>)}
             {cardMenu.res.status === 'habilitacion' && (
@@ -2168,6 +2356,162 @@ export default function CalendarPage() {
         </div>
       )}
 
+      {/* ── Vitrina sale picker ── */}
+      {vitrinaSaleRes && (
+        <VitrinaProductPicker
+          onClose={() => setVitrinaSaleRes(null)}
+          onSelect={(product, qty, total) => {
+            setVitrinaConfirm({ res: vitrinaSaleRes, product, qty, total, caja: 'CAJA MAYOR' });
+            setVitrinaSaleRes(null);
+          }}
+        />
+      )}
+
+      {/* ── Vitrina caja confirmation ── */}
+      {vitrinaConfirm && (
+        <div className="fixed inset-0 z-[210] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-amber-50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-900">🛒 Confirmar venta vitrina</h3>
+                <p className="text-xs text-amber-700 font-semibold mt-0.5">
+                  {vitrinaConfirm.res.room_id} — {vitrinaConfirm.res.guest_name}
+                </p>
+              </div>
+              <button onClick={() => setVitrinaConfirm(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 flex justify-between items-center">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{vitrinaConfirm.product.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {vitrinaConfirm.qty} ud × Bs. {vitrinaConfirm.product.price.toFixed(2)}
+                  </p>
+                </div>
+                <p className="text-lg font-bold text-amber-600">Bs. {vitrinaConfirm.total.toFixed(2)}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Registrar en caja</label>
+                <CustomSelect
+                  value={vitrinaConfirm.caja}
+                  onChange={v => setVitrinaConfirm(c => c ? { ...c, caja: v } : c)}
+                  options={[
+                    { value: 'CAJA MAYOR', label: 'CAJA MAYOR' },
+                    { value: 'CAJA CHICA', label: 'CAJA CHICA' },
+                    { value: 'CUENTA BNB', label: 'CUENTA BNB' },
+                  ]}
+                  placeholder="— Seleccionar —"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setVitrinaConfirm(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button onClick={handleVitrinaSale}
+                className="px-5 py-2 text-sm font-semibold bg-amber-400 hover:bg-amber-300 text-gray-900 rounded-lg">
+                ✓ Confirmar venta
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Pagos Pendientes modal ── */}
+      {pagosOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-green-50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-900">💰 Pagos Pendientes</h3>
+                <p className="text-xs text-green-700 font-semibold mt-0.5">Habitaciones con saldo sin registrar</p>
+              </div>
+              <button onClick={() => { setPagosOpen(false); setPagoForm(null); }} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+              {pagosLoading ? (
+                <div className="flex items-center justify-center py-10">
+                  <div className="w-7 h-7 border-4 border-green-400 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : pagoRows.length === 0 ? (
+                <div className="text-center py-10 text-gray-400 text-sm">Sin pagos pendientes ✓</div>
+              ) : pagoRows.map(row => (
+                <div key={row.res.id} className={`rounded-xl border px-4 py-3 ${row.pending > 0 ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-bold text-gray-900 text-sm">{row.res.room_id} — <span className="font-semibold">{row.res.guest_name}</span></p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {row.res.check_in} → {row.res.check_out} · Total: <span className="font-semibold">Bs. {row.total.toFixed(2)}</span>
+                        {row.paid > 0 && <> · Ya pagado: <span className="text-green-700 font-semibold">Bs. {row.paid.toFixed(2)}</span></>}
+                      </p>
+                    </div>
+                    <div className="flex-shrink-0 text-right">
+                      {row.pending > 0 ? (
+                        <>
+                          <p className="text-xs text-amber-700 font-bold">Pendiente</p>
+                          <p className="text-lg font-bold text-amber-700">Bs. {row.pending.toFixed(2)}</p>
+                        </>
+                      ) : (
+                        <p className="text-sm font-bold text-green-600">✓ Pagado</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Mini pago form */}
+                  {row.pending > 0 && (
+                    pagoForm?.resId === row.res.id ? (
+                      <div className="mt-3 pt-3 border-t border-amber-200 space-y-2">
+                        <div className="flex gap-2">
+                          <input
+                            type="number" min={0} step={0.5}
+                            value={pagoForm.amount}
+                            onChange={e => setPagoForm(f => f ? { ...f, amount: e.target.value } : f)}
+                            placeholder="Monto Bs."
+                            className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                          />
+                          <CustomSelect
+                            value={pagoForm.caja}
+                            onChange={v => setPagoForm(f => f ? { ...f, caja: v } : f)}
+                            options={[
+                              { value: 'CAJA MAYOR', label: 'CAJA MAYOR' },
+                              { value: 'CAJA CHICA', label: 'CAJA CHICA' },
+                              { value: 'CUENTA BNB', label: 'CUENTA BNB' },
+                            ]}
+                            placeholder="Caja"
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => setPagoForm(null)}
+                            className="flex-1 px-3 py-1.5 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                            Cancelar
+                          </button>
+                          <button onClick={confirmarPago}
+                            className="flex-1 px-3 py-1.5 text-xs font-semibold bg-green-600 hover:bg-green-500 text-white rounded-lg">
+                            ✓ Registrar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setPagoForm({ resId: row.res.id, amount: row.pending.toFixed(2), caja: 'CAJA MAYOR' })}
+                        className="mt-2 w-full text-xs font-semibold text-green-700 border border-green-300 bg-green-100 hover:bg-green-200 rounded-lg px-3 py-1.5 transition-colors">
+                        + Registrar pago
+                      </button>
+                    )
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Late Checkout popup ── */}
       {lateCheckoutModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
@@ -2204,7 +2548,22 @@ export default function CalendarPage() {
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
                 />
               </div>
-              {lateCheckoutModal.extra_price && parseFloat(lateCheckoutModal.extra_price) > 0 && (
+              {parseFloat(lateCheckoutModal.extra_price || '0') > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Registrar en caja</label>
+                  <CustomSelect
+                    value={lateCheckoutModal.caja}
+                    onChange={v => setLateCheckoutModal(m => m ? { ...m, caja: v } : m)}
+                    options={[
+                      { value: 'CAJA MAYOR', label: 'CAJA MAYOR' },
+                      { value: 'CAJA CHICA', label: 'CAJA CHICA' },
+                      { value: 'CUENTA BNB', label: 'CUENTA BNB' },
+                    ]}
+                    placeholder="— Seleccionar —"
+                  />
+                </div>
+              )}
+              {parseFloat(lateCheckoutModal.extra_price || '0') > 0 && (
                 <div className="bg-purple-50 border border-purple-100 rounded-xl px-4 py-3 text-sm font-semibold text-purple-700 flex justify-between">
                   <span>Total a cobrar por late checkout</span>
                   <span>Bs. {parseFloat(lateCheckoutModal.extra_price).toFixed(2)}</span>
@@ -2220,11 +2579,26 @@ export default function CalendarPage() {
               <button
                 onClick={async () => {
                   const r = lateCheckoutModal.res;
+                  const extraPrice = parseFloat(lateCheckoutModal.extra_price || '0');
                   await supabase.from('reservations').update({
                     late_checkout: true,
                     departure_time: lateCheckoutModal.time || null,
                     updated_at: new Date().toISOString(),
                   }).eq('id', r.id);
+                  if (extraPrice > 0 && lateCheckoutModal.caja) {
+                    await supabase.from('transactions').insert({
+                      date:        new Date().toISOString().split('T')[0],
+                      type:        'ingreso',
+                      category:    'H02-LATE CHECKOUT',
+                      room_id:     r.room_id,
+                      amount:      extraPrice,
+                      description: `Late Checkout — ${r.guest_name}`,
+                      caja:        lateCheckoutModal.caja,
+                      responsible_id: profile?.id ?? null,
+                    });
+                    logActivity(profile?.id, profile?.name, 'Late Checkout', 'transaction', r.id, `${r.room_id} — ${r.guest_name} · Bs. ${extraPrice.toFixed(2)} (${lateCheckoutModal.caja})`);
+                  }
+                  logActivity(profile?.id, profile?.name, 'Reserva editada', 'reservation', r.id, `Late checkout ${r.room_id} — ${r.guest_name}`);
                   setLateCheckoutModal(null);
                   fetchData();
                 }}

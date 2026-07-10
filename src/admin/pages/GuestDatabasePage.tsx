@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Users, FileText, X, Search, Receipt, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Users, FileText, X, Search, Receipt, ChevronLeft, ChevronRight, Building2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 interface GuestRecord {
@@ -20,35 +20,58 @@ interface GuestRecord {
   check_in: string;
   check_out: string;
   price_per_night: number | null;
-  adelanto: number | null;
   num_guests: number;
   wants_invoice: boolean;
   siaat_number: string | null;
+  invoice_number: string | null;
   is_empresa: boolean;
   empresa_name: string | null;
   has_pet: boolean;
   departure_time: string | null;
 }
 
-const GENDER_LABEL: Record<string, string> = { M: 'Masculino', F: 'Femenino' };
-const MARITAL_LABEL: Record<string, string> = { S: 'Soltero/a', C: 'Casado/a', D: 'Divorciado/a', V: 'Viudo/a' };
+const GENDER_LABEL: Record<string, string>    = { M: 'Masculino', F: 'Femenino' };
+const MARITAL_LABEL: Record<string, string>   = { S: 'Soltero/a', C: 'Casado/a', D: 'Divorciado/a', V: 'Viudo/a' };
 const TRANSPORT_LABEL: Record<string, string> = { T: 'Terrestre', A: 'Aéreo' };
 
 const PAGE_SIZE = 25;
 
 function nights(ci: string, co: string) {
-  return Math.max(1, Math.round((new Date(co + 'T00:00:00').getTime() - new Date(ci + 'T00:00:00').getTime()) / 86400000));
+  return Math.max(1, Math.round(
+    (new Date(co + 'T00:00:00').getTime() - new Date(ci + 'T00:00:00').getTime()) / 86400000
+  ));
 }
 
+type TxRow = { id: string; category: string; amount: number; date: string; description: string | null };
+
 function Boleta({ g, onClose }: { g: GuestRecord; onClose: () => void }) {
-  const n = nights(g.check_in, g.check_out);
-  const total = (g.price_per_night ?? 0) * n;
-  const saldo = total - (g.adelanto ?? 0);
+  const n     = nights(g.check_in, g.check_out);
+  const baseTotal = (g.price_per_night ?? 0) * n;
+  const [extras, setExtras] = useState<TxRow[]>([]);
+
+  useEffect(() => {
+    // Fetch all ingreso transactions for this room in the stay period (excluding H01-HOSPEDAJE)
+    supabase
+      .from('transactions')
+      .select('id, category, amount, date, description')
+      .eq('room_id', g.room_id)
+      .eq('type', 'ingreso')
+      .neq('category', 'H01-HOSPEDAJE')
+      .gte('date', g.check_in)
+      .lte('date', g.check_out)
+      .then(({ data }) => setExtras(data ?? []));
+  }, [g.room_id, g.check_in, g.check_out]);
+
+  const grandTotal = baseTotal + extras.reduce((s, t) => s + t.amount, 0);
+
+  const CATEGORY_LABEL: Record<string, string> = {
+    'H02-LATE CHECKOUT': '🌙 Late Checkout',
+    'V01-VITRINA':       '🛒 Vitrina',
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-amber-50 rounded-t-2xl">
           <div>
             <h3 className="font-bold text-gray-900 flex items-center gap-2">
@@ -60,7 +83,6 @@ function Boleta({ g, onClose }: { g: GuestRecord; onClose: () => void }) {
         </div>
 
         <div className="px-6 py-5 space-y-4 text-sm">
-          {/* Estadia */}
           <section>
             <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Estadía</p>
             <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-1">
@@ -69,56 +91,59 @@ function Boleta({ g, onClose }: { g: GuestRecord; onClose: () => void }) {
               <Row label="Check-out"     value={g.check_out} />
               <Row label="Noches"        value={String(n)} />
               {g.price_per_night != null && <Row label="Precio / noche" value={`Bs. ${g.price_per_night.toFixed(2)}`} />}
-              {g.price_per_night != null && <Row label="Total"          value={`Bs. ${total.toFixed(2)}`} bold />}
-              {(g.adelanto ?? 0) > 0     && <Row label="Adelanto"       value={`Bs. ${g.adelanto!.toFixed(2)}`} />}
-              {g.price_per_night != null && <Row label="Saldo cobrado"  value={`Bs. ${Math.max(0,saldo).toFixed(2)}`} bold />}
+              {g.price_per_night != null && <Row label="Hospedaje"      value={`Bs. ${baseTotal.toFixed(2)}`} />}
+              {extras.map(t => (
+                <Row key={t.id}
+                  label={CATEGORY_LABEL[t.category] ?? t.category}
+                  value={`Bs. ${t.amount.toFixed(2)}`} />
+              ))}
+              {g.price_per_night != null && (
+                <Row label="TOTAL" value={`Bs. ${grandTotal.toFixed(2)}`} bold />
+              )}
             </div>
           </section>
 
-          {/* Huesped */}
           <section>
             <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Huésped principal</p>
             <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-1">
-              <Row label="Nombre"        value={g.guest_name} />
-              {g.guest_document  && <Row label="CI / Pasaporte" value={g.guest_document} />}
-              {g.guest_phone     && <Row label="Teléfono"       value={g.guest_phone} />}
-              {g.guest_birthdate && <Row label="Fecha Nac."     value={g.guest_birthdate} />}
-              {g.guest_gender    && <Row label="Género"         value={GENDER_LABEL[g.guest_gender] ?? g.guest_gender} />}
+              <Row label="Nombre"         value={g.guest_name} />
+              {g.guest_document   && <Row label="CI / Pasaporte" value={g.guest_document} />}
+              {g.guest_phone      && <Row label="Teléfono"       value={g.guest_phone} />}
+              {g.guest_birthdate  && <Row label="Fecha Nac."     value={g.guest_birthdate} />}
+              {g.guest_gender     && <Row label="Género"         value={GENDER_LABEL[g.guest_gender] ?? g.guest_gender} />}
               {g.guest_marital_status && <Row label="Est. Civil" value={MARITAL_LABEL[g.guest_marital_status] ?? g.guest_marital_status} />}
-              {g.guest_country   && <Row label="Nacionalidad"   value={g.guest_country} />}
-              {g.guest_profession && <Row label="Profesión"     value={g.guest_profession} />}
-              {g.guest_purpose   && <Row label="Motivo"         value={g.guest_purpose} />}
-              {g.guest_origin    && <Row label="Procedencia"    value={g.guest_origin} />}
-              {g.guest_next_dest && <Row label="Destino"        value={g.guest_next_dest} />}
-              {g.guest_transport && <Row label="Transporte"     value={TRANSPORT_LABEL[g.guest_transport] ?? g.guest_transport} />}
+              {g.guest_country    && <Row label="Nacionalidad"   value={g.guest_country} />}
+              {g.guest_profession && <Row label="Profesión"      value={g.guest_profession} />}
+              {g.guest_purpose    && <Row label="Motivo"         value={g.guest_purpose} />}
+              {g.guest_origin     && <Row label="Procedencia"    value={g.guest_origin} />}
+              {g.guest_next_dest  && <Row label="Destino"        value={g.guest_next_dest} />}
+              {g.guest_transport  && <Row label="Transporte"     value={TRANSPORT_LABEL[g.guest_transport] ?? g.guest_transport} />}
             </div>
           </section>
 
-          {/* Empresa */}
           {g.is_empresa && g.empresa_name && (
             <section>
               <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Empresa</p>
-              <div className="bg-gray-50 rounded-xl px-4 py-3">
+              <div className="bg-blue-50 rounded-xl px-4 py-3">
                 <Row label="Razón social" value={g.empresa_name} />
               </div>
             </section>
           )}
 
-          {/* Factura */}
           {g.wants_invoice && (
             <section>
               <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Factura</p>
               <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 space-y-1">
                 <Row label="Factura solicitada" value="Sí ✓" />
-                {g.siaat_number && <Row label="N° SIAAT" value={g.siaat_number} bold />}
+                {g.siaat_number    && <Row label="N° SIAAT"   value={g.siaat_number} bold />}
+                {g.invoice_number  && <Row label="N° Factura" value={g.invoice_number} bold />}
               </div>
             </section>
           )}
 
-          {/* Extras */}
-          {(g.has_pet) && (
+          {g.has_pet && (
             <div className="flex gap-2 flex-wrap">
-              {g.has_pet && <span className="bg-amber-100 text-amber-700 text-xs px-2 py-1 rounded-full font-semibold">🐾 Mascota</span>}
+              <span className="bg-amber-100 text-amber-700 text-xs px-2 py-1 rounded-full font-semibold">🐾 Mascota</span>
             </div>
           )}
         </div>
@@ -136,14 +161,16 @@ function Row({ label, value, bold }: { label: string; value: string; bold?: bool
   );
 }
 
+type Tab = 'all' | 'siaat' | 'empresas';
+
 export default function GuestDatabasePage() {
-  const [tab, setTab]         = useState<'all' | 'siaat'>('all');
-  const [guests, setGuests]   = useState<GuestRecord[]>([]);
-  const [total, setTotal]     = useState(0);
-  const [page, setPage]       = useState(0);
-  const [search, setSearch]   = useState('');
+  const [tab,     setTab]     = useState<Tab>('all');
+  const [guests,  setGuests]  = useState<GuestRecord[]>([]);
+  const [total,   setTotal]   = useState(0);
+  const [page,    setPage]    = useState(0);
+  const [search,  setSearch]  = useState('');
   const [loading, setLoading] = useState(true);
-  const [boleta, setBoleta]   = useState<GuestRecord | null>(null);
+  const [boleta,  setBoleta]  = useState<GuestRecord | null>(null);
 
   const fetchGuests = useCallback(async () => {
     setLoading(true);
@@ -154,12 +181,17 @@ export default function GuestDatabasePage() {
       .select('*', { count: 'exact' })
       .neq('status', 'habilitacion')
       .neq('guest_name', 'Habilitación')
-      .lt('check_out', today)              // checked-out (past)
+      .lt('check_out', today)
       .order('check_out', { ascending: false })
       .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
-    if (tab === 'siaat') q = q.eq('wants_invoice', true);
-    if (search)          q = q.ilike('guest_name', `%${search}%`);
+    if (tab === 'siaat')    q = q.eq('wants_invoice', true);
+    if (tab === 'empresas') q = q.eq('is_empresa', true);
+
+    if (search) {
+      // Search by guest name OR empresa name
+      q = q.or(`guest_name.ilike.%${search}%,empresa_name.ilike.%${search}%`);
+    }
 
     const { data, count } = await q;
     setGuests((data as GuestRecord[]) ?? []);
@@ -172,40 +204,42 @@ export default function GuestDatabasePage() {
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
+  const showCheckIn  = true;
+  const showSiaat    = tab === 'siaat';
+  const showEmpresa  = tab === 'empresas';
+
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
             <Users size={22} className="text-amber-500" /> Base de Datos Huéspedes
           </h1>
           <p className="text-sm text-gray-400 mt-0.5">{total} registro{total !== 1 ? 's' : ''}</p>
         </div>
-
-        {/* Search */}
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
-            type="text" placeholder="Buscar por nombre..."
+            type="text" placeholder="Buscar por nombre o empresa..."
             value={search} onChange={e => setSearch(e.target.value)}
-            className="border border-gray-200 rounded-lg pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 w-52"
+            className="border border-gray-200 rounded-lg pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 w-60"
           />
         </div>
       </div>
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit">
-        <button
-          onClick={() => setTab('all')}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${tab === 'all' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-        >
+        <button onClick={() => setTab('all')}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${tab === 'all' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
           Todos los huéspedes
         </button>
-        <button
-          onClick={() => setTab('siaat')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${tab === 'siaat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-        >
+        <button onClick={() => setTab('empresas')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${tab === 'empresas' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+          <Building2 size={14} /> Empresas
+        </button>
+        <button onClick={() => setTab('siaat')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${tab === 'siaat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
           <Receipt size={14} /> SIAAT / Factura
         </button>
       </div>
@@ -220,7 +254,9 @@ export default function GuestDatabasePage() {
           <div className="flex flex-col items-center justify-center h-40 text-gray-400">
             <Users size={32} className="mb-2 opacity-30" />
             <p className="text-sm">
-              {tab === 'siaat' ? 'No hay huéspedes con factura registrada.' : 'No hay huéspedes registrados aún.'}
+              {tab === 'siaat' ? 'No hay huéspedes con factura registrada.'
+               : tab === 'empresas' ? 'No hay huéspedes de empresa registrados.'
+               : 'No hay huéspedes registrados aún.'}
             </p>
           </div>
         ) : (
@@ -229,13 +265,13 @@ export default function GuestDatabasePage() {
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Nombre</th>
+                  {showEmpresa && <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Empresa</th>}
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">CI / Doc.</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Teléfono</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Hab.</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Check-in</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Check-out</th>
-                  {tab === 'siaat' && (
-                    <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">N° SIAAT</th>
-                  )}
+                  {showSiaat && <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">N° SIAAT</th>}
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Noches</th>
                   <th className="px-4 py-3"></th>
                 </tr>
@@ -252,26 +288,31 @@ export default function GuestDatabasePage() {
                       </div>
                       {g.guest_country && <div className="text-xs text-gray-400">{g.guest_country}</div>}
                     </td>
+                    {showEmpresa && (
+                      <td className="px-4 py-3 text-gray-700 text-xs font-medium max-w-[180px] truncate">
+                        {g.empresa_name ?? '—'}
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-gray-600 text-xs">{g.guest_document ?? '—'}</td>
                     <td className="px-4 py-3 text-gray-600 text-xs">{g.guest_phone ?? '—'}</td>
                     <td className="px-4 py-3">
                       <span className="bg-amber-100 text-amber-800 text-xs font-semibold px-2 py-0.5 rounded-full">{g.room_id}</span>
                     </td>
+                    <td className="px-4 py-3 text-gray-600 text-xs">{g.check_in}</td>
                     <td className="px-4 py-3 text-gray-600 text-xs">{g.check_out}</td>
-                    {tab === 'siaat' && (
+                    {showSiaat && (
                       <td className="px-4 py-3">
                         {g.siaat_number
                           ? <span className="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">{g.siaat_number}</span>
-                          : <span className="text-gray-300 text-xs">—</span>
-                        }
+                          : <span className="text-gray-300 text-xs">—</span>}
                       </td>
                     )}
-                    <td className="px-4 py-3 text-gray-500 text-xs">{nights(g.check_in, g.check_out)} noche{nights(g.check_in, g.check_out) !== 1 ? 's' : ''}</td>
+                    <td className="px-4 py-3 text-gray-500 text-xs">
+                      {nights(g.check_in, g.check_out)} noche{nights(g.check_in, g.check_out) !== 1 ? 's' : ''}
+                    </td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => setBoleta(g)}
-                        className="flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-800 transition-colors"
-                      >
+                      <button onClick={() => setBoleta(g)}
+                        className="flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-800 transition-colors">
                         <FileText size={13} /> Boleta
                       </button>
                     </td>
@@ -300,7 +341,6 @@ export default function GuestDatabasePage() {
         </div>
       )}
 
-      {/* Boleta modal */}
       {boleta && <Boleta g={boleta} onClose={() => setBoleta(null)} />}
     </div>
   );

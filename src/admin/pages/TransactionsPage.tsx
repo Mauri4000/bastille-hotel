@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, X, TrendingUp, TrendingDown, DollarSign, Filter } from 'lucide-react';
+import { Plus, X, TrendingUp, TrendingDown, DollarSign, Filter, Trash2, Pencil } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Transaction, TransactionType, CajaType } from '../types';
@@ -34,6 +34,8 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [balances,     setBalances]     = useState<Record<CajaType, number>>({ 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0 });
   const [loading,      setLoading]      = useState(true);
+  // room_id → siaat_number map (from reservations that have wants_invoice + siaat)
+  const [siaatMap, setSiaatMap] = useState<Record<string, string>>({});
 
   // filters
   const [filterType,  setFilterType]  = useState<'all' | TransactionType>('all');
@@ -43,12 +45,17 @@ export default function TransactionsPage() {
   // modal
   const [modalOpen, setModalOpen] = useState(false);
   const [form,      setForm]      = useState({ ...emptyForm });
-  const [saving,    setSaving]    = useState(false);
-  const [formError, setFormError] = useState('');
+  const [saving,       setSaving]       = useState(false);
+  const [formError,    setFormError]    = useState('');
+  const [editingTxId,  setEditingTxId]  = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; title: string; body: string; onConfirm: () => void }>({
+    open: false, title: '', body: '', onConfirm: () => {},
+  });
 
   // Hospedaje room picker
   const [occupiedRooms,  setOccupiedRooms]  = useState<any[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState('');
+  const [paidSoFar,      setPaidSoFar]      = useState(0);
 
   // Vitrina product picker
   const [showVitrinaPicker,    setShowVitrinaPicker]    = useState(false);
@@ -59,14 +66,35 @@ export default function TransactionsPage() {
     setLoading(true);
     const firstDay = `${year}-${String(month + 1).padStart(2,'0')}-01`;
     const lastDay  = `${year}-${String(month + 1).padStart(2,'0')}-${new Date(year, month + 1, 0).getDate()}`;
-    const { data } = await supabase
-      .from('transactions')
-      .select('*, profiles(name)')
-      .gte('date', firstDay)
-      .lte('date', lastDay)
-      .order('date', { ascending: false })
-      .order('created_at', { ascending: false });
+
+    const [{ data }, { data: reservData }] = await Promise.all([
+      supabase
+        .from('transactions')
+        .select('*, profiles(name)')
+        .gte('date', firstDay)
+        .lte('date', lastDay)
+        .order('date', { ascending: false })
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('reservations')
+        .select('room_id, siaat_number, invoice_number, wants_invoice')
+        .eq('wants_invoice', true)
+        .not('siaat_number', 'is', null)
+        .lte('check_in', lastDay)
+        .gte('check_out', firstDay),
+    ]);
+
     setTransactions(data ?? []);
+
+    // Build room_id → siaat_number map
+    const map: Record<string, string> = {};
+    for (const r of reservData ?? []) {
+      if (r.room_id && r.siaat_number) {
+        map[r.room_id] = r.siaat_number;
+      }
+    }
+    setSiaatMap(map);
+
     setLoading(false);
   }, [year, month]);
 
@@ -115,9 +143,10 @@ export default function TransactionsPage() {
 
   const categories = form.type === 'ingreso' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
 
-  // ── open modal ──
+  // ── open modal (new) ──
   function openNew() {
     const now = new Date();
+    setEditingTxId(null);
     setForm({
       ...emptyForm,
       date: now.toISOString().split('T')[0],
@@ -126,6 +155,30 @@ export default function TransactionsPage() {
     });
     setFormError('');
     setSelectedRoomId('');
+    setPaidSoFar(0);
+    setOccupiedRooms([]);
+    setVitrinaSaleProductId(null);
+    setVitrinaSellQty(1);
+    setModalOpen(true);
+  }
+
+  // ── open modal (edit) ──
+  function openEdit(t: Transaction) {
+    setEditingTxId(t.id);
+    setForm({
+      date:        t.date,
+      time:        t.time ? t.time.slice(0,5) : '',
+      description: t.description || '',
+      amount:      String(t.amount),
+      type:        t.type,
+      category:    t.category,
+      caja:        t.caja as CajaType,
+      room_id:     t.room_id || '',
+      notes:       t.notes || '',
+    });
+    setFormError('');
+    setSelectedRoomId(t.room_id || '');
+    setPaidSoFar(0);
     setOccupiedRooms([]);
     setVitrinaSaleProductId(null);
     setVitrinaSellQty(1);
@@ -140,24 +193,30 @@ export default function TransactionsPage() {
     setSaving(true);
     setFormError('');
 
-    const { error } = await supabase.from('transactions').insert({
-      date:           form.date || new Date().toISOString().split('T')[0],
-      time:           form.time || null,
-      description:    form.description || null,
-      amount:         parseFloat(form.amount),
-      type:           form.type,
-      category:       form.category,
-      caja:           form.caja,
-      room_id:        form.room_id || null,
-      notes:          form.notes || null,
-      responsible_id: profile?.id ?? null,
-    });
+    const payload = {
+      date:        form.date || new Date().toISOString().split('T')[0],
+      time:        form.time || null,
+      description: form.description || null,
+      amount:      parseFloat(form.amount),
+      type:        form.type,
+      category:    form.category,
+      caja:        form.caja,
+      room_id:     form.room_id || null,
+      notes:       form.notes || null,
+    };
+
+    let error;
+    if (editingTxId) {
+      ({ error } = await supabase.from('transactions').update(payload).eq('id', editingTxId));
+    } else {
+      ({ error } = await supabase.from('transactions').insert({ ...payload, responsible_id: profile?.id ?? null }));
+    }
 
     setSaving(false);
     if (error) { setFormError('Error: ' + error.message); return; }
 
-    // If vitrina sale, decrement product stock
-    if (form.category === 'H03-VENTA DE VITRINAS' && vitrinaSaleProductId) {
+    // If vitrina sale (new only), decrement product stock
+    if (!editingTxId && form.category === 'H03-VENTA DE VITRINAS' && vitrinaSaleProductId) {
       const { data: prod } = await supabase
         .from('vitrina_products').select('quantity').eq('id', vitrinaSaleProductId).single();
       if (prod) {
@@ -169,7 +228,11 @@ export default function TransactionsPage() {
       setVitrinaSellQty(1);
     }
 
-    logActivity(profile?.id, profile?.name, form.type === 'ingreso' ? 'Ingreso registrado' : 'Egreso registrado', 'transaction', undefined, `${form.category} — Bs. ${form.amount} (${form.caja})`);
+    const logAction = editingTxId
+      ? (form.type === 'ingreso' ? 'Ingreso editado' : 'Egreso editado')
+      : (form.type === 'ingreso' ? 'Ingreso registrado' : 'Egreso registrado');
+    logActivity(profile?.id, profile?.name, logAction, 'transaction', editingTxId ?? undefined, `${form.category} — Bs. ${form.amount} (${form.caja})`);
+    setEditingTxId(null);
     setModalOpen(false);
     fetchData();
     // refresh running balances
@@ -303,22 +366,37 @@ export default function TransactionsPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
+                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">N° Factura</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Fecha</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Habitación</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Descripción</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Categoría</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Caja</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Responsable</th>
                   <th className="text-right px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Monto</th>
+                  <th className="px-4 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {filtered.map(t => (
-                  <tr key={t.id} className="hover:bg-gray-50/50 transition-colors">
+                  <tr key={t.id} className="hover:bg-gray-50/50 transition-colors group">
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {t.room_id && siaatMap[t.room_id]
+                        ? <span className="font-mono text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">{siaatMap[t.room_id]}</span>
+                        : <span className="text-gray-300 text-xs">—</span>
+                      }
+                    </td>
                     <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
                       {t.date}
                       {t.time && <span className="text-gray-400 text-xs ml-1">{t.time.slice(0,5)}</span>}
                     </td>
-                    <td className="px-4 py-3 text-gray-700 max-w-[200px] truncate">{t.description || '—'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {t.room_id
+                        ? <span className="font-semibold text-gray-800 bg-gray-100 px-2 py-0.5 rounded text-xs">{t.room_id}</span>
+                        : <span className="text-gray-300 text-xs">—</span>
+                      }
+                    </td>
+                    <td className="px-4 py-3 text-gray-700 max-w-[180px] truncate">{t.description || '—'}</td>
                     <td className="px-4 py-3">
                       <span className="bg-gray-100 text-gray-700 text-xs px-2 py-0.5 rounded-full">{t.category}</span>
                     </td>
@@ -328,6 +406,34 @@ export default function TransactionsPage() {
                       t.type === 'ingreso' ? 'text-green-600' : 'text-red-500'
                     }`}>
                       {t.type === 'ingreso' ? '+' : '-'}{fmtAmount(t.amount)}
+                    </td>
+                    <td className="px-2 py-3">
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                        <button
+                          onClick={() => openEdit(t)}
+                          className="p-1.5 rounded-lg text-gray-300 hover:text-blue-500 hover:bg-blue-50 transition-all"
+                          title="Editar"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDialog({
+                            open: true,
+                            title: 'Eliminar movimiento',
+                            body: `¿Eliminar "${t.description || t.category}" de Bs. ${t.amount.toFixed(2)}? Esta acción no se puede deshacer.`,
+                            onConfirm: async () => {
+                              await supabase.from('transactions').delete().eq('id', t.id);
+                              logActivity(profile?.id, profile?.name, t.type === 'ingreso' ? 'Ingreso eliminado' : 'Egreso eliminado', 'transaction', t.id, `${t.category} — Bs. ${t.amount} (${t.caja})`);
+                              setConfirmDialog(d => ({ ...d, open: false }));
+                              fetchData();
+                            },
+                          })}
+                          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
+                          title="Eliminar"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -342,7 +448,7 @@ export default function TransactionsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <h3 className="font-bold text-gray-900">Nuevo Movimiento</h3>
+              <h3 className="font-bold text-gray-900">{editingTxId ? 'Editar Movimiento' : 'Nuevo Movimiento'}</h3>
               <button onClick={() => setModalOpen(false)} className="text-gray-400 hover:text-gray-600">
                 <X size={20} />
               </button>
@@ -404,9 +510,8 @@ export default function TransactionsPage() {
                 const nights = sel ? Math.max(1, Math.round(
                   (new Date(sel.check_out + 'T00:00:00').getTime() - new Date(sel.check_in + 'T00:00:00').getTime()) / 86400000
                 )) : 0;
-                const total  = sel ? (sel.price_per_night ?? 0) * nights : 0;
-                const adelanto = sel ? (sel.adelanto ?? 0) : 0;
-                const saldo  = total - adelanto;
+                const total = sel ? (sel.price_per_night ?? 0) * nights : 0;
+                const saldo = Math.max(0, total - paidSoFar);
                 return (
                   <div className="space-y-2">
                     <label className="block text-sm font-medium text-gray-700">
@@ -414,18 +519,23 @@ export default function TransactionsPage() {
                     </label>
                     <CustomSelect
                       value={selectedRoomId}
-                      onChange={v => {
+                      onChange={async v => {
                         setSelectedRoomId(v);
+                        setPaidSoFar(0);
                         const r = occupiedRooms.find(x => x.room_id === v);
                         if (r) {
+                          const { data: txs } = await supabase
+                            .from('transactions')
+                            .select('amount')
+                            .eq('room_id', r.room_id)
+                            .eq('type', 'ingreso')
+                            .eq('category', 'H01-HOSPEDAJE');
+                          const paid = (txs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+                          setPaidSoFar(paid);
                           const n = Math.max(1, Math.round((new Date(r.check_out+'T00:00:00').getTime()-new Date(r.check_in+'T00:00:00').getTime())/86400000));
                           const t = (r.price_per_night ?? 0) * n;
-                          const s = t - (r.adelanto ?? 0);
-                          // For reserva: auto-fill with the adelanto amount agreed
-                          const autoAmount = r.status === 'reserva'
-                            ? (r.adelanto > 0 ? r.adelanto.toFixed(2) : '')
-                            : Math.max(0, s).toFixed(2);
-                          setForm(f => ({ ...f, amount: autoAmount, description: `${r.room_id} — ${r.guest_name}`, room_id: r.room_id }));
+                          const s = Math.max(0, t - paid);
+                          setForm(f => ({ ...f, amount: s.toFixed(2), description: `${r.room_id} — ${r.guest_name}`, room_id: r.room_id }));
                         }
                       }}
                       options={occupiedRooms.map(r => ({
@@ -435,12 +545,7 @@ export default function TransactionsPage() {
                       placeholder="— Seleccionar habitación —"
                     />
                     {sel && (
-                      <div className={`border rounded-xl px-4 py-3 text-xs space-y-1 ${sel.status === 'reserva' ? 'bg-amber-50 border-amber-200' : 'bg-blue-50 border-blue-100'}`}>
-                        {sel.status === 'reserva' && (
-                          <div className="flex items-center gap-1.5 text-amber-700 font-semibold mb-1">
-                            <span>📅 Reserva pendiente — registrando adelanto</span>
-                          </div>
-                        )}
+                      <div className="border rounded-xl px-4 py-3 text-xs space-y-1 bg-blue-50 border-blue-100">
                         <div className="flex justify-between text-gray-600">
                           <span>📅 {sel.check_in} → {sel.check_out}</span>
                           <span className="font-semibold">{nights} noche{nights !== 1 ? 's' : ''}</span>
@@ -452,11 +557,13 @@ export default function TransactionsPage() {
                           <div className="flex justify-between font-semibold text-gray-800 border-t border-blue-200 pt-1">
                             <span>Total</span><span>Bs. {total.toFixed(2)}</span>
                           </div>
-                          {adelanto > 0 && <div className="flex justify-between text-green-700">
-                            <span>Adelanto ya pagado</span><span>− Bs. {adelanto.toFixed(2)}</span>
-                          </div>}
-                          <div className={`flex justify-between font-bold text-base border-t pt-1 ${sel.status === 'reserva' ? 'border-amber-200 text-amber-700' : 'border-blue-200 text-blue-700'}`}>
-                            <span>{sel.status === 'reserva' ? 'Saldo pendiente' : 'Saldo a cobrar'}</span><span>Bs. {Math.max(0,saldo).toFixed(2)}</span>
+                          {paidSoFar > 0 && (
+                            <div className="flex justify-between text-green-700">
+                              <span>Ya pagado</span><span>− Bs. {paidSoFar.toFixed(2)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between font-bold text-base border-t border-blue-200 pt-1 text-blue-700">
+                            <span>Saldo pendiente</span><span>Bs. {saldo.toFixed(2)}</span>
                           </div>
                         </>}
                       </div>
@@ -485,21 +592,6 @@ export default function TransactionsPage() {
                 </div>
               )}
 
-              {/* Adelanto reserva: confirm banner */}
-              {form.category === 'H01-HOSPEDAJE' && selectedRoomId && (() => {
-                const sel = occupiedRooms.find(r => r.room_id === selectedRoomId);
-                if (!sel || sel.status !== 'reserva' || !sel.adelanto) return null;
-                return (
-                  <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm">
-                    <p className="font-semibold text-green-800">
-                      ✓ Confirmar pago de adelanto: Bs. {sel.adelanto.toFixed(2)}
-                    </p>
-                    <p className="text-green-600 text-xs mt-0.5">
-                      El monto se pre-cargó con el adelanto acordado. Ajústalo si es diferente.
-                    </p>
-                  </div>
-                );
-              })()}
 
               {/* Caja */}
               <div>
@@ -552,6 +644,30 @@ export default function TransactionsPage() {
             }));
           }}
         />
+      )}
+
+      {/* ── Confirm dialog ── */}
+      {confirmDialog.open && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="px-6 py-5">
+              <h3 className="font-bold text-gray-900 text-base mb-2">{confirmDialog.title}</h3>
+              <p className="text-sm text-gray-500">{confirmDialog.body}</p>
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={() => setConfirmDialog(d => ({ ...d, open: false }))}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDialog.onConfirm}
+                className="px-5 py-2 text-sm font-semibold bg-red-500 hover:bg-red-400 text-white rounded-lg">
+                Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
