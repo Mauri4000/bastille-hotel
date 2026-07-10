@@ -204,7 +204,6 @@ export default function GuestDatabasePage() {
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
-  const showCheckIn  = true;
   const showSiaat    = tab === 'siaat';
   const showEmpresa  = tab === 'empresas';
 

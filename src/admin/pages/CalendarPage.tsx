@@ -383,7 +383,7 @@ export default function CalendarPage() {
         purpose:   g.purpose   || form.guest_purpose   || '',
         origin:    g.origin    || form.guest_origin    || '',
         next_dest: g.next_dest || form.guest_next_dest || '',
-        transport: g.transport || form.guest_transport || '',
+        transport: (g.transport || form.guest_transport || '') as '' | 'T' | 'A',
       }))
     );
   }, [form.guest_purpose, form.guest_origin, form.guest_next_dest, form.guest_transport]); // eslint-disable-line
