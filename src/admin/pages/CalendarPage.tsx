@@ -360,13 +360,13 @@ export default function CalendarPage() {
     setAdditionalGuests(prev => {
       if (prev.length === needed) return prev;
       if (prev.length < needed) {
-        const newGuests = Array(needed - prev.length).fill(null).map(() => ({
+        const newGuests: AdditionalGuest[] = Array(needed - prev.length).fill(null).map(() => ({
           ...emptyAdditionalGuest(),
           country:   form.guest_country   || 'Boliviana',
           purpose:   form.guest_purpose   || '',
           origin:    form.guest_origin    || '',
           next_dest: form.guest_next_dest || '',
-          transport: form.guest_transport || '',
+          transport: (form.guest_transport || '') as '' | 'T' | 'A',
         }));
         return [...prev, ...newGuests];
       }
