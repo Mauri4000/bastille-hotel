@@ -35,7 +35,8 @@ export type ReservationStatus =
   | 'ocupado'
   | 'reserva'
   | 'mantenimiento'
-  | 'habilitacion';
+  | 'habilitacion'
+  | 'limpieza';
 
 export interface Reservation {
   id: string;

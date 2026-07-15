@@ -24,7 +24,7 @@ function daysInMonth(year: number, month: number) {
 
 // Room subtype options by room type keyword
 function subtypeOptions(roomType: string): string[] {
-  if (roomType.includes('S/M/F')) return ['Simple', 'Matrimonial', 'Familiar'];
+  if (roomType.includes('S/M/F')) return ['Simple', 'Matrimonial', 'Doble', 'Familiar'];
   if (roomType.includes('DOBLE/FAM')) return ['Doble', 'Familiar'];
   if (roomType.includes('S/M')) return ['Simple', 'Matrimonial'];
   return [];
@@ -53,7 +53,7 @@ interface AdditionalGuest {
   phone:          string;
   gender:         '' | 'M' | 'F';
   birthdate:      string;
-  marital_status: '' | 'S' | 'C' | 'D' | 'V';
+  marital_status: string;
   country:        string;
   document:       string;
   profession:     string;
@@ -101,7 +101,7 @@ const emptyForm = {
   // Parte Diario fields
   guest_gender:         '' as '' | 'M' | 'F',
   guest_birthdate:      '',
-  guest_marital_status: '' as '' | 'S' | 'C' | 'D' | 'V',
+  guest_marital_status: '',
   guest_phone:          '',
   guest_country:        'Boliviana',
   guest_document:       '',
@@ -187,6 +187,112 @@ export default function CalendarPage() {
     logActivity(profile?.id, profile?.name, 'Ingreso registrado', 'transaction', res.id,
       `Vitrina: ${product.name}${qty > 1 ? ` x${qty}` : ''} — ${res.room_id} ${res.guest_name} · Bs. ${total.toFixed(2)} (${caja})`);
     setVitrinaConfirm(null);
+  }
+
+  // Nota modal (existing cards — all rooms)
+  const [notaModal, setNotaModal] = useState<{ res: Reservation; text: string } | null>(null);
+  async function handleSaveNota() {
+    if (!notaModal) return;
+    await supabase.from('reservations').update({ notes: notaModal.text || null, updated_at: new Date().toISOString() }).eq('id', notaModal.res.id);
+    setNotaModal(null);
+    fetchData();
+  }
+
+  // Quick nota modal (from empty cell — creates a 1-day placeholder)
+  const [quickNotaModal, setQuickNotaModal] = useState<{ roomId: string; day: number; text: string } | null>(null);
+  async function handleSaveQuickNota() {
+    if (!quickNotaModal) return;
+    const date = toDateStr(new Date(year, month, quickNotaModal.day));
+    const next = toDateStr(new Date(year, month, quickNotaModal.day + 1));
+    await supabase.from('reservations').insert({
+      room_id: quickNotaModal.roomId,
+      guest_name: '📝 Nota',
+      num_guests: 0,
+      check_in: date,
+      check_out: next,
+      status: 'habilitacion' as ReservationStatus,
+      notes: quickNotaModal.text,
+      updated_at: new Date().toISOString(),
+    });
+    setQuickNotaModal(null);
+    fetchData();
+  }
+
+  // Room change flow
+  const [roomChangeModal, setRoomChangeModal] = useState<{
+    step: 'room' | 'reason';
+    res: Reservation;
+    newRoomId: string;
+    reason: 'damaged' | 'upgrade' | 'other' | '';
+    description: string;
+    newPrice: string;
+    availableRooms: Room[];
+    loading: boolean;
+  } | null>(null);
+
+  async function openRoomChange(res: Reservation) {
+    setMenuOpenId(null);
+    setRoomChangeModal({ step: 'room', res, newRoomId: '', reason: '', description: '', newPrice: '', availableRooms: [], loading: true });
+    // Fetch conflicting room_ids for the reservation period
+    const { data: conflicts } = await supabase
+      .from('reservations')
+      .select('room_id')
+      .in('status', ['ocupado', 'reserva', 'mantenimiento', 'habilitacion', 'limpieza'])
+      .neq('id', res.id)
+      .lt('check_in', res.check_out)
+      .gt('check_out', res.check_in);
+    const blockedIds = new Set((conflicts ?? []).map((r: any) => r.room_id));
+    blockedIds.add(res.room_id); // exclude current room
+    const available = rooms.filter(r => !blockedIds.has(r.id));
+    setRoomChangeModal(prev => prev ? { ...prev, availableRooms: available, loading: false } : null);
+  }
+
+  async function handleRoomChange() {
+    if (!roomChangeModal || !roomChangeModal.newRoomId || !roomChangeModal.reason) return;
+    const { res, newRoomId, reason, description, newPrice } = roomChangeModal;
+
+    // Today = day of room change; tomorrow = day cleaning crew enters
+    const todayDate = new Date();
+    const today     = toDateStr(todayDate);
+    const tomorrowDate = new Date(todayDate); tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrow  = toDateStr(tomorrowDate);
+    const dayAfter  = toDateStr(new Date(tomorrowDate.getTime() + 86400000));
+
+    // Move reservation to new room (optionally update price)
+    const updatePayload: any = { room_id: newRoomId, updated_at: new Date().toISOString() };
+    const parsedPrice = parseFloat(newPrice);
+    if (!isNaN(parsedPrice) && parsedPrice > 0) updatePayload.price_per_night = parsedPrice;
+    await supabase.from('reservations').update(updatePayload).eq('id', res.id);
+
+    if (reason === 'damaged') {
+      // Mantenimiento card on old room: starts today, ends at original checkout
+      const summary = description.trim() || 'Daño reportado';
+      await supabase.from('reservations').insert({
+        room_id:         res.room_id,
+        guest_name:      `⚠️ ${summary}`,
+        num_guests:      0,
+        check_in:        today,
+        check_out:       res.check_out,
+        status:          'mantenimiento',
+        price_per_night: 0,
+      });
+    } else if (reason === 'upgrade') {
+      // Limpieza card starts TOMORROW (day after room change), lasts 1 day
+      await supabase.from('reservations').insert({
+        room_id:         res.room_id,
+        guest_name:      '🧹 Limpieza suave',
+        num_guests:      0,
+        check_in:        tomorrow,
+        check_out:       dayAfter,
+        status:          'limpieza',
+        price_per_night: 0,
+      });
+    }
+
+    logActivity(profile?.id, profile?.name, 'Reserva editada', 'reservation', res.id,
+      `Cambio de habitación: ${res.room_id} → ${newRoomId} (${reason === 'damaged' ? 'Hab. dañada' : reason === 'upgrade' ? 'Mejor hab.' : 'Otro'})`);
+    setRoomChangeModal(null);
+    fetchData();
   }
 
   // Calendar hover highlight
@@ -549,7 +655,7 @@ export default function CalendarPage() {
       departure_time:  !isSalon && form.departure_time ? form.departure_time : null,
       late_checkout:   !isSalon ? form.late_checkout  : false,
       is_blacklist:    !isSalon ? form.is_blacklist    : false,
-      is_empresa:      isSalon ? false : form.is_empresa,
+      is_empresa:      form.is_empresa,
       has_pet:         isSalon ? false : form.has_pet,
       wants_invoice:   form.wants_invoice,
       price_per_night: form.price_per_night ? parseFloat(form.price_per_night) : null,
@@ -558,7 +664,7 @@ export default function CalendarPage() {
       end_time:        isSalon && form.end_time   ? form.end_time   : null,
       catering:        isSalon ? (cateringParts.join(',') || null) : null,
       // Empresa
-      empresa_name:         !isSalon && form.is_empresa ? (form.empresa_name || null) : null,
+      empresa_name:         form.is_empresa ? (form.empresa_name || null) : null,
       // Parte Diario fields (always saved for regular rooms)
       guest_phone:          !isSalon ? (form.guest_phone || null)           : null,
       guest_purpose:        !isSalon ? (form.guest_purpose || null) : null,
@@ -1213,9 +1319,33 @@ export default function CalendarPage() {
                   ══════════════════════════════ */}
               {isSalon ? (
                 <>
+                  {/* Es Empresa toggle */}
+                  <div className="rounded-xl border border-gray-200 p-3 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input type="checkbox" checked={form.is_empresa}
+                        onChange={e => setForm(f => ({ ...f, is_empresa: e.target.checked, ...(e.target.checked ? { guest_purpose: 'Trabajo' } : {}) }))}
+                        className="w-4 h-4 rounded accent-indigo-500" />
+                      <Building2 size={15} className="text-indigo-600" />
+                      <span className="text-sm font-medium text-gray-700">Es Empresa</span>
+                    </label>
+                    {form.is_empresa && (
+                      <>
+                        <input type="text" list="empresas-list-salon" value={form.empresa_name}
+                          onChange={e => setForm(f => ({ ...f, empresa_name: e.target.value }))}
+                          className="w-full border border-indigo-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                          placeholder="Nombre de la empresa..." autoComplete="off" />
+                        <datalist id="empresas-list-salon">
+                          {empresas.map((name, i) => <option key={i} value={name} />)}
+                        </datalist>
+                      </>
+                    )}
+                  </div>
+
                   {/* Cliente / Empresa */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Cliente / Empresa *</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      {form.is_empresa ? 'Nombre del contacto' : 'Cliente / Empresa'} *
+                    </label>
                     <input
                       type="text"
                       value={form.guest_name}
@@ -1275,7 +1405,7 @@ export default function CalendarPage() {
 
                   {/* Precio total */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Precio total (USD)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Precio total (Bs.)</label>
                     <input
                       type="number"
                       min={0} step={0.01}
@@ -1698,10 +1828,11 @@ export default function CalendarPage() {
                             </div>
                             <div>
                               <label className="block text-xs font-medium text-gray-600 mb-1">Est. Civil</label>
-                              <CustomSelect size="sm" value={form.guest_marital_status}
-                                onChange={v => setForm(f => ({ ...f, guest_marital_status: v as any }))}
-                                options={[{ value:'S', label:'S' },{ value:'C', label:'C' },{ value:'D', label:'D' },{ value:'V', label:'V' }]}
-                                placeholder="—" />
+                              <input type="text" list="bastille-marital-opts"
+                                value={form.guest_marital_status}
+                                onChange={e => setForm(f => ({ ...f, guest_marital_status: e.target.value }))}
+                                placeholder="S / C / D / V"
+                                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                             </div>
                           </div>
                           <div className="grid grid-cols-2 gap-2">
@@ -1713,10 +1844,11 @@ export default function CalendarPage() {
                             <input type="text" placeholder="Profesión" value={form.guest_profession}
                               onChange={e => setForm(f => ({ ...f, guest_profession: e.target.value }))}
                               className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
-                            <CustomSelect size="sm" value={form.guest_purpose}
-                              onChange={v => setForm(f => ({ ...f, guest_purpose: v }))}
-                              options={['Turismo','Trabajo','Estudio','Salud','Negocios','Otro'].map(v => ({ value: v, label: v }))}
-                              placeholder="Objeto —" />
+                            <input type="text" list="bastille-purpose-opts"
+                              value={form.guest_purpose}
+                              onChange={e => setForm(f => ({ ...f, guest_purpose: e.target.value }))}
+                              placeholder="Objeto —"
+                              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                           </div>
                           <div className="grid grid-cols-3 gap-2">
                             <input type="text" placeholder="Procedencia" value={form.guest_origin}
@@ -1765,10 +1897,11 @@ export default function CalendarPage() {
                               </div>
                               <div>
                                 <label className="block text-xs text-gray-500 mb-0.5">Est. Civil</label>
-                                <CustomSelect size="sm" value={ag.marital_status}
-                                  onChange={v => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, marital_status: v as any } : g))}
-                                  options={[{ value:'S', label:'S' },{ value:'C', label:'C' },{ value:'D', label:'D' },{ value:'V', label:'V' }]}
-                                  placeholder="—" />
+                                <input type="text" list="bastille-marital-opts"
+                                  value={ag.marital_status}
+                                  onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, marital_status: e.target.value } : g))}
+                                  placeholder="S / C / D / V"
+                                  className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                               </div>
                             </div>
                             <div className="grid grid-cols-2 gap-2">
@@ -1780,10 +1913,11 @@ export default function CalendarPage() {
                               <input type="text" placeholder="Profesión" value={ag.profession}
                                 onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, profession: e.target.value } : g))}
                                 className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
-                              <CustomSelect size="sm" value={ag.purpose}
-                                onChange={v => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, purpose: v } : g))}
-                                options={['Turismo','Trabajo','Estudio','Salud','Negocios','Otro'].map(v => ({ value: v, label: v }))}
-                                placeholder="Objeto —" />
+                              <input type="text" list="bastille-purpose-opts"
+                                value={ag.purpose}
+                                onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, purpose: e.target.value } : g))}
+                                placeholder="Objeto —"
+                                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                             </div>
                             <div className="grid grid-cols-3 gap-2">
                               <input type="text" placeholder="Procedencia" value={ag.origin}
@@ -1953,10 +2087,11 @@ export default function CalendarPage() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">Est. Civil</label>
-                      <CustomSelect size="sm" value={confirmModal.guest_marital_status}
-                        onChange={v => setConfirmModal(m => ({ ...m, guest_marital_status: v }))}
-                        options={[{ value:'S', label:'S' },{ value:'C', label:'C' },{ value:'D', label:'D' },{ value:'V', label:'V' }]}
-                        placeholder="—" accent="green" />
+                      <input type="text" list="bastille-marital-opts"
+                        value={confirmModal.guest_marital_status}
+                        onChange={e => setConfirmModal(m => ({ ...m, guest_marital_status: e.target.value }))}
+                        placeholder="S / C / D / V"
+                        className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                     </div>
                   </div>
 
@@ -1964,10 +2099,11 @@ export default function CalendarPage() {
                     <input type="text" placeholder="Profesión" value={confirmModal.guest_profession}
                       onChange={e => setConfirmModal(m => ({ ...m, guest_profession: e.target.value }))}
                       className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
-                    <CustomSelect size="sm" value={confirmModal.guest_purpose}
-                      onChange={v => setConfirmModal(m => ({ ...m, guest_purpose: v }))}
-                      options={['Turismo','Trabajo','Estudio','Salud','Negocios','Otro'].map(v => ({ value: v, label: v }))}
-                      placeholder="Objeto —" accent="green" />
+                    <input type="text" list="bastille-purpose-opts"
+                      value={confirmModal.guest_purpose}
+                      onChange={e => setConfirmModal(m => ({ ...m, guest_purpose: e.target.value }))}
+                      placeholder="Objeto —"
+                      className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                   </div>
 
                   <div className="grid grid-cols-3 gap-2">
@@ -2024,9 +2160,11 @@ export default function CalendarPage() {
                           onChange={v => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, birthdate: v } : g))}
                           placeholder="dd/mm/aaaa"
                           accentClass="border-green-400 ring-green-100" />
-                        <CustomSelect size="sm" value={ag.marital_status} accent="green"
-                          onChange={v => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, marital_status: v as any } : g))}
-                          options={[{ value:'S', label:'S' },{ value:'C', label:'C' },{ value:'D', label:'D' },{ value:'V', label:'V' }]} placeholder="E.Civil" />
+                        <input type="text" list="bastille-marital-opts"
+                          value={ag.marital_status}
+                          onChange={e => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, marital_status: e.target.value } : g))}
+                          placeholder="E.Civil"
+                          className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                       </div>
                       <input type="text" placeholder="País" value={ag.country}
                         onChange={e => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, country: e.target.value } : g))}
@@ -2271,7 +2409,19 @@ export default function CalendarPage() {
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-amber-600 hover:bg-amber-50">
                 🛒 Vitrina
               </button>
+              <button onClick={() => { openRoomChange(cardMenu.res); setCardMenu(null); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50">
+                🔄 Cambiar habitación
+              </button>
             </>)}
+            {cardMenu.res.status === 'limpieza' && (
+              <button onClick={async () => {
+                await supabase.from('reservations').delete().eq('id', cardMenu.res.id);
+                setCardMenu(null); fetchData();
+              }} className="w-full text-left px-4 py-2 text-sm font-semibold text-cyan-600 hover:bg-cyan-50">
+                ✅ Limpieza completada
+              </button>
+            )}
             {cardMenu.res.status === 'habilitacion' && (
               <button onClick={async () => {
                 await supabase.from('reservations').delete().eq('id', cardMenu.res.id);
@@ -2288,6 +2438,22 @@ export default function CalendarPage() {
                 🔧 Ya está arreglado
               </button>
             )}
+            {/* Nota rápida — todas las habitaciones */}
+            <>
+              <div className="border-t border-gray-100 my-1" />
+              <button onClick={() => { setNotaModal({ res: cardMenu.res, text: (cardMenu.res as any).notes ?? '' }); setCardMenu(null); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50">
+                📝 {(cardMenu.res as any).notes ? 'Editar nota' : 'Agregar nota'}
+              </button>
+              {(cardMenu.res as any).notes && (
+                <button onClick={async () => {
+                  await supabase.from('reservations').update({ notes: null, updated_at: new Date().toISOString() }).eq('id', cardMenu.res.id);
+                  setCardMenu(null); fetchData();
+                }} className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-50">
+                  🗑 Borrar nota
+                </button>
+              )}
+            </>
             <div className="border-t border-gray-100 my-1" />
             <button onClick={() => { setCardMenu(null); openEdit(cardMenu.res); }}
               className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
@@ -2299,6 +2465,83 @@ export default function CalendarPage() {
             </button>
           </div>
         </>
+      )}
+
+      {/* ── Quick cell menu (empty cell + click) ── */}
+      {quickMenu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setQuickMenu(null)} />
+          <div
+            className="fixed z-50 bg-white rounded-xl shadow-2xl border border-gray-100 py-1.5 w-52"
+            style={{
+              left: Math.min(quickMenu.x, window.innerWidth - 216),
+              top: (() => {
+                const h = quickMenu.roomId === 'SALON' ? 130 : 210;
+                return quickMenu.y + h > window.innerHeight
+                  ? quickMenu.y - h - 8
+                  : quickMenu.y + 4;
+              })(),
+            }}
+          >
+            <button onClick={() => openNew(quickMenu.roomId, quickMenu.day, 'reserva', 'reserva')}
+              className="w-full text-left px-4 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-50">
+              📅 Reserva
+            </button>
+            <button onClick={() => openNew(quickMenu.roomId, quickMenu.day, 'ocupado', 'directo')}
+              className="w-full text-left px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-50">
+              🚶 Check-in directo
+            </button>
+            {quickMenu.roomId !== 'SALON' && (<>
+              <button onClick={() => { setMaintenanceForm({ roomId: quickMenu.roomId, day: quickMenu.day, detail: '', endDate: '' }); setQuickMenu(null); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50">
+                🔧 Mantenimiento
+              </button>
+              <button onClick={() => quickCreateStatus(quickMenu.roomId, quickMenu.day, 'habilitacion', 'Habilitación')}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50">
+                🧹 Habilitación
+              </button>
+            </>)}
+            <div className="border-t border-gray-100 my-1" />
+            <button onClick={() => { setQuickNotaModal({ roomId: quickMenu.roomId, day: quickMenu.day, text: '' }); setQuickMenu(null); }}
+              className="w-full text-left px-4 py-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50">
+              📝 Agregar nota
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* ── Quick nota modal (from empty cell) ── */}
+      {quickNotaModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-indigo-50 rounded-t-2xl">
+              <h3 className="font-bold text-gray-900">📝 Agregar nota — {quickNotaModal.roomId}</h3>
+              <button onClick={() => setQuickNotaModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+            <div className="px-6 py-5">
+              <textarea
+                autoFocus
+                value={quickNotaModal.text}
+                onChange={e => setQuickNotaModal(n => n ? { ...n, text: e.target.value } : n)}
+                rows={3}
+                placeholder="Escribe una nota para este día..."
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setQuickNotaModal(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                disabled={!quickNotaModal.text.trim()}
+                onClick={handleSaveQuickNota}
+                className="px-5 py-2 text-sm font-semibold bg-indigo-500 hover:bg-indigo-400 text-white rounded-lg disabled:opacity-40">
+                Guardar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Mantenimiento creation popup ── */}
@@ -2416,6 +2659,152 @@ export default function CalendarPage() {
                 ✓ Confirmar venta
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Room Change modal ── */}
+      {roomChangeModal && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-blue-50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-900">🔄 Cambiar habitación</h3>
+                <p className="text-xs text-blue-700 font-semibold mt-0.5">
+                  {roomChangeModal.res.room_id} — {roomChangeModal.res.guest_name}
+                </p>
+              </div>
+              <button onClick={() => setRoomChangeModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+
+            {roomChangeModal.step === 'room' ? (
+              /* ── Step 1: pick new room ── */
+              <div className="px-6 py-5 space-y-4">
+                {roomChangeModal.loading ? (
+                  <div className="flex items-center justify-center h-24">
+                    <div className="w-6 h-6 border-4 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : roomChangeModal.availableRooms.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-4">
+                    No hay habitaciones disponibles para esas fechas.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm text-gray-500">
+                      Noches: <span className="font-semibold text-gray-800">{roomChangeModal.res.check_in} → {roomChangeModal.res.check_out}</span>
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+                      {roomChangeModal.availableRooms.map(r => (
+                        <button
+                          key={r.id}
+                          onClick={() => setRoomChangeModal(m => m ? { ...m, newRoomId: r.id } : m)}
+                          className={`text-left px-3 py-2.5 rounded-xl border-2 transition-all ${
+                            roomChangeModal.newRoomId === r.id
+                              ? 'border-blue-500 bg-blue-50'
+                              : 'border-gray-200 hover:border-gray-300'
+                          }`}
+                        >
+                          <p className="font-bold text-gray-900 text-sm">{r.id}</p>
+                          <p className="text-[11px] text-gray-500 truncate">{r.type}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <div className="flex justify-end gap-3 border-t border-gray-100 pt-4">
+                  <button onClick={() => setRoomChangeModal(null)}
+                    className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                    Cancelar
+                  </button>
+                  <button
+                    disabled={!roomChangeModal.newRoomId}
+                    onClick={() => setRoomChangeModal(m => m ? { ...m, step: 'reason' } : m)}
+                    className="px-5 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-400 text-white rounded-lg disabled:opacity-40">
+                    Siguiente →
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* ── Step 2: pick reason ── */
+              <div className="px-6 py-5 space-y-4">
+                <p className="text-sm text-gray-500">
+                  Nueva habitación: <span className="font-bold text-gray-900">{roomChangeModal.newRoomId}</span>
+                </p>
+                <p className="text-sm font-medium text-gray-700">¿Por qué cambia de habitación?</p>
+                <div className="space-y-2">
+                  {([
+                    { value: 'damaged', label: '🔨 Habitación dañada', desc: 'Se generará un card de mantenimiento' },
+                    { value: 'upgrade', label: '⭐ Quería mejor habitación', desc: 'Se generará un card de limpieza suave' },
+                    { value: 'other',   label: '📝 Otro motivo', desc: '' },
+                  ] as const).map(opt => (
+                    <label key={opt.value}
+                      className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                        roomChangeModal.reason === opt.value ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <input type="radio" className="mt-0.5 accent-blue-500" name="room_change_reason"
+                        checked={roomChangeModal.reason === opt.value}
+                        onChange={() => setRoomChangeModal(m => m ? { ...m, reason: opt.value } : m)}
+                      />
+                      <div>
+                        <p className="text-sm font-semibold text-gray-800">{opt.label}</p>
+                        {opt.desc && <p className="text-[11px] text-gray-400 mt-0.5">{opt.desc}</p>}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+
+                {(roomChangeModal.reason === 'damaged' || roomChangeModal.reason === 'other') && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      {roomChangeModal.reason === 'damaged' ? 'Descripción del daño *' : 'Descripción (opcional)'}
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={roomChangeModal.description}
+                      onChange={e => setRoomChangeModal(m => m ? { ...m, description: e.target.value } : m)}
+                      placeholder={roomChangeModal.reason === 'damaged' ? 'Ej: Fuga en baño, cerradura rota...' : 'Motivo del cambio...'}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+                    />
+                  </div>
+                )}
+
+                {/* Nuevo precio — siempre visible */}
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 space-y-2">
+                  <p className="text-xs font-semibold text-amber-700">
+                    Precio actual: Bs. {(roomChangeModal.res as any).price_per_night?.toFixed(2) ?? '—'}/noche
+                  </p>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Nuevo precio/noche (Bs.) <span className="text-gray-400 font-normal text-xs">— dejar vacío para mantener</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={roomChangeModal.newPrice}
+                    onChange={e => setRoomChangeModal(m => m ? { ...m, newPrice: e.target.value } : m)}
+                    placeholder={`Ej: ${(roomChangeModal.res as any).price_per_night ?? 0}`}
+                    className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+
+                <div className="flex justify-between gap-3 border-t border-gray-100 pt-4">
+                  <button onClick={() => setRoomChangeModal(m => m ? { ...m, step: 'room' } : m)}
+                    className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                    ← Atrás
+                  </button>
+                  <button
+                    disabled={!roomChangeModal.reason || (roomChangeModal.reason === 'damaged' && !roomChangeModal.description.trim())}
+                    onClick={handleRoomChange}
+                    className="px-5 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-400 text-white rounded-lg disabled:opacity-40">
+                    ✓ Confirmar cambio
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2635,6 +3024,56 @@ export default function CalendarPage() {
           </div>
         </>
       )}
+      {/* ── Nota rápida modal (salon) ── */}
+      {notaModal && (
+        <div className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-indigo-50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-900">📝 Nota del salón</h3>
+                <p className="text-xs text-indigo-700 font-semibold mt-0.5">{notaModal.res.guest_name} — {notaModal.res.check_in}</p>
+              </div>
+              <button onClick={() => setNotaModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+            <div className="px-6 py-5">
+              <textarea
+                rows={4}
+                value={notaModal.text}
+                onChange={e => setNotaModal(m => m ? { ...m, text: e.target.value } : m)}
+                placeholder="Escribe una nota para este día..."
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
+                autoFocus
+              />
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setNotaModal(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button onClick={handleSaveNota}
+                className="px-5 py-2 text-sm font-semibold bg-indigo-500 hover:bg-indigo-400 text-white rounded-lg">
+                Guardar nota
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Global datalists for combobox inputs ── */}
+      <datalist id="bastille-marital-opts">
+        <option value="S" />
+        <option value="C" />
+        <option value="D" />
+        <option value="V" />
+      </datalist>
+      <datalist id="bastille-purpose-opts">
+        <option value="Turismo" />
+        <option value="Trabajo" />
+        <option value="Estudio" />
+        <option value="Salud" />
+        <option value="Negocios" />
+        <option value="Otro" />
+      </datalist>
     </div>
   );
 }

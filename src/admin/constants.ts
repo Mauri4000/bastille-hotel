@@ -74,6 +74,13 @@ export const STATUS_CONFIG: Record<
     label: 'Habilitación',
     dot: 'bg-blue-400',
   },
+  limpieza: {
+    bg: 'bg-cyan-400',
+    text: 'text-white',
+    border: 'border-cyan-500',
+    label: 'Limpieza',
+    dot: 'bg-cyan-400',
+  },
 };
 
 export const MONTH_NAMES = [

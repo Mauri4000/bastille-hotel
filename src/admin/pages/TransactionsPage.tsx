@@ -351,97 +351,160 @@ export default function TransactionsPage() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center h-40">
-            <div className="w-7 h-7 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
+      {(() => {
+        // Running balance oldest → newest
+        const sortedAsc = [...filtered].sort((a, b) => {
+          const da = a.date + (a.time ?? '');
+          const db = b.date + (b.time ?? '');
+          return da < db ? -1 : da > db ? 1 : 0;
+        });
+        let run = 0;
+        const balanceMap: Record<string, number> = {};
+        for (const t of sortedAsc) {
+          run += t.type === 'ingreso' ? t.amount : -t.amount;
+          balanceMap[t.id] = run;
+        }
+
+        const thCls = 'px-3 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider whitespace-nowrap border-r border-gray-200 last:border-r-0';
+        const tdCls = 'px-3 py-2.5 whitespace-nowrap border-r border-gray-200 last:border-r-0';
+
+        return (
+          <div className="bg-white rounded-xl border border-gray-300 shadow-sm overflow-hidden">
+            {loading ? (
+              <div className="flex items-center justify-center h-40">
+                <div className="w-7 h-7 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-40 text-gray-400">
+                <DollarSign size={32} className="mb-2 opacity-30" />
+                <p className="text-sm">Sin movimientos para este período</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm border-collapse">
+                  <thead className="bg-gray-50 border-b-2 border-gray-300">
+                    <tr>
+                      <th className={`${thCls} text-left`}>Fecha</th>
+                      <th className={`${thCls} text-left`}>Responsable</th>
+                      <th className={`${thCls} text-right`}>Ingreso</th>
+                      <th className={`${thCls} text-right`}>Egreso</th>
+                      <th className={`${thCls} text-right`}>Saldo</th>
+                      <th className={`${thCls} text-left`}>Caja</th>
+                      <th className={`${thCls} text-left`}>Habitación</th>
+                      <th className={`${thCls} text-left`}>N° Factura</th>
+                      <th className={`${thCls} text-left w-full`}>Descripción</th>
+                      <th className="px-2 py-3 border-r-0" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {filtered.map(t => {
+                      const saldo = balanceMap[t.id] ?? 0;
+                      return (
+                        <tr key={t.id} className="hover:bg-amber-50/40 transition-colors group">
+                          {/* Fecha */}
+                          <td className={`${tdCls} text-gray-600 text-xs`}>
+                            <div className="font-medium">{t.date}</div>
+                            {t.time && <div className="text-gray-400">{t.time.slice(0,5)}</div>}
+                          </td>
+                          {/* Responsable */}
+                          <td className={`${tdCls} text-gray-600 text-xs`}>
+                            {(t.profiles as any)?.name ?? '—'}
+                          </td>
+                          {/* Ingreso */}
+                          <td className={`${tdCls} text-right font-semibold text-green-600`}>
+                            {t.type === 'ingreso'
+                              ? `Bs. ${t.amount.toFixed(2)}`
+                              : <span className="text-gray-300">—</span>
+                            }
+                          </td>
+                          {/* Egreso */}
+                          <td className={`${tdCls} text-right font-semibold text-red-500`}>
+                            {t.type === 'egreso'
+                              ? `Bs. ${t.amount.toFixed(2)}`
+                              : <span className="text-gray-300">—</span>
+                            }
+                          </td>
+                          {/* Saldo acumulado */}
+                          <td className={`${tdCls} text-right font-bold text-xs ${saldo >= 0 ? 'text-gray-800' : 'text-red-600'}`}>
+                            {saldo >= 0 ? '' : '−'}Bs. {Math.abs(saldo).toFixed(2)}
+                          </td>
+                          {/* Caja */}
+                          <td className={`${tdCls} text-gray-600 text-xs`}>{t.caja}</td>
+                          {/* Habitación */}
+                          <td className={`${tdCls}`}>
+                            {t.room_id
+                              ? <span className="font-semibold text-gray-800 bg-gray-100 px-2 py-0.5 rounded text-xs">{t.room_id}</span>
+                              : <span className="text-gray-300 text-xs">—</span>
+                            }
+                          </td>
+                          {/* N° Factura */}
+                          <td className={`${tdCls}`}>
+                            {t.room_id && siaatMap[t.room_id]
+                              ? <span className="font-mono text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">{siaatMap[t.room_id]}</span>
+                              : <span className="text-gray-300 text-xs">—</span>
+                            }
+                          </td>
+                          {/* Descripción — wide */}
+                          <td className="px-3 py-2.5 text-gray-700 text-xs min-w-[260px] max-w-xs truncate border-r border-gray-200">
+                            {t.description || <span className="text-gray-300">—</span>}
+                          </td>
+                          {/* Actions */}
+                          <td className="px-2 py-2.5">
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                              <button
+                                onClick={() => openEdit(t)}
+                                className="p-1.5 rounded-lg text-gray-300 hover:text-blue-500 hover:bg-blue-50 transition-all"
+                                title="Editar"
+                              >
+                                <Pencil size={13} />
+                              </button>
+                              <button
+                                onClick={() => setConfirmDialog({
+                                  open: true,
+                                  title: 'Eliminar movimiento',
+                                  body: `¿Eliminar "${t.description || t.category}" de Bs. ${t.amount.toFixed(2)}? Esta acción no se puede deshacer.`,
+                                  onConfirm: async () => {
+                                    await supabase.from('transactions').delete().eq('id', t.id);
+                                    logActivity(profile?.id, profile?.name, t.type === 'ingreso' ? 'Ingreso eliminado' : 'Egreso eliminado', 'transaction', t.id, `${t.category} — Bs. ${t.amount} (${t.caja})`);
+                                    setConfirmDialog(d => ({ ...d, open: false }));
+                                    fetchData();
+                                  },
+                                })}
+                                className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
+                                title="Eliminar"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  {/* Footer totals */}
+                  <tfoot className="bg-gray-50 border-t-2 border-gray-300">
+                    <tr>
+                      <td colSpan={2} className="px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-r border-gray-200">
+                        Total ({filtered.length})
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-bold text-green-600 text-sm border-r border-gray-200">
+                        Bs. {totalIncome.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-bold text-red-500 text-sm border-r border-gray-200">
+                        Bs. {totalExpense.toFixed(2)}
+                      </td>
+                      <td className={`px-3 py-2.5 text-right font-bold text-sm border-r border-gray-200 ${balance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+                        {balance >= 0 ? '' : '−'}Bs. {Math.abs(balance).toFixed(2)}
+                      </td>
+                      <td colSpan={5} className="border-r border-gray-200" />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
           </div>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-40 text-gray-400">
-            <DollarSign size={32} className="mb-2 opacity-30" />
-            <p className="text-sm">Sin movimientos para este período</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-100">
-                <tr>
-                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">N° Factura</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Fecha</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Habitación</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Descripción</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Categoría</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Caja</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Responsable</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider">Monto</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {filtered.map(t => (
-                  <tr key={t.id} className="hover:bg-gray-50/50 transition-colors group">
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      {t.room_id && siaatMap[t.room_id]
-                        ? <span className="font-mono text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">{siaatMap[t.room_id]}</span>
-                        : <span className="text-gray-300 text-xs">—</span>
-                      }
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
-                      {t.date}
-                      {t.time && <span className="text-gray-400 text-xs ml-1">{t.time.slice(0,5)}</span>}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      {t.room_id
-                        ? <span className="font-semibold text-gray-800 bg-gray-100 px-2 py-0.5 rounded text-xs">{t.room_id}</span>
-                        : <span className="text-gray-300 text-xs">—</span>
-                      }
-                    </td>
-                    <td className="px-4 py-3 text-gray-700 max-w-[180px] truncate">{t.description || '—'}</td>
-                    <td className="px-4 py-3">
-                      <span className="bg-gray-100 text-gray-700 text-xs px-2 py-0.5 rounded-full">{t.category}</span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 text-xs">{t.caja}</td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">{(t.profiles as any)?.name ?? '—'}</td>
-                    <td className={`px-4 py-3 text-right font-semibold whitespace-nowrap ${
-                      t.type === 'ingreso' ? 'text-green-600' : 'text-red-500'
-                    }`}>
-                      {t.type === 'ingreso' ? '+' : '-'}{fmtAmount(t.amount)}
-                    </td>
-                    <td className="px-2 py-3">
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                        <button
-                          onClick={() => openEdit(t)}
-                          className="p-1.5 rounded-lg text-gray-300 hover:text-blue-500 hover:bg-blue-50 transition-all"
-                          title="Editar"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        <button
-                          onClick={() => setConfirmDialog({
-                            open: true,
-                            title: 'Eliminar movimiento',
-                            body: `¿Eliminar "${t.description || t.category}" de Bs. ${t.amount.toFixed(2)}? Esta acción no se puede deshacer.`,
-                            onConfirm: async () => {
-                              await supabase.from('transactions').delete().eq('id', t.id);
-                              logActivity(profile?.id, profile?.name, t.type === 'ingreso' ? 'Ingreso eliminado' : 'Egreso eliminado', 'transaction', t.id, `${t.category} — Bs. ${t.amount} (${t.caja})`);
-                              setConfirmDialog(d => ({ ...d, open: false }));
-                              fetchData();
-                            },
-                          })}
-                          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
-                          title="Eliminar"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* ── Modal ── */}
       {modalOpen && (
