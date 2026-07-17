@@ -2418,8 +2418,12 @@ export default function CalendarPage() {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setCardMenu(null)} />
           <div
-            className="fixed z-50 bg-white rounded-xl shadow-2xl border border-gray-100 py-1.5 w-52"
-            style={{ top: Math.min(cardMenu.y + 4, window.innerHeight - 200), left: Math.min(cardMenu.x, window.innerWidth - 216) }}
+            className="fixed z-50 bg-white rounded-xl shadow-2xl border border-gray-100 py-1.5 w-52 overflow-y-auto"
+            style={{
+              left: Math.min(cardMenu.x, window.innerWidth - 216),
+              top:  Math.min(cardMenu.y + 4, window.innerHeight - 40),
+              maxHeight: Math.min(400, window.innerHeight - cardMenu.y - 16),
+            }}
           >
             {cardMenu.res.status === 'reserva' && (
               <button onClick={async e => {
