@@ -754,7 +754,15 @@ export default function CalendarPage() {
       title: '⚠️ Anular check-in completo',
       body: `Esto borrará la reserva de ${res.guest_name} (${res.room_id}), TODOS sus ingresos registrados y su boleta del historial. No se puede deshacer.`,
       onConfirm: async () => {
+        // 1. Borrar transacciones con reservation_id (formato nuevo)
         await supabase.from('transactions').delete().eq('reservation_id', res.id);
+        // 2. Borrar transacciones sin reservation_id en el mismo cuarto y rango de fechas (formato antiguo)
+        await supabase.from('transactions').delete()
+          .eq('room_id', res.room_id)
+          .is('reservation_id', null)
+          .gte('date', res.check_in)
+          .lte('date', res.check_out);
+        // 3. Borrar la reserva
         await supabase.from('reservations').delete().eq('id', res.id);
         setPendingVitrina(prev => { const n = { ...prev }; delete n[res.id]; return n; });
         logActivity(profile?.id, profile?.name, 'Check-in anulado', 'reservation', res.id,
