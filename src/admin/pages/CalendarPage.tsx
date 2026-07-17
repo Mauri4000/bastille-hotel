@@ -168,7 +168,7 @@ export default function CalendarPage() {
 
   // Vitrina sale from card menu
   type VitrinaProduct = { id: string; name: string; price: number; quantity: number; image_filename: string };
-  type VitrinaCartItem = { product: VitrinaProduct; qty: number; total: number };
+  type VitrinaCartItem = { product: VitrinaProduct; qty: number; total: number; caja: 'CAJA MAYOR' | 'CUENTA BNB' };
   type PendingVitrinaItem = { productId: string; productName: string; price: number; qty: number; total: number; caja: string };
   const [vitrinaSaleRes, setVitrinaSaleRes] = useState<Reservation | null>(null);
   // pendingVitrina: keyed by reservation_id, items not yet registered as transactions
