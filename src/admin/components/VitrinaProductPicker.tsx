@@ -14,6 +14,7 @@ export interface CartItem {
   product: VitrinaProduct;
   qty: number;
   total: number;
+  caja: 'CAJA MAYOR' | 'CUENTA BNB';
 }
 
 interface Props {
@@ -59,7 +60,7 @@ export default function VitrinaProductPicker({ onConfirm, onClose }: Props) {
         updated[idx] = { ...updated[idx], qty: newQty, total: newQty * selected.price };
         return updated;
       }
-      return [...prev, { product: selected, qty: sellQty, total: selected.price * sellQty }];
+      return [...prev, { product: selected, qty: sellQty, total: selected.price * sellQty, caja: 'CAJA MAYOR' }];
     });
     setSelected(null);
     setSellQty(1);
@@ -75,6 +76,10 @@ export default function VitrinaProductPicker({ onConfirm, onClose }: Props) {
       const newQty = Math.max(1, Math.min(i.product.quantity, i.qty + delta));
       return { ...i, qty: newQty, total: newQty * i.product.price };
     }));
+  }
+
+  function updateCartCaja(productId: string, caja: 'CAJA MAYOR' | 'CUENTA BNB') {
+    setCart(prev => prev.map(i => i.product.id === productId ? { ...i, caja } : i));
   }
 
   const cartTotal = cart.reduce((s, i) => s + i.total, 0);
@@ -217,6 +222,27 @@ export default function VitrinaProductPicker({ onConfirm, onClose }: Props) {
                         </button>
                       </div>
                       <span className="text-xs font-bold text-amber-600">Bs. {item.total.toFixed(2)}</span>
+                    </div>
+                    {/* Payment method toggle */}
+                    <div className="flex gap-1 mt-1.5">
+                      <button
+                        onClick={() => updateCartCaja(item.product.id, 'CAJA MAYOR')}
+                        className={`flex-1 text-[10px] font-semibold py-0.5 rounded transition-colors ${
+                          item.caja === 'CAJA MAYOR'
+                            ? 'bg-green-500 text-white'
+                            : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                        }`}>
+                        Efectivo
+                      </button>
+                      <button
+                        onClick={() => updateCartCaja(item.product.id, 'CUENTA BNB')}
+                        className={`flex-1 text-[10px] font-semibold py-0.5 rounded transition-colors ${
+                          item.caja === 'CUENTA BNB'
+                            ? 'bg-blue-500 text-white'
+                            : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                        }`}>
+                        QR
+                      </button>
                     </div>
                   </div>
                 ))}

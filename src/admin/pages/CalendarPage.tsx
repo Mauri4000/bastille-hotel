@@ -169,7 +169,7 @@ export default function CalendarPage() {
   // Vitrina sale from card menu
   type VitrinaProduct = { id: string; name: string; price: number; quantity: number; image_filename: string };
   type VitrinaCartItem = { product: VitrinaProduct; qty: number; total: number };
-  type PendingVitrinaItem = { productId: string; productName: string; price: number; qty: number; total: number };
+  type PendingVitrinaItem = { productId: string; productName: string; price: number; qty: number; total: number; caja: string };
   const [vitrinaSaleRes, setVitrinaSaleRes] = useState<Reservation | null>(null);
   // pendingVitrina: keyed by reservation_id, items not yet registered as transactions
   const [pendingVitrina, setPendingVitrina] = useState<Record<string, PendingVitrinaItem[]>>({});
@@ -389,7 +389,7 @@ export default function CalendarPage() {
         room_id: row.res.room_id, reservation_id: row.res.id,
         amount: item.total,
         description: `${item.productName}${item.qty > 1 ? ` x${item.qty}` : ''} — ${row.res.guest_name}`,
-        caja: 'CAJA MAYOR',
+        caja: item.caja || 'CAJA MAYOR',
         responsible_id: profile?.id ?? null,
       });
       // Decrement stock
@@ -2761,7 +2761,7 @@ export default function CalendarPage() {
                 if (idx >= 0) {
                   merged[idx] = { ...merged[idx], qty: merged[idx].qty + item.qty, total: merged[idx].total + item.total };
                 } else {
-                  merged.push({ productId: item.product.id, productName: item.product.name, price: item.product.price, qty: item.qty, total: item.total });
+                  merged.push({ productId: item.product.id, productName: item.product.name, price: item.product.price, qty: item.qty, total: item.total, caja: item.caja });
                 }
               }
               return { ...prev, [res.id]: merged };
@@ -2970,32 +2970,47 @@ export default function CalendarPage() {
                     <div className="mt-2 pt-2 border-t border-amber-200">
                       <p className="text-xs font-semibold text-amber-700 mb-1">🛒 Vitrina pendiente:</p>
                       {liveItems.map(item => (
-                        <div key={item.productId} className="flex items-center gap-1 text-xs text-gray-600 py-0.5">
-                          <span className="flex-1 truncate">{item.productName}</span>
-                          <button onClick={() => setPendingVitrina(prev => {
-                            const items = (prev[row.res.id] ?? []).map(i => i.productId === item.productId
-                              ? { ...i, qty: Math.max(1, i.qty - 1), total: Math.max(1, i.qty - 1) * i.price }
-                              : i);
-                            return { ...prev, [row.res.id]: items };
-                          })} className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center flex-shrink-0">
-                            <Minus size={9} />
-                          </button>
-                          <span className="w-5 text-center font-bold text-gray-800">{item.qty}</span>
-                          <button onClick={() => setPendingVitrina(prev => {
-                            const items = (prev[row.res.id] ?? []).map(i => i.productId === item.productId
-                              ? { ...i, qty: i.qty + 1, total: (i.qty + 1) * i.price }
-                              : i);
-                            return { ...prev, [row.res.id]: items };
-                          })} className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center flex-shrink-0">
-                            <Plus size={9} />
-                          </button>
-                          <span className="font-semibold w-16 text-right">Bs. {item.total.toFixed(2)}</span>
-                          <button onClick={() => setPendingVitrina(prev => ({
-                            ...prev,
-                            [row.res.id]: (prev[row.res.id] ?? []).filter(i => i.productId !== item.productId),
-                          }))} className="text-red-300 hover:text-red-500 flex-shrink-0 ml-0.5">
-                            <Trash2 size={11} />
-                          </button>
+                        <div key={item.productId} className="py-1 border-b border-amber-50 last:border-0">
+                          <div className="flex items-center gap-1 text-xs text-gray-600">
+                            <span className="flex-1 truncate">{item.productName}</span>
+                            <button onClick={() => setPendingVitrina(prev => {
+                              const items = (prev[row.res.id] ?? []).map(i => i.productId === item.productId
+                                ? { ...i, qty: Math.max(1, i.qty - 1), total: Math.max(1, i.qty - 1) * i.price }
+                                : i);
+                              return { ...prev, [row.res.id]: items };
+                            })} className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center flex-shrink-0">
+                              <Minus size={9} />
+                            </button>
+                            <span className="w-5 text-center font-bold text-gray-800">{item.qty}</span>
+                            <button onClick={() => setPendingVitrina(prev => {
+                              const items = (prev[row.res.id] ?? []).map(i => i.productId === item.productId
+                                ? { ...i, qty: i.qty + 1, total: (i.qty + 1) * i.price }
+                                : i);
+                              return { ...prev, [row.res.id]: items };
+                            })} className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center flex-shrink-0">
+                              <Plus size={9} />
+                            </button>
+                            <span className="font-semibold w-14 text-right">Bs. {item.total.toFixed(2)}</span>
+                            <button onClick={() => setPendingVitrina(prev => ({
+                              ...prev,
+                              [row.res.id]: (prev[row.res.id] ?? []).filter(i => i.productId !== item.productId),
+                            }))} className="text-red-300 hover:text-red-500 flex-shrink-0 ml-0.5">
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                          {/* Caja toggle per item */}
+                          <div className="flex gap-1 mt-1">
+                            <button
+                              onClick={() => setPendingVitrina(prev => ({ ...prev, [row.res.id]: (prev[row.res.id] ?? []).map(i => i.productId === item.productId ? { ...i, caja: 'CAJA MAYOR' } : i) }))}
+                              className={`flex-1 text-[9px] font-semibold py-0.5 rounded transition-colors ${(item.caja || 'CAJA MAYOR') === 'CAJA MAYOR' ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}>
+                              Efectivo
+                            </button>
+                            <button
+                              onClick={() => setPendingVitrina(prev => ({ ...prev, [row.res.id]: (prev[row.res.id] ?? []).map(i => i.productId === item.productId ? { ...i, caja: 'CUENTA BNB' } : i) }))}
+                              className={`flex-1 text-[9px] font-semibold py-0.5 rounded transition-colors ${item.caja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}>
+                              QR
+                            </button>
+                          </div>
                         </div>
                       ))}
                       <div className="flex justify-between text-xs font-bold text-amber-700 mt-1 pt-1 border-t border-amber-100">
