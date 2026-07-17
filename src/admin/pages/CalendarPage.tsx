@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Plus, X, Building2, Trash2, Receipt, CheckSquare, MoreHorizontal } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Minus, X, Building2, Trash2, Receipt, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../../lib/logActivity';
@@ -158,36 +158,11 @@ export default function CalendarPage() {
 
   // Vitrina sale from card menu
   type VitrinaProduct = { id: string; name: string; price: number; quantity: number; image_filename: string };
-  const [vitrinaSaleRes,  setVitrinaSaleRes]  = useState<Reservation | null>(null);
-  const [vitrinaConfirm,  setVitrinaConfirm]  = useState<{
-    res: Reservation; product: VitrinaProduct; qty: number; total: number; caja: string;
-  } | null>(null);
-
-  async function handleVitrinaSale() {
-    if (!vitrinaConfirm) return;
-    const { res, product, qty, total, caja } = vitrinaConfirm;
-    // Create transaction
-    await supabase.from('transactions').insert({
-      date:           new Date().toISOString().split('T')[0],
-      type:           'ingreso',
-      category:       'H03-VENTA DE VITRINAS',
-      room_id:        res.room_id,
-      amount:         total,
-      description:    `${product.name}${qty > 1 ? ` x${qty}` : ''} — ${res.guest_name}`,
-      caja,
-      responsible_id: profile?.id ?? null,
-    });
-    // Decrement stock
-    const { data: prod } = await supabase.from('vitrina_products').select('quantity').eq('id', product.id).single();
-    if (prod) {
-      await supabase.from('vitrina_products')
-        .update({ quantity: Math.max(0, prod.quantity - qty), updated_at: new Date().toISOString() })
-        .eq('id', product.id);
-    }
-    logActivity(profile?.id, profile?.name, 'Ingreso registrado', 'transaction', res.id,
-      `Vitrina: ${product.name}${qty > 1 ? ` x${qty}` : ''} — ${res.room_id} ${res.guest_name} · Bs. ${total.toFixed(2)} (${caja})`);
-    setVitrinaConfirm(null);
-  }
+  type VitrinaCartItem = { product: VitrinaProduct; qty: number; total: number };
+  type PendingVitrinaItem = { productId: string; productName: string; price: number; qty: number; total: number };
+  const [vitrinaSaleRes, setVitrinaSaleRes] = useState<Reservation | null>(null);
+  // pendingVitrina: keyed by reservation_id, items not yet registered as transactions
+  const [pendingVitrina, setPendingVitrina] = useState<Record<string, PendingVitrinaItem[]>>({});
 
   // Nota modal (existing cards — all rooms)
   const [notaModal, setNotaModal] = useState<{ res: Reservation; text: string } | null>(null);
@@ -300,10 +275,11 @@ export default function CalendarPage() {
 
   // Pagos Pendientes panel
   const [pagosOpen, setPagosOpen] = useState(false);
-  type PagoRow = { res: Reservation; total: number; paid: number; pending: number };
+  type PagoRow = { res: Reservation; total: number; paid: number; pending: number; vitrinaItems: PendingVitrinaItem[]; vitrinaTotal: number };
   const [pagoRows, setPagoRows]   = useState<PagoRow[]>([]);
   const [pagosLoading, setPagosLoading] = useState(false);
-  const [pagoForm, setPagoForm] = useState<{ resId: string; amount: string; caja: string } | null>(null);
+  type PagoForm = { resId: string; amount: string; caja: string; split: boolean; amount_qr: string; amount_cash: string };
+  const [pagoForm, setPagoForm] = useState<PagoForm | null>(null);
 
   async function openPagosPanel() {
     setPagosOpen(true);
@@ -315,52 +291,110 @@ export default function CalendarPage() {
       .eq('status', 'ocupado')
       .not('price_per_night', 'is', null);
     if (!activas?.length) { setPagoRows([]); setPagosLoading(false); return; }
-    // Fetch H01-HOSPEDAJE ingresos for those rooms
-    const roomIds = [...new Set(activas.map(r => r.room_id))];
+    // Fetch H01-HOSPEDAJE ingresos filtered by reservation_id (not room_id) to avoid cross-reservation contamination
+    const resIds = activas.map(r => r.id);
     const { data: txs } = await supabase
       .from('transactions')
-      .select('room_id, amount')
-      .in('room_id', roomIds)
+      .select('reservation_id, amount')
+      .in('reservation_id', resIds)
       .eq('type', 'ingreso')
       .eq('category', 'H01-HOSPEDAJE');
-    const paidByRoom: Record<string, number> = {};
+    const paidByRes: Record<string, number> = {};
     for (const t of txs ?? []) {
-      paidByRoom[t.room_id] = (paidByRoom[t.room_id] ?? 0) + t.amount;
+      if (t.reservation_id) {
+        paidByRes[t.reservation_id] = (paidByRes[t.reservation_id] ?? 0) + t.amount;
+      }
     }
     const rows: PagoRow[] = activas.map(res => {
-      const ciDate  = new Date(res.check_in  + 'T00:00:00');
-      const coDate  = new Date(res.check_out + 'T00:00:00');
-      const nights  = Math.max(1, Math.round((coDate.getTime() - ciDate.getTime()) / 86400000));
-      const total   = (res.price_per_night ?? 0) * nights;
-      const paid    = paidByRoom[res.room_id] ?? 0;
-      const pending = Math.max(0, total - paid);
-      return { res, total, paid, pending };
+      const ciDate      = new Date(res.check_in  + 'T00:00:00');
+      const coDate      = new Date(res.check_out + 'T00:00:00');
+      const nights      = Math.max(1, Math.round((coDate.getTime() - ciDate.getTime()) / 86400000));
+      const total       = (res.price_per_night ?? 0) * nights;
+      const paid        = paidByRes[res.id] ?? 0;
+      const vitrinaItems = pendingVitrina[res.id] ?? [];
+      const vitrinaTotal = vitrinaItems.reduce((s, i) => s + i.total, 0);
+      const pending     = Math.max(0, total - paid);
+      return { res, total, paid, pending, vitrinaItems, vitrinaTotal };
     });
     // Sort: pending first
-    rows.sort((a, b) => b.pending - a.pending);
+    rows.sort((a, b) => (b.pending + b.vitrinaTotal) - (a.pending + a.vitrinaTotal));
     setPagoRows(rows);
     setPagosLoading(false);
   }
 
   async function confirmarPago() {
     if (!pagoForm) return;
-    const amount = parseFloat(pagoForm.amount);
-    if (!amount || amount <= 0 || !pagoForm.caja) return;
     const row = pagoRows.find(r => r.res.id === pagoForm.resId);
     if (!row) return;
-    await supabase.from('transactions').insert({
-      date:           new Date().toISOString().split('T')[0],
-      type:           'ingreso',
-      category:       'H01-HOSPEDAJE',
-      room_id:        row.res.room_id,
-      amount,
-      description:    `Hospedaje — ${row.res.guest_name}`,
-      caja:           pagoForm.caja,
-      responsible_id: profile?.id ?? null,
-    });
-    logActivity(profile?.id, profile?.name, 'Pago registrado', 'transaction', row.res.id, `${row.res.room_id} — ${row.res.guest_name} · Bs. ${amount.toFixed(2)} (${pagoForm.caja})`);
+
+    const today    = new Date().toISOString().split('T')[0];
+    const ciDate   = new Date(row.res.check_in  + 'T00:00:00');
+    const coDate   = new Date(row.res.check_out + 'T00:00:00');
+    const nights   = Math.max(1, Math.round((coDate.getTime() - ciDate.getTime()) / 86400000));
+    const nightStr = `${nights} noche${nights === 1 ? '' : 's'}`;
+    const desc     = `Hospedaje — ${row.res.guest_name} — ${nightStr}`;
+
+    if (pagoForm.split) {
+      const amtQr   = parseFloat(pagoForm.amount_qr)   || 0;
+      const amtCash = parseFloat(pagoForm.amount_cash)  || 0;
+      if (amtQr <= 0 && amtCash <= 0) return;
+      if (amtQr > 0) {
+        await supabase.from('transactions').insert({
+          date: today, type: 'ingreso', category: 'H01-HOSPEDAJE',
+          room_id: row.res.room_id, reservation_id: row.res.id,
+          amount: amtQr, description: desc, caja: 'CUENTA BNB',
+          responsible_id: profile?.id ?? null,
+        });
+      }
+      if (amtCash > 0) {
+        await supabase.from('transactions').insert({
+          date: today, type: 'ingreso', category: 'H01-HOSPEDAJE',
+          room_id: row.res.room_id, reservation_id: row.res.id,
+          amount: amtCash, description: desc, caja: 'CAJA MAYOR',
+          responsible_id: profile?.id ?? null,
+        });
+      }
+      logActivity(profile?.id, profile?.name, 'Pago registrado', 'transaction', row.res.id,
+        `${row.res.room_id} — ${row.res.guest_name} · QR: Bs. ${amtQr.toFixed(2)}, Efectivo: Bs. ${amtCash.toFixed(2)}`);
+    } else {
+      const amount = parseFloat(pagoForm.amount);
+      if (!amount || amount <= 0 || !pagoForm.caja) return;
+      await supabase.from('transactions').insert({
+        date: today, type: 'ingreso', category: 'H01-HOSPEDAJE',
+        room_id: row.res.room_id, reservation_id: row.res.id,
+        amount, description: desc, caja: pagoForm.caja,
+        responsible_id: profile?.id ?? null,
+      });
+      logActivity(profile?.id, profile?.name, 'Pago registrado', 'transaction', row.res.id,
+        `${row.res.room_id} — ${row.res.guest_name} · Bs. ${amount.toFixed(2)} (${pagoForm.caja})`);
+    }
+
+    // Create vitrina transactions if any pending items for this reservation
+    const vitrinaItems = pendingVitrina[row.res.id] ?? [];
+    for (const item of vitrinaItems) {
+      await supabase.from('transactions').insert({
+        date: today, type: 'ingreso', category: 'H03-VENTA DE VITRINAS',
+        room_id: row.res.room_id, reservation_id: row.res.id,
+        amount: item.total,
+        description: `${item.productName}${item.qty > 1 ? ` x${item.qty}` : ''} — ${row.res.guest_name}`,
+        caja: 'CAJA MAYOR',
+        responsible_id: profile?.id ?? null,
+      });
+      // Decrement stock
+      const { data: prod } = await supabase.from('vitrina_products').select('quantity').eq('id', item.productId).single();
+      if (prod) {
+        await supabase.from('vitrina_products')
+          .update({ quantity: Math.max(0, prod.quantity - item.qty), updated_at: new Date().toISOString() })
+          .eq('id', item.productId);
+      }
+    }
+    if (vitrinaItems.length > 0) {
+      setPendingVitrina(prev => { const n = { ...prev }; delete n[row.res.id]; return n; });
+      logActivity(profile?.id, profile?.name, 'Vitrina registrada', 'transaction', row.res.id,
+        `${vitrinaItems.map(i => `${i.productName}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ')} — ${row.res.room_id} · Bs. ${vitrinaItems.reduce((s, i) => s + i.total, 0).toFixed(2)}`);
+    }
+
     setPagoForm(null);
-    // Refresh rows
     openPagosPanel();
   }
 
@@ -480,15 +514,15 @@ export default function CalendarPage() {
     });
   }, [form.num_guests, modalOpen]); // eslint-disable-line
 
-  // When guest 1 fields change, sync to existing additional guests that still have them empty
+  // When guest 1 fields change, sync to additional guests (always mirror guest 1's values)
   useEffect(() => {
     if (!modalOpen) return;
     setAdditionalGuests(prev =>
       prev.map(g => ({
         ...g,
         purpose:   g.purpose   || form.guest_purpose   || '',
-        origin:    g.origin    || form.guest_origin    || '',
-        next_dest: g.next_dest || form.guest_next_dest || '',
+        origin:    form.guest_origin    || '',
+        next_dest: form.guest_next_dest || '',
         transport: (g.transport || form.guest_transport || '') as '' | 'T' | 'A',
       }))
     );
@@ -708,6 +742,23 @@ export default function CalendarPage() {
         await supabase.from('reservations').delete().eq('id', id);
         logActivity(profile?.id, profile?.name, 'Reserva eliminada', 'reservation', id, `${del?.room_id} — ${del?.guest_name}`);
         setModalOpen(false);
+        fetchData();
+      },
+    });
+  }
+
+  // ── anular check-in completo (borra reserva + todas sus transacciones) ──
+  function handleAnularCheckin(res: Reservation) {
+    setConfirmDialog({
+      open: true,
+      title: '⚠️ Anular check-in completo',
+      body: `Esto borrará la reserva de ${res.guest_name} (${res.room_id}), TODOS sus ingresos registrados y su boleta del historial. No se puede deshacer.`,
+      onConfirm: async () => {
+        await supabase.from('transactions').delete().eq('reservation_id', res.id);
+        await supabase.from('reservations').delete().eq('id', res.id);
+        setPendingVitrina(prev => { const n = { ...prev }; delete n[res.id]; return n; });
+        logActivity(profile?.id, profile?.name, 'Check-in anulado', 'reservation', res.id,
+          `${res.room_id} — ${res.guest_name} (ingresos y boleta eliminados)`);
         fetchData();
       },
     });
@@ -1799,7 +1850,6 @@ export default function CalendarPage() {
                             <input type="tel" placeholder="Celular"
                               value={form.guest_phone}
                               onChange={e => setForm(f => ({ ...f, guest_phone: e.target.value.replace(/\D/g, '') }))}
-                              onBlur={e => lookupGuest(e.target.value, 'guest_phone')}
                               className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                             <input type="text" placeholder="CI / Pasaporte"
                               value={form.guest_document}
@@ -1875,7 +1925,6 @@ export default function CalendarPage() {
                             <div className="grid grid-cols-2 gap-2">
                               <input type="tel" placeholder="Celular" value={ag.phone}
                                 onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, phone: e.target.value.replace(/\D/g, '') } : g))}
-                                onBlur={e => lookupAdditionalGuest(e.target.value, 'guest_phone', idx)}
                                 className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                               <input type="text" placeholder="CI / Pasaporte" value={ag.document}
                                 onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, document: e.target.value.replace(/[^a-zA-Z0-9]/g, '') } : g))}
@@ -2044,13 +2093,6 @@ export default function CalendarPage() {
                       className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                     <input type="tel" placeholder="Celular" value={confirmModal.guest_phone}
                       onChange={e => setConfirmModal(m => ({ ...m, guest_phone: e.target.value }))}
-                      onBlur={async e => {
-                        const v = e.target.value;
-                        if (v.length < 4) return;
-                        const { data } = await supabase.from('reservations').select('guest_name,guest_phone,guest_gender,guest_birthdate,guest_marital_status,guest_country,guest_document,guest_profession,guest_purpose,guest_origin,guest_next_dest,guest_transport').eq('guest_phone', v).not('guest_name','is',null).order('updated_at',{ascending:false}).limit(1);
-                        const g = data?.[0]; if (!g) return;
-                        setConfirmModal(m => ({ ...m, guest_name_edit: g.guest_name ?? m.guest_name_edit, guest_gender: g.guest_gender ?? m.guest_gender, guest_birthdate: g.guest_birthdate ?? m.guest_birthdate, guest_marital_status: g.guest_marital_status ?? m.guest_marital_status, guest_country: g.guest_country ?? m.guest_country, guest_document: g.guest_document ?? m.guest_document, guest_profession: g.guest_profession ?? m.guest_profession, guest_purpose: g.guest_purpose ?? m.guest_purpose, guest_origin: g.guest_origin ?? m.guest_origin, guest_next_dest: g.guest_next_dest ?? m.guest_next_dest, guest_transport: g.guest_transport ?? m.guest_transport }));
-                      }}
                       className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                   </div>
 
@@ -2135,12 +2177,6 @@ export default function CalendarPage() {
                       <div className="grid grid-cols-2 gap-2">
                         <input type="tel" placeholder="Celular" value={ag.phone}
                           onChange={e => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, phone: e.target.value } : g))}
-                          onBlur={async e => {
-                            const v = e.target.value; if (v.length < 4) return;
-                            const { data } = await supabase.from('reservations').select('guest_name,guest_phone,guest_gender,guest_birthdate,guest_marital_status,guest_country,guest_document,guest_profession,guest_purpose,guest_origin,guest_next_dest,guest_transport').eq('guest_phone',v).not('guest_name','is',null).order('updated_at',{ascending:false}).limit(1);
-                            const g2 = data?.[0]; if (!g2) return;
-                            setConfirmAdditionalGuests(p => p.map((g, i) => i !== idx ? g : { ...g, name: g2.guest_name ?? g.name, gender: g2.guest_gender ?? g.gender, birthdate: g2.guest_birthdate ?? g.birthdate, marital_status: g2.guest_marital_status ?? g.marital_status, country: g2.guest_country ?? g.country, document: g2.guest_document ?? g.document, profession: g2.guest_profession ?? g.profession, purpose: g2.guest_purpose ?? g.purpose, origin: g2.guest_origin ?? g.origin, next_dest: g2.guest_next_dest ?? g.next_dest, transport: g2.guest_transport ?? g.transport }));
-                          }}
                           className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
                         <input type="text" placeholder="CI / Pasaporte" value={ag.document}
                           onChange={e => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, document: e.target.value } : g))}
@@ -2459,6 +2495,12 @@ export default function CalendarPage() {
               className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
               ✏️ Editar
             </button>
+            {cardMenu.res.status === 'ocupado' && (
+              <button onClick={() => { const r = cardMenu.res; setCardMenu(null); handleAnularCheckin(r); }}
+                className="w-full text-left px-4 py-2 text-sm text-red-600 font-semibold hover:bg-red-50">
+                ⚠️ Anular check-in completo
+              </button>
+            )}
             <button onClick={e => { setCardMenu(null); handleDeleteRes(e as any, cardMenu.res.id); }}
               className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50">
               🗑 Borrar
@@ -2599,68 +2641,30 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {/* ── Vitrina sale picker ── */}
+      {/* ── Vitrina sale picker (multi-product cart) ── */}
       {vitrinaSaleRes && (
         <VitrinaProductPicker
           onClose={() => setVitrinaSaleRes(null)}
-          onSelect={(product, qty, total) => {
-            setVitrinaConfirm({ res: vitrinaSaleRes, product, qty, total, caja: 'CAJA MAYOR' });
+          onConfirm={(items: VitrinaCartItem[]) => {
+            const res = vitrinaSaleRes;
+            setPendingVitrina(prev => {
+              const existing = prev[res.id] ?? [];
+              const merged = [...existing];
+              for (const item of items) {
+                const idx = merged.findIndex(m => m.productId === item.product.id);
+                if (idx >= 0) {
+                  merged[idx] = { ...merged[idx], qty: merged[idx].qty + item.qty, total: merged[idx].total + item.total };
+                } else {
+                  merged.push({ productId: item.product.id, productName: item.product.name, price: item.product.price, qty: item.qty, total: item.total });
+                }
+              }
+              return { ...prev, [res.id]: merged };
+            });
+            logActivity(profile?.id, profile?.name, 'Vitrina al carrito', 'transaction', res.id,
+              `${items.map(i => `${i.product.name}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ')} — ${res.room_id} ${res.guest_name}`);
             setVitrinaSaleRes(null);
           }}
         />
-      )}
-
-      {/* ── Vitrina caja confirmation ── */}
-      {vitrinaConfirm && (
-        <div className="fixed inset-0 z-[210] flex items-center justify-center p-4 bg-black/50">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-amber-50 rounded-t-2xl">
-              <div>
-                <h3 className="font-bold text-gray-900">🛒 Confirmar venta vitrina</h3>
-                <p className="text-xs text-amber-700 font-semibold mt-0.5">
-                  {vitrinaConfirm.res.room_id} — {vitrinaConfirm.res.guest_name}
-                </p>
-              </div>
-              <button onClick={() => setVitrinaConfirm(null)} className="text-gray-400 hover:text-gray-600">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="px-6 py-5 space-y-4">
-              <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 flex justify-between items-center">
-                <div>
-                  <p className="text-sm font-semibold text-gray-900">{vitrinaConfirm.product.name}</p>
-                  <p className="text-xs text-gray-500">
-                    {vitrinaConfirm.qty} ud × Bs. {vitrinaConfirm.product.price.toFixed(2)}
-                  </p>
-                </div>
-                <p className="text-lg font-bold text-amber-600">Bs. {vitrinaConfirm.total.toFixed(2)}</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Registrar en caja</label>
-                <CustomSelect
-                  value={vitrinaConfirm.caja}
-                  onChange={v => setVitrinaConfirm(c => c ? { ...c, caja: v } : c)}
-                  options={[
-                    { value: 'CAJA MAYOR', label: 'CAJA MAYOR' },
-                    { value: 'CAJA CHICA', label: 'CAJA CHICA' },
-                    { value: 'CUENTA BNB', label: 'CUENTA BNB' },
-                  ]}
-                  placeholder="— Seleccionar —"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
-              <button onClick={() => setVitrinaConfirm(null)}
-                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
-                Cancelar
-              </button>
-              <button onClick={handleVitrinaSale}
-                className="px-5 py-2 text-sm font-semibold bg-amber-400 hover:bg-amber-300 text-gray-900 rounded-lg">
-                ✓ Confirmar venta
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* ── Room Change modal ── */}
@@ -2852,29 +2856,116 @@ export default function CalendarPage() {
                     </div>
                   </div>
 
+                  {/* Vitrina pending items — editable */}
+                  {row.vitrinaItems.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-amber-200">
+                      <p className="text-xs font-semibold text-amber-700 mb-1">🛒 Vitrina pendiente:</p>
+                      {row.vitrinaItems.map(item => (
+                        <div key={item.productId} className="flex items-center gap-1 text-xs text-gray-600 py-0.5">
+                          <span className="flex-1 truncate">{item.productName}</span>
+                          <button onClick={() => setPendingVitrina(prev => {
+                            const items = (prev[row.res.id] ?? []).map(i => i.productId === item.productId
+                              ? { ...i, qty: Math.max(1, i.qty - 1), total: Math.max(1, i.qty - 1) * i.price }
+                              : i);
+                            return { ...prev, [row.res.id]: items };
+                          })} className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center flex-shrink-0">
+                            <Minus size={9} />
+                          </button>
+                          <span className="w-5 text-center font-bold text-gray-800">{item.qty}</span>
+                          <button onClick={() => setPendingVitrina(prev => {
+                            const items = (prev[row.res.id] ?? []).map(i => i.productId === item.productId
+                              ? { ...i, qty: i.qty + 1, total: (i.qty + 1) * i.price }
+                              : i);
+                            return { ...prev, [row.res.id]: items };
+                          })} className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 flex items-center justify-center flex-shrink-0">
+                            <Plus size={9} />
+                          </button>
+                          <span className="font-semibold w-16 text-right">Bs. {item.total.toFixed(2)}</span>
+                          <button onClick={() => setPendingVitrina(prev => ({
+                            ...prev,
+                            [row.res.id]: (prev[row.res.id] ?? []).filter(i => i.productId !== item.productId),
+                          }))} className="text-red-300 hover:text-red-500 flex-shrink-0 ml-0.5">
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      ))}
+                      <div className="flex justify-between text-xs font-bold text-amber-700 mt-1 pt-1 border-t border-amber-100">
+                        <span>Total vitrina</span>
+                        <span>Bs. {row.vitrinaTotal.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Mini pago form */}
-                  {row.pending > 0 && (
+                  {(row.pending > 0 || row.vitrinaTotal > 0) && (
                     pagoForm?.resId === row.res.id ? (
                       <div className="mt-3 pt-3 border-t border-amber-200 space-y-2">
-                        <div className="flex gap-2">
-                          <input
-                            type="number" min={0} step={0.5}
-                            value={pagoForm.amount}
-                            onChange={e => setPagoForm(f => f ? { ...f, amount: e.target.value } : f)}
-                            placeholder="Monto Bs."
-                            className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
-                          />
-                          <CustomSelect
-                            value={pagoForm.caja}
-                            onChange={v => setPagoForm(f => f ? { ...f, caja: v } : f)}
-                            options={[
-                              { value: 'CAJA MAYOR', label: 'CAJA MAYOR' },
-                              { value: 'CAJA CHICA', label: 'CAJA CHICA' },
-                              { value: 'CUENTA BNB', label: 'CUENTA BNB' },
-                            ]}
-                            placeholder="Caja"
-                          />
+                        {/* Toggle split */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-500">Método de pago</span>
+                          <button
+                            onClick={() => setPagoForm(f => f ? { ...f, split: !f.split, amount_qr: '', amount_cash: '' } : f)}
+                            className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${pagoForm.split ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'}`}
+                          >
+                            {pagoForm.split ? '✓ Dividir QR + Efectivo' : 'Dividir QR + Efectivo'}
+                          </button>
                         </div>
+
+                        {pagoForm.split ? (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 w-28 flex-shrink-0">QR (CUENTA BNB)</span>
+                              <input
+                                type="number" min={0} step={0.5}
+                                value={pagoForm.amount_qr}
+                                onChange={e => setPagoForm(f => f ? { ...f, amount_qr: e.target.value } : f)}
+                                placeholder="0.00"
+                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 w-28 flex-shrink-0">Efectivo (CAJA)</span>
+                              <input
+                                type="number" min={0} step={0.5}
+                                value={pagoForm.amount_cash}
+                                onChange={e => setPagoForm(f => f ? { ...f, amount_cash: e.target.value } : f)}
+                                placeholder="0.00"
+                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                              />
+                            </div>
+                            {(parseFloat(pagoForm.amount_qr) || 0) + (parseFloat(pagoForm.amount_cash) || 0) > 0 && (
+                              <p className="text-xs text-gray-500 text-right">
+                                Total: <span className="font-bold text-gray-800">Bs. {((parseFloat(pagoForm.amount_qr) || 0) + (parseFloat(pagoForm.amount_cash) || 0)).toFixed(2)}</span>
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex gap-2">
+                            <input
+                              type="number" min={0} step={0.5}
+                              value={pagoForm.amount}
+                              onChange={e => setPagoForm(f => f ? { ...f, amount: e.target.value } : f)}
+                              placeholder="Monto Bs."
+                              className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                            />
+                            <CustomSelect
+                              value={pagoForm.caja}
+                              onChange={v => setPagoForm(f => f ? { ...f, caja: v } : f)}
+                              options={[
+                                { value: 'CAJA MAYOR', label: 'CAJA MAYOR' },
+                                { value: 'CUENTA BNB', label: 'CUENTA BNB' },
+                              ]}
+                              placeholder="Caja"
+                            />
+                          </div>
+                        )}
+
+                        {row.vitrinaTotal > 0 && (
+                          <p className="text-xs text-amber-700 bg-amber-50 rounded px-2 py-1">
+                            🛒 Se agregarán Bs. {row.vitrinaTotal.toFixed(2)} de vitrina a CAJA MAYOR
+                          </p>
+                        )}
+
                         <div className="flex gap-2">
                           <button onClick={() => setPagoForm(null)}
                             className="flex-1 px-3 py-1.5 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
@@ -2888,9 +2979,9 @@ export default function CalendarPage() {
                       </div>
                     ) : (
                       <button
-                        onClick={() => setPagoForm({ resId: row.res.id, amount: row.pending.toFixed(2), caja: 'CAJA MAYOR' })}
+                        onClick={() => setPagoForm({ resId: row.res.id, amount: (row.pending + row.vitrinaTotal).toFixed(2), caja: 'CAJA MAYOR', split: false, amount_qr: '', amount_cash: '' })}
                         className="mt-2 w-full text-xs font-semibold text-green-700 border border-green-300 bg-green-100 hover:bg-green-200 rounded-lg px-3 py-1.5 transition-colors">
-                        + Registrar pago
+                        + Registrar pago {row.vitrinaTotal > 0 ? `· Total: Bs. ${(row.pending + row.vitrinaTotal).toFixed(2)}` : ''}
                       </button>
                     )
                   )}

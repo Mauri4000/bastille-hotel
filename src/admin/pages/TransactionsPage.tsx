@@ -697,14 +697,18 @@ export default function TransactionsPage() {
       {showVitrinaPicker && (
         <VitrinaProductPicker
           onClose={() => setShowVitrinaPicker(false)}
-          onSelect={(product, qty, total) => {
-            setVitrinaSaleProductId(product.id);
-            setVitrinaSellQty(qty);
-            setForm(f => ({
-              ...f,
-              amount:      total.toFixed(2),
-              description: qty > 1 ? `${product.name} x${qty}` : product.name,
-            }));
+          onConfirm={(items) => {
+            const first = items[0];
+            if (!first) return;
+            // Use the first selected product for stock-decrement tracking
+            setVitrinaSaleProductId(first.product.id);
+            setVitrinaSellQty(first.qty);
+            const totalAmt = items.reduce((s, i) => s + i.total, 0);
+            const desc = items.length === 1
+              ? (first.qty > 1 ? `${first.product.name} x${first.qty}` : first.product.name)
+              : items.map(i => i.qty > 1 ? `${i.product.name} x${i.qty}` : i.product.name).join(', ');
+            setForm(f => ({ ...f, amount: totalAmt.toFixed(2), description: desc }));
+            setShowVitrinaPicker(false);
           }}
         />
       )}

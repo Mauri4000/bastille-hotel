@@ -184,7 +184,9 @@ export default function DashboardPage() {
     <div className="space-y-6">
       {/* Welcome */}
       <div>
-        <h1 className="text-xl font-bold text-gray-900">Buen día, {profile?.name ?? 'bienvenido'} 👋</h1>
+        <h1 className="text-xl font-bold text-gray-900">
+          {today.getHours() < 12 ? 'Buenos días' : today.getHours() < 19 ? 'Buenas tardes' : 'Buenas noches'}, {profile?.name ?? 'bienvenido'} 👋
+        </h1>
         <p className="text-sm text-gray-500 mt-0.5 capitalize">
           {today.toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
         </p>

@@ -28,6 +28,8 @@ interface GuestRecord {
   empresa_name: string | null;
   has_pet: boolean;
   departure_time: string | null;
+  late_checkout: boolean;
+  is_blacklist: boolean;
 }
 
 const GENDER_LABEL: Record<string, string>    = { M: 'Masculino', F: 'Femenino' };
@@ -45,34 +47,43 @@ function nights(ci: string, co: string) {
 type TxRow = { id: string; category: string; amount: number; date: string; description: string | null };
 
 function Boleta({ g, onClose }: { g: GuestRecord; onClose: () => void }) {
-  const n     = nights(g.check_in, g.check_out);
+  const n         = nights(g.check_in, g.check_out);
   const baseTotal = (g.price_per_night ?? 0) * n;
   const [extras, setExtras] = useState<TxRow[]>([]);
 
   useEffect(() => {
-    // Fetch all ingreso transactions for this room in the stay period (excluding H01-HOSPEDAJE)
+    // Fetch all ingreso transactions for this reservation (excluding H01-HOSPEDAJE)
     supabase
       .from('transactions')
       .select('id, category, amount, date, description')
-      .eq('room_id', g.room_id)
+      .eq('reservation_id', g.id)
       .eq('type', 'ingreso')
       .neq('category', 'H01-HOSPEDAJE')
-      .gte('date', g.check_in)
-      .lte('date', g.check_out)
       .then(({ data }) => setExtras(data ?? []));
-  }, [g.room_id, g.check_in, g.check_out]);
+  }, [g.id]);
 
   const grandTotal = baseTotal + extras.reduce((s, t) => s + t.amount, 0);
 
   const CATEGORY_LABEL: Record<string, string> = {
-    'H02-LATE CHECKOUT': '🌙 Late Checkout',
-    'V01-VITRINA':       '🛒 Vitrina',
+    'H02-LATE CHECKOUT':    '🌙 Late Checkout',
+    'H03-VENTA DE VITRINAS':'🛒 Vitrina',
+    'V01-VITRINA':          '🛒 Vitrina',
   };
+
+  const vitrinaExtras  = extras.filter(t => t.category === 'H03-VENTA DE VITRINAS' || t.category === 'V01-VITRINA');
+  const otherExtras    = extras.filter(t => t.category !== 'H03-VENTA DE VITRINAS' && t.category !== 'V01-VITRINA');
+
+  const tags = [
+    g.has_pet      && { label: '🐾 Mascota',       cls: 'bg-amber-100 text-amber-700' },
+    g.late_checkout && { label: '🌙 Late Checkout', cls: 'bg-purple-100 text-purple-700' },
+    g.is_blacklist && { label: '🚫 Lista negra',    cls: 'bg-red-100 text-red-700' },
+  ].filter(Boolean) as { label: string; cls: string }[];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-amber-50 rounded-t-2xl">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
+        {/* Sticky header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-amber-50 rounded-t-2xl flex-shrink-0">
           <div>
             <h3 className="font-bold text-gray-900 flex items-center gap-2">
               <FileText size={17} className="text-amber-600" /> Boleta de Registro
@@ -82,17 +93,28 @@ function Boleta({ g, onClose }: { g: GuestRecord; onClose: () => void }) {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
         </div>
 
-        <div className="px-6 py-5 space-y-4 text-sm">
+        <div className="px-6 py-5 space-y-4 text-sm overflow-y-auto flex-1">
+
+          {/* Tags — blacklist / pet / late checkout */}
+          {tags.length > 0 && (
+            <div className="flex gap-2 flex-wrap">
+              {tags.map(t => (
+                <span key={t.label} className={`text-xs px-2.5 py-1 rounded-full font-semibold ${t.cls}`}>{t.label}</span>
+              ))}
+            </div>
+          )}
+
           <section>
             <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Estadía</p>
             <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-1">
               <Row label="Habitación"    value={g.room_id} />
               <Row label="Check-in"      value={g.check_in} />
               <Row label="Check-out"     value={g.check_out} />
+              {g.departure_time         && <Row label="Hora de salida"  value={g.departure_time} />}
               <Row label="Noches"        value={String(n)} />
               {g.price_per_night != null && <Row label="Precio / noche" value={`Bs. ${g.price_per_night.toFixed(2)}`} />}
               {g.price_per_night != null && <Row label="Hospedaje"      value={`Bs. ${baseTotal.toFixed(2)}`} />}
-              {extras.map(t => (
+              {otherExtras.map(t => (
                 <Row key={t.id}
                   label={CATEGORY_LABEL[t.category] ?? t.category}
                   value={`Bs. ${t.amount.toFixed(2)}`} />
@@ -102,6 +124,23 @@ function Boleta({ g, onClose }: { g: GuestRecord; onClose: () => void }) {
               )}
             </div>
           </section>
+
+          {/* Vitrina purchases */}
+          {vitrinaExtras.length > 0 && (
+            <section>
+              <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">🛒 Compras Vitrina</p>
+              <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 space-y-1">
+                {vitrinaExtras.map(t => (
+                  <Row key={t.id} label={t.description ?? 'Vitrina'} value={`Bs. ${t.amount.toFixed(2)}`} />
+                ))}
+                <div className="pt-1 border-t border-amber-200">
+                  <Row label="Total vitrina"
+                    value={`Bs. ${vitrinaExtras.reduce((s, t) => s + t.amount, 0).toFixed(2)}`}
+                    bold />
+                </div>
+              </div>
+            </section>
+          )}
 
           <section>
             <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Huésped principal</p>
@@ -141,11 +180,6 @@ function Boleta({ g, onClose }: { g: GuestRecord; onClose: () => void }) {
             </section>
           )}
 
-          {g.has_pet && (
-            <div className="flex gap-2 flex-wrap">
-              <span className="bg-amber-100 text-amber-700 text-xs px-2 py-1 rounded-full font-semibold">🐾 Mascota</span>
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -284,6 +318,8 @@ export default function GuestDatabasePage() {
                         {g.wants_invoice && <span title="Factura">🧾</span>}
                         {g.has_pet       && <span title="Mascota">🐾</span>}
                         {g.is_empresa    && <span title="Empresa">🏢</span>}
+                        {g.late_checkout && <span title="Late Checkout">🌙</span>}
+                        {g.is_blacklist  && <span title="Lista negra">🚫</span>}
                       </div>
                       {g.guest_country && <div className="text-xs text-gray-400">{g.guest_country}</div>}
                     </td>
