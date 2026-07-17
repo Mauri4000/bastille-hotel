@@ -69,6 +69,14 @@ const emptyAdditionalGuest = (): AdditionalGuest => ({
   origin: '', next_dest: '', transport: '',
 });
 
+// ────── child guest type ──────
+interface ChildGuest {
+  name:      string;
+  document:  string;
+  birthdate: string;
+}
+const emptyChildGuest = (): ChildGuest => ({ name: '', document: '', birthdate: '' });
+
 // ────── empty form ──────
 const emptyForm = {
   guest_name:        '',
@@ -131,6 +139,8 @@ export default function CalendarPage() {
   const [saving,       setSaving]       = useState(false);
   const [formError,    setFormError]    = useState('');
   const [additionalGuests, setAdditionalGuests] = useState<AdditionalGuest[]>([]);
+  const [childGuests,      setChildGuests]      = useState<ChildGuest[]>([]);
+  const [numBabies,        setNumBabies]        = useState(0);
   const [empresas,         setEmpresas]         = useState<string[]>([]);
   const [menuOpenId,       setMenuOpenId]       = useState<string | null>(null);
   const [guestAutoFilled,  setGuestAutoFilled]  = useState(false);
@@ -280,6 +290,7 @@ export default function CalendarPage() {
   const [pagosLoading, setPagosLoading] = useState(false);
   type PagoForm = { resId: string; amount: string; caja: string; split: boolean; amount_qr: string; amount_cash: string };
   const [pagoForm, setPagoForm] = useState<PagoForm | null>(null);
+  const [isPaying, setIsPaying] = useState(false);
 
   async function openPagosPanel() {
     setPagosOpen(true);
@@ -323,11 +334,12 @@ export default function CalendarPage() {
   }
 
   async function confirmarPago() {
-    if (!pagoForm) return;
+    if (!pagoForm || isPaying) return;
     const row = pagoRows.find(r => r.res.id === pagoForm.resId);
     if (!row) return;
+    setIsPaying(true);
 
-    const today    = new Date().toISOString().split('T')[0];
+    const today    = new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
     const ciDate   = new Date(row.res.check_in  + 'T00:00:00');
     const coDate   = new Date(row.res.check_out + 'T00:00:00');
     const nights   = Math.max(1, Math.round((coDate.getTime() - ciDate.getTime()) / 86400000));
@@ -395,6 +407,7 @@ export default function CalendarPage() {
     }
 
     setPagoForm(null);
+    setIsPaying(false);
     openPagosPanel();
   }
 
@@ -569,6 +582,8 @@ export default function CalendarPage() {
       arrival_type: arrivalType ?? 'reserva',
     });
     setAdditionalGuests([]);
+    setChildGuests([]);
+    setNumBabies(0);
     setEditingId(null);
     setFormError('');
     setQuickMenu(null);
@@ -629,7 +644,10 @@ export default function CalendarPage() {
       guest_next_dest:      r.guest_next_dest      ?? '',
       guest_transport:      r.guest_transport      ?? '',
     });
-    setAdditionalGuests((r.additional_guests ?? []) as AdditionalGuest[]);
+    const allGuestData = (r.additional_guests ?? []) as any[];
+    setAdditionalGuests(allGuestData.filter((g: any) => !g.role || g.role === 'adult') as AdditionalGuest[]);
+    setChildGuests(allGuestData.filter((g: any) => g.role === 'child').map((g: any) => ({ name: g.name ?? '', document: g.document ?? '', birthdate: g.birthdate ?? '' })));
+    setNumBabies(allGuestData.find((g: any) => g.role === 'babies')?.count ?? 0);
     setEditingId(res.id);
     setFormError('');
     setModalOpen(true);
@@ -712,7 +730,15 @@ export default function CalendarPage() {
       guest_origin:         !isSalon ? (form.guest_origin || null)         : null,
       guest_next_dest:      !isSalon ? (form.guest_next_dest || null)      : null,
       guest_transport:      !isSalon ? (form.guest_transport || null)      : null,
-      additional_guests:    !isSalon ? additionalGuests : [],
+      additional_guests:    !isSalon ? [
+        ...additionalGuests,
+        ...childGuests.filter(c => c.name.trim()).map(c => ({
+          ...emptyAdditionalGuest(),
+          name: c.name, document: c.document, birthdate: c.birthdate,
+          role: 'child',
+        })),
+        ...(numBabies > 0 ? [{ role: 'babies', count: numBabies }] : []),
+      ] : [],
       created_by:      profile?.id ?? null,
       updated_at:      new Date().toISOString(),
     };
@@ -1924,7 +1950,7 @@ export default function CalendarPage() {
 
                         {/* Huéspedes adicionales */}
                         {additionalGuests.map((ag, idx) => (
-                          <div key={idx} className="border border-amber-100 rounded-lg p-3 bg-white space-y-2">
+                          <div key={`adult-${idx}`} className="border border-amber-100 rounded-lg p-3 bg-white space-y-2">
                             <p className="text-[11px] font-semibold text-amber-700 uppercase tracking-wide">Huésped {idx + 2}</p>
                             <input type="text" placeholder="Nombre y apellidos" value={ag.name}
                               onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, name: e.target.value } : g))}
@@ -1990,6 +2016,73 @@ export default function CalendarPage() {
                             </div>
                           </div>
                         ))}
+
+                        {/* Niños */}
+                        <div className="border border-blue-100 rounded-lg p-3 bg-blue-50/30 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide">👧 Niños</p>
+                            <div className="flex items-center gap-1.5">
+                              <button type="button"
+                                onClick={() => setChildGuests(prev => prev.length > 0 ? prev.slice(0, -1) : prev)}
+                                disabled={childGuests.length === 0}
+                                className="w-6 h-6 rounded bg-white border border-blue-200 hover:bg-blue-50 flex items-center justify-center disabled:opacity-30">
+                                <Minus size={11} />
+                              </button>
+                              <span className="text-sm font-bold text-blue-700 w-5 text-center">{childGuests.length}</span>
+                              <button type="button"
+                                onClick={() => setChildGuests(prev => [...prev, emptyChildGuest()])}
+                                className="w-6 h-6 rounded bg-white border border-blue-200 hover:bg-blue-50 flex items-center justify-center">
+                                <Plus size={11} />
+                              </button>
+                            </div>
+                          </div>
+                          {childGuests.map((child, idx) => (
+                            <div key={`child-${idx}`} className="border border-blue-100 rounded-lg p-2 bg-white space-y-2">
+                              <p className="text-[10px] font-semibold text-blue-600 uppercase">Niño {idx + 1}</p>
+                              <input type="text" placeholder="Nombre completo" value={child.name}
+                                onChange={e => setChildGuests(prev => prev.map((c, i) => i === idx ? { ...c, name: e.target.value } : c))}
+                                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                              <div className="grid grid-cols-2 gap-2">
+                                <input type="text" placeholder="CI / Documento (opcional)" value={child.document}
+                                  onChange={e => setChildGuests(prev => prev.map((c, i) => i === idx ? { ...c, document: e.target.value } : c))}
+                                  className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                                <DatePicker birthdateMode value={child.birthdate}
+                                  onChange={v => setChildGuests(prev => prev.map((c, i) => i === idx ? { ...c, birthdate: v } : c))}
+                                  placeholder="Fecha Nac." />
+                              </div>
+                            </div>
+                          ))}
+                          {childGuests.length === 0 && (
+                            <p className="text-xs text-blue-400 text-center py-1">Sin niños registrados</p>
+                          )}
+                        </div>
+
+                        {/* Bebés */}
+                        <div className="border border-pink-100 rounded-lg p-3 bg-pink-50/30">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[11px] font-semibold text-pink-700 uppercase tracking-wide">🍼 Bebés</p>
+                            <div className="flex items-center gap-1.5">
+                              <button type="button"
+                                onClick={() => setNumBabies(n => Math.max(0, n - 1))}
+                                disabled={numBabies === 0}
+                                className="w-6 h-6 rounded bg-white border border-pink-200 hover:bg-pink-50 flex items-center justify-center disabled:opacity-30">
+                                <Minus size={11} />
+                              </button>
+                              <span className="text-sm font-bold text-pink-700 w-5 text-center">{numBabies}</span>
+                              <button type="button"
+                                onClick={() => setNumBabies(n => n + 1)}
+                                className="w-6 h-6 rounded bg-white border border-pink-200 hover:bg-pink-50 flex items-center justify-center">
+                                <Plus size={11} />
+                              </button>
+                            </div>
+                          </div>
+                          {numBabies > 0 && (
+                            <p className="text-xs text-pink-600 mt-1">
+                              {numBabies === 1 ? '1 bebé registrado' : `${numBabies} bebés registrados`} — sin documento requerido
+                            </p>
+                          )}
+                        </div>
+
                       </div>
                     </>
                   )}
@@ -2846,7 +2939,10 @@ export default function CalendarPage() {
                 </div>
               ) : pagoRows.length === 0 ? (
                 <div className="text-center py-10 text-gray-400 text-sm">Sin pagos pendientes ✓</div>
-              ) : pagoRows.map(row => (
+              ) : pagoRows.map(row => {
+                const liveItems = pendingVitrina[row.res.id] ?? [];
+                const liveTotal = liveItems.reduce((s, i) => s + i.total, 0);
+                return (
                 <div key={row.res.id} className={`rounded-xl border px-4 py-3 ${row.pending > 0 ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50'}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
@@ -2868,11 +2964,11 @@ export default function CalendarPage() {
                     </div>
                   </div>
 
-                  {/* Vitrina pending items — editable */}
-                  {row.vitrinaItems.length > 0 && (
+                  {/* Vitrina pending items — editable, reads live from pendingVitrina */}
+                  {liveItems.length > 0 && (
                     <div className="mt-2 pt-2 border-t border-amber-200">
                       <p className="text-xs font-semibold text-amber-700 mb-1">🛒 Vitrina pendiente:</p>
-                      {row.vitrinaItems.map(item => (
+                      {liveItems.map(item => (
                         <div key={item.productId} className="flex items-center gap-1 text-xs text-gray-600 py-0.5">
                           <span className="flex-1 truncate">{item.productName}</span>
                           <button onClick={() => setPendingVitrina(prev => {
@@ -2903,13 +2999,13 @@ export default function CalendarPage() {
                       ))}
                       <div className="flex justify-between text-xs font-bold text-amber-700 mt-1 pt-1 border-t border-amber-100">
                         <span>Total vitrina</span>
-                        <span>Bs. {row.vitrinaTotal.toFixed(2)}</span>
+                        <span>Bs. {liveTotal.toFixed(2)}</span>
                       </div>
                     </div>
                   )}
 
                   {/* Mini pago form */}
-                  {(row.pending > 0 || row.vitrinaTotal > 0) && (
+                  {(row.pending > 0 || liveTotal > 0) && (
                     pagoForm?.resId === row.res.id ? (
                       <div className="mt-3 pt-3 border-t border-amber-200 space-y-2">
                         {/* Toggle split */}
@@ -2972,9 +3068,9 @@ export default function CalendarPage() {
                           </div>
                         )}
 
-                        {row.vitrinaTotal > 0 && (
+                        {liveTotal > 0 && (
                           <p className="text-xs text-amber-700 bg-amber-50 rounded px-2 py-1">
-                            🛒 Se agregarán Bs. {row.vitrinaTotal.toFixed(2)} de vitrina a CAJA MAYOR
+                            🛒 Se agregarán Bs. {liveTotal.toFixed(2)} de vitrina a CAJA MAYOR
                           </p>
                         )}
 
@@ -2983,22 +3079,23 @@ export default function CalendarPage() {
                             className="flex-1 px-3 py-1.5 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
                             Cancelar
                           </button>
-                          <button onClick={confirmarPago}
-                            className="flex-1 px-3 py-1.5 text-xs font-semibold bg-green-600 hover:bg-green-500 text-white rounded-lg">
-                            ✓ Registrar
+                          <button onClick={confirmarPago} disabled={isPaying}
+                            className="flex-1 px-3 py-1.5 text-xs font-semibold bg-green-600 hover:bg-green-500 text-white rounded-lg disabled:opacity-50">
+                            {isPaying ? '...' : '✓ Registrar'}
                           </button>
                         </div>
                       </div>
                     ) : (
                       <button
-                        onClick={() => setPagoForm({ resId: row.res.id, amount: (row.pending + row.vitrinaTotal).toFixed(2), caja: 'CAJA MAYOR', split: false, amount_qr: '', amount_cash: '' })}
+                        onClick={() => setPagoForm({ resId: row.res.id, amount: (row.pending + liveTotal).toFixed(2), caja: 'CAJA MAYOR', split: false, amount_qr: '', amount_cash: '' })}
                         className="mt-2 w-full text-xs font-semibold text-green-700 border border-green-300 bg-green-100 hover:bg-green-200 rounded-lg px-3 py-1.5 transition-colors">
-                        + Registrar pago {row.vitrinaTotal > 0 ? `· Total: Bs. ${(row.pending + row.vitrinaTotal).toFixed(2)}` : ''}
+                        + Registrar pago {liveTotal > 0 ? `· Total: Bs. ${(row.pending + liveTotal).toFixed(2)}` : ''}
                       </button>
                     )
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -3079,7 +3176,7 @@ export default function CalendarPage() {
                   }).eq('id', r.id);
                   if (extraPrice > 0 && lateCheckoutModal.caja) {
                     await supabase.from('transactions').insert({
-                      date:        new Date().toISOString().split('T')[0],
+                      date:        new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' }),
                       type:        'ingreso',
                       category:    'H02-LATE CHECKOUT',
                       room_id:     r.room_id,

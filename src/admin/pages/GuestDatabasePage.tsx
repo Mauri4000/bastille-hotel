@@ -30,6 +30,7 @@ interface GuestRecord {
   departure_time: string | null;
   late_checkout: boolean;
   is_blacklist: boolean;
+  additional_guests?: any[];
 }
 
 const GENDER_LABEL: Record<string, string>    = { M: 'Masculino', F: 'Femenino' };
@@ -159,6 +160,32 @@ function Boleta({ g, onClose }: { g: GuestRecord; onClose: () => void }) {
               {g.guest_transport  && <Row label="Transporte"     value={TRANSPORT_LABEL[g.guest_transport] ?? g.guest_transport} />}
             </div>
           </section>
+
+          {/* Children */}
+          {(() => {
+            const children = (g.additional_guests ?? []).filter((x: any) => x.role === 'child');
+            const babyEntry = (g.additional_guests ?? []).find((x: any) => x.role === 'babies');
+            if (children.length === 0 && !babyEntry) return null;
+            return (
+              <section>
+                <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">👧 Niños / Bebés</p>
+                <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 space-y-2">
+                  {children.map((c: any, i: number) => (
+                    <div key={i} className="border-b border-blue-100 pb-1 last:border-0 last:pb-0">
+                      <p className="text-xs font-semibold text-blue-800">{c.name || `Niño ${i + 1}`}</p>
+                      {c.document  && <p className="text-xs text-gray-500">CI: {c.document}</p>}
+                      {c.birthdate && <p className="text-xs text-gray-500">Nac: {c.birthdate}</p>}
+                    </div>
+                  ))}
+                  {babyEntry && (
+                    <p className="text-xs text-pink-700 font-semibold">
+                      🍼 {babyEntry.count === 1 ? '1 bebé' : `${babyEntry.count} bebés`}
+                    </p>
+                  )}
+                </div>
+              </section>
+            );
+          })()}
 
           {g.is_empresa && g.empresa_name && (
             <section>

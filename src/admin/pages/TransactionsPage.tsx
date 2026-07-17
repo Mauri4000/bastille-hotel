@@ -149,8 +149,8 @@ export default function TransactionsPage() {
     setEditingTxId(null);
     setForm({
       ...emptyForm,
-      date: now.toISOString().split('T')[0],
-      time: now.toTimeString().slice(0,5),
+      date: now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' }),
+      time: now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false }),
       category: '',
     });
     setFormError('');
