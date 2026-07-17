@@ -533,13 +533,14 @@ export default function CalendarPage() {
     setAdditionalGuests(prev =>
       prev.map(g => ({
         ...g,
+        phone:     form.guest_phone    || g.phone     || '',
         purpose:   g.purpose   || form.guest_purpose   || '',
         origin:    form.guest_origin    || '',
         next_dest: form.guest_next_dest || '',
         transport: (g.transport || form.guest_transport || '') as '' | 'T' | 'A',
       }))
     );
-  }, [form.guest_purpose, form.guest_origin, form.guest_next_dest, form.guest_transport]); // eslint-disable-line
+  }, [form.guest_phone, form.guest_purpose, form.guest_origin, form.guest_next_dest, form.guest_transport]); // eslint-disable-line
 
   // ── build cell map: cellMap[roomId][day] = Reservation ──
   const cellMap: Record<string, Record<number, Reservation>> = {};
