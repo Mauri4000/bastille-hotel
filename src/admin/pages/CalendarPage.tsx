@@ -159,6 +159,13 @@ export default function CalendarPage() {
   const [checkoutModal, setCheckoutModal] = useState({
     open: false, res: null as Reservation | null, departure_time: '',
     is_invoice: false, siaat_number: '', invoice_number: '', is_blacklist: false,
+    // payment fields
+    checkoutPaid:    0,
+    checkoutPayCaja: 'CAJA MAYOR' as string,
+    checkoutSplit:   false,
+    checkoutAmtQr:   '',
+    checkoutAmtCash: '',
+    checkoutAmt:     '',
   });
 
   // Late checkout popup (from card menu)
@@ -894,6 +901,23 @@ export default function CalendarPage() {
       if (data?.[0]?.siaat_number) { siaat = data[0].siaat_number; wantInv = true; }
     }
 
+    // Fetch how much hospedaje has been paid for this reservation
+    const { data: paidTxs } = await supabase
+      .from('transactions')
+      .select('amount')
+      .eq('reservation_id', res.id)
+      .eq('type', 'ingreso')
+      .eq('category', 'H01-HOSPEDAJE');
+    const alreadyPaid = (paidTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+
+    const nights = Math.max(1, Math.round(
+      (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
+    ));
+    const hospTotal = (res.price_per_night ?? 0) * nights;
+    const hospPending = Math.max(0, hospTotal - alreadyPaid);
+    const vitrinaTotal = (pendingVitrina[res.id] ?? []).reduce((s, i) => s + i.total, 0);
+    const defaultAmt = (hospPending + vitrinaTotal).toFixed(2);
+
     setCheckoutModal({
       open: true, res,
       departure_time: (res as any).departure_time ?? '',
@@ -901,12 +925,55 @@ export default function CalendarPage() {
       siaat_number:   siaat,
       invoice_number: invoice,
       is_blacklist: (res as any).is_blacklist ?? false,
+      checkoutPaid:    alreadyPaid,
+      checkoutPayCaja: 'CAJA MAYOR',
+      checkoutSplit:   false,
+      checkoutAmtQr:   '',
+      checkoutAmtCash: '',
+      checkoutAmt:     defaultAmt !== '0.00' ? defaultAmt : '',
     });
   }
 
   async function handleCheckout() {
     if (!checkoutModal.res) return;
     const res = checkoutModal.res;
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+    const nights = Math.max(1, Math.round(
+      (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
+    ));
+    const nightStr = `${nights} noche${nights === 1 ? '' : 's'}`;
+    const hospDesc = `Hospedaje — ${res.guest_name} — ${nightStr}`;
+
+    // Process hospedaje payment if amount entered
+    if (checkoutModal.checkoutSplit) {
+      const amtQr   = parseFloat(checkoutModal.checkoutAmtQr)   || 0;
+      const amtCash = parseFloat(checkoutModal.checkoutAmtCash) || 0;
+      if (amtQr > 0) {
+        await supabase.from('transactions').insert({ date: today, type: 'ingreso', category: 'H01-HOSPEDAJE', room_id: res.room_id, reservation_id: res.id, amount: amtQr, description: hospDesc, caja: 'CUENTA BNB', responsible_id: profile?.id ?? null });
+      }
+      if (amtCash > 0) {
+        await supabase.from('transactions').insert({ date: today, type: 'ingreso', category: 'H01-HOSPEDAJE', room_id: res.room_id, reservation_id: res.id, amount: amtCash, description: hospDesc, caja: 'CAJA MAYOR', responsible_id: profile?.id ?? null });
+      }
+      if (amtQr + amtCash > 0) logActivity(profile?.id, profile?.name, 'Pago registrado (checkout)', 'transaction', res.id, `${res.room_id} — ${res.guest_name} · QR: Bs. ${amtQr.toFixed(2)}, Efectivo: Bs. ${amtCash.toFixed(2)}`);
+    } else {
+      const amt = parseFloat(checkoutModal.checkoutAmt) || 0;
+      if (amt > 0 && checkoutModal.checkoutPayCaja) {
+        await supabase.from('transactions').insert({ date: today, type: 'ingreso', category: 'H01-HOSPEDAJE', room_id: res.room_id, reservation_id: res.id, amount: amt, description: hospDesc, caja: checkoutModal.checkoutPayCaja, responsible_id: profile?.id ?? null });
+        logActivity(profile?.id, profile?.name, 'Pago registrado (checkout)', 'transaction', res.id, `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutPayCaja})`);
+      }
+    }
+
+    // Process pending vitrina transactions
+    const vitrinaItems = pendingVitrina[res.id] ?? [];
+    for (const item of vitrinaItems) {
+      await supabase.from('transactions').insert({ date: today, type: 'ingreso', category: 'H03-VENTA DE VITRINAS', room_id: res.room_id, reservation_id: res.id, amount: item.total, description: `${item.productName}${item.qty > 1 ? ` x${item.qty}` : ''} — ${res.guest_name}`, caja: item.caja || 'CAJA MAYOR', responsible_id: profile?.id ?? null });
+      const { data: prod } = await supabase.from('vitrina_products').select('quantity').eq('id', item.productId).single();
+      if (prod) await supabase.from('vitrina_products').update({ quantity: Math.max(0, prod.quantity - item.qty), updated_at: new Date().toISOString() }).eq('id', item.productId);
+    }
+    if (vitrinaItems.length > 0) {
+      setPendingVitrina(prev => { const n = { ...prev }; delete n[res.id]; return n; });
+      logActivity(profile?.id, profile?.name, 'Vitrina registrada (checkout)', 'transaction', res.id, `${vitrinaItems.map(i => `${i.productName}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ')} — ${res.room_id}`);
+    }
 
     await supabase.from('reservations').update({
       departure_time: checkoutModal.departure_time || null,
@@ -1073,10 +1140,6 @@ export default function CalendarPage() {
 
           {/* Select + 3-dot actions */}
           <div className="flex items-center gap-2">
-            <button onClick={openPagosPanel}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg border border-green-300 text-green-700 bg-green-50 hover:bg-green-100 transition-colors">
-              💰 Pagos
-            </button>
             <button onClick={toggleSelectMode}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg border transition-colors ${
                 selectMode
@@ -2455,48 +2518,120 @@ export default function CalendarPage() {
                 )}
               </div>
 
-              {/* Resumen financiero */}
+              {/* Resumen financiero + pagos */}
               {(() => {
                 const r = checkoutModal.res!;
                 const nights = Math.max(1, Math.round(
                   (new Date(r.check_out + 'T00:00:00').getTime() - new Date(r.check_in + 'T00:00:00').getTime()) / 86400000
                 ));
-                const pricePer = r.price_per_night ?? 0;
-                const total    = nights * pricePer;
-                const adelanto = (r as any).adelanto ?? 0;
-                const saldo    = total - adelanto;
+                const pricePer    = r.price_per_night ?? 0;
+                const hospTotal   = nights * pricePer;
+                const hospPaid    = checkoutModal.checkoutPaid;
+                const hospPending = Math.max(0, hospTotal - hospPaid);
+                const vitItems    = pendingVitrina[r.id] ?? [];
+                const vitTotal    = vitItems.reduce((s, i) => s + i.total, 0);
+                const grandPending = hospPending + vitTotal;
                 return (
-                  <div className="bg-gray-50 rounded-xl overflow-hidden border border-gray-200">
-                    <div className="px-4 py-2 bg-gray-100 text-xs font-bold uppercase tracking-wider text-gray-500">Resumen de estadía</div>
-                    <div className="px-4 py-3 space-y-2 text-sm">
-                      <div className="flex justify-between text-gray-600">
-                        <span>📅 {r.check_in} → {r.check_out}</span>
-                        <span className="font-semibold">{nights} noche{nights !== 1 ? 's' : ''}</span>
-                      </div>
-                      {pricePer > 0 && (
-                        <>
+                  <>
+                    <div className="bg-gray-50 rounded-xl overflow-hidden border border-gray-200">
+                      <div className="px-4 py-2 bg-gray-100 text-xs font-bold uppercase tracking-wider text-gray-500">Resumen de estadía</div>
+                      <div className="px-4 py-3 space-y-1.5 text-sm">
+                        <div className="flex justify-between text-gray-600">
+                          <span>📅 {r.check_in} → {r.check_out}</span>
+                          <span className="font-semibold">{nights} noche{nights !== 1 ? 's' : ''}</span>
+                        </div>
+                        {pricePer > 0 && <>
                           <div className="flex justify-between text-gray-600">
-                            <span>Precio / noche</span>
-                            <span>Bs. {pricePer.toFixed(2)}</span>
+                            <span>Precio / noche</span><span>Bs. {pricePer.toFixed(2)}</span>
                           </div>
-                          <div className="flex justify-between font-semibold text-gray-800 border-t border-gray-200 pt-2">
-                            <span>Total</span>
-                            <span>Bs. {total.toFixed(2)}</span>
+                          <div className="flex justify-between text-gray-700 font-semibold border-t border-gray-200 pt-1">
+                            <span>Total hospedaje</span><span>Bs. {hospTotal.toFixed(2)}</span>
                           </div>
-                          {adelanto > 0 && (
-                            <div className="flex justify-between text-green-700">
-                              <span>Adelanto recibido</span>
-                              <span>− Bs. {adelanto.toFixed(2)}</span>
+                          {hospPaid > 0 && (
+                            <div className="flex justify-between text-green-700 text-xs">
+                              <span>✓ Ya pagado</span><span>Bs. {hospPaid.toFixed(2)}</span>
                             </div>
                           )}
-                          <div className={`flex justify-between font-bold text-base border-t border-gray-200 pt-2 ${saldo > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                            <span>Saldo a cobrar</span>
-                            <span>Bs. {Math.max(0, saldo).toFixed(2)}</span>
+                          <div className={`flex justify-between font-bold ${hospPending > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                            <span>Saldo hospedaje</span>
+                            <span>Bs. {hospPending.toFixed(2)}</span>
                           </div>
-                        </>
-                      )}
+                        </>}
+                      </div>
                     </div>
-                  </div>
+
+                    {/* Vitrina pendiente */}
+                    {vitItems.length > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
+                        <div className="px-4 py-2 bg-amber-100 text-xs font-bold uppercase tracking-wider text-amber-700">🛒 Vitrina — se registrará al checkout</div>
+                        <div className="px-4 py-3 space-y-1 text-sm">
+                          {vitItems.map(item => (
+                            <div key={item.productId} className="flex justify-between text-gray-700">
+                              <span>{item.productName}{item.qty > 1 ? ` x${item.qty}` : ''} <span className="text-xs text-gray-400">({item.caja === 'CUENTA BNB' ? 'QR' : 'Efectivo'})</span></span>
+                              <span>Bs. {item.total.toFixed(2)}</span>
+                            </div>
+                          ))}
+                          <div className="flex justify-between font-bold text-amber-700 border-t border-amber-200 pt-1">
+                            <span>Total vitrina</span><span>Bs. {vitTotal.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Payment form */}
+                    {grandPending > 0 && (
+                      <div className="bg-green-50 border border-green-200 rounded-xl p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-bold text-gray-800">
+                            💳 Cobrar ahora <span className="text-green-700">Bs. {grandPending.toFixed(2)}</span>
+                          </p>
+                          <button
+                            onClick={() => setCheckoutModal(m => ({ ...m, checkoutSplit: !m.checkoutSplit, checkoutAmtQr: '', checkoutAmtCash: '' }))}
+                            className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${checkoutModal.checkoutSplit ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'}`}
+                          >
+                            {checkoutModal.checkoutSplit ? '✓ QR + Efectivo' : 'Dividir'}
+                          </button>
+                        </div>
+
+                        {checkoutModal.checkoutSplit ? (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 w-28 flex-shrink-0">QR (CUENTA BNB)</span>
+                              <input type="number" min={0} step={0.5} value={checkoutModal.checkoutAmtQr}
+                                onChange={e => setCheckoutModal(m => ({ ...m, checkoutAmtQr: e.target.value }))}
+                                placeholder="0.00"
+                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 w-28 flex-shrink-0">Efectivo (CAJA)</span>
+                              <input type="number" min={0} step={0.5} value={checkoutModal.checkoutAmtCash}
+                                onChange={e => setCheckoutModal(m => ({ ...m, checkoutAmtCash: e.target.value }))}
+                                placeholder="0.00"
+                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2">
+                            <input type="number" min={0} step={0.5} value={checkoutModal.checkoutAmt}
+                              onChange={e => setCheckoutModal(m => ({ ...m, checkoutAmt: e.target.value }))}
+                              placeholder="Monto Bs."
+                              className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
+                            <CustomSelect
+                              value={checkoutModal.checkoutPayCaja}
+                              onChange={v => setCheckoutModal(m => ({ ...m, checkoutPayCaja: v }))}
+                              options={[{ value: 'CAJA MAYOR', label: 'CAJA MAYOR' }, { value: 'CUENTA BNB', label: 'CUENTA BNB' }]}
+                              placeholder="Caja" />
+                          </div>
+                        )}
+                        <p className="text-xs text-gray-400">Dejar en 0 para solo registrar la salida sin cobrar</p>
+                      </div>
+                    )}
+                    {grandPending === 0 && hospTotal > 0 && (
+                      <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-center text-sm font-semibold text-green-700">
+                        ✓ Todo pagado — Bs. {hospPaid.toFixed(2)}
+                      </div>
+                    )}
+                  </>
                 );
               })()}
             </div>
@@ -2767,6 +2902,24 @@ export default function CalendarPage() {
               return { ...prev, [res.id]: merged };
             });
             logActivity(profile?.id, profile?.name, 'Vitrina al carrito', 'transaction', res.id,
+              `${items.map(i => `${i.product.name}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ')} — ${res.room_id} ${res.guest_name}`);
+            setVitrinaSaleRes(null);
+          }}
+          onPayNow={async (items: VitrinaCartItem[]) => {
+            const res = vitrinaSaleRes;
+            const now = new Date();
+            const today = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+            const timeStr = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+            for (const item of items) {
+              await supabase.from('transactions').insert({
+                type: 'ingreso', category: 'H03-VITRINA',
+                description: `${item.product.name}${item.qty > 1 ? ` x${item.qty}` : ''} — ${res.room_id} ${res.guest_name}`,
+                amount: item.total, date: today, time: timeStr,
+                reservation_id: res.id, room_id: res.room_id, caja: item.caja,
+              });
+              await supabase.from('vitrina_products').update({ quantity: item.product.quantity - item.qty }).eq('id', item.product.id);
+            }
+            logActivity(profile?.id, profile?.name, 'Vitrina pagada', 'transaction', res.id,
               `${items.map(i => `${i.product.name}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ')} — ${res.room_id} ${res.guest_name}`);
             setVitrinaSaleRes(null);
           }}

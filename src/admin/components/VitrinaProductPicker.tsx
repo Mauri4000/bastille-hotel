@@ -20,9 +20,10 @@ export interface CartItem {
 interface Props {
   onConfirm: (items: CartItem[]) => void;
   onClose: () => void;
+  onPayNow?: (items: CartItem[]) => void;
 }
 
-export default function VitrinaProductPicker({ onConfirm, onClose }: Props) {
+export default function VitrinaProductPicker({ onConfirm, onClose, onPayNow }: Props) {
   const [products, setProducts] = useState<VitrinaProduct[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [search,   setSearch]   = useState('');
@@ -258,6 +259,14 @@ export default function VitrinaProductPicker({ onConfirm, onClose }: Props) {
                 >
                   ✓ Agregar al huésped
                 </button>
+                {onPayNow && (
+                  <button
+                    onClick={() => { onPayNow(cart); onClose(); }}
+                    className="w-full py-2 mt-1.5 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-xs transition-colors"
+                  >
+                    💳 Pagar ahora
+                  </button>
+                )}
               </div>
             </div>
           )}
