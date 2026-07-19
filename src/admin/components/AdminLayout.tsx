@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, CalendarDays, ArrowLeftRight,
-  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag,
+  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -14,7 +14,8 @@ const navItems = [
   { to: '/admin/vitrina',     icon: ShoppingBag,     label: 'Stock Vitrina' },
   { to: '/admin/shift',       icon: ClipboardList,   label: 'Cambio de Turno' },
   { to: '/admin/reportes',    icon: BarChart2,       label: 'Reportes' },
-  { to: '/admin/historial',   icon: History,         label: 'Historial', adminOnly: true },
+  { to: '/admin/historial',    icon: History,         label: 'Historial', adminOnly: true },
+  { to: '/admin/spanish',      icon: GraduationCap,   label: 'Spanish School' },
 ];
 
 const adminItems = [

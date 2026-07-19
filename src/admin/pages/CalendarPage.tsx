@@ -159,13 +159,19 @@ export default function CalendarPage() {
   const [checkoutModal, setCheckoutModal] = useState({
     open: false, res: null as Reservation | null, departure_time: '',
     is_invoice: false, siaat_number: '', invoice_number: '', is_blacklist: false,
-    // payment fields
-    checkoutPaid:    0,
-    checkoutPayCaja: 'CAJA MAYOR' as string,
-    checkoutSplit:   false,
-    checkoutAmtQr:   '',
-    checkoutAmtCash: '',
-    checkoutAmt:     '',
+    // hospedaje already paid (fetched on open)
+    checkoutPaid:       0,
+    // hospedaje payment form
+    checkoutHospPayAmt: '',
+    checkoutHospPayCaja:'CAJA MAYOR' as string,
+    // late checkout (fetched on open)
+    checkoutLatePaid:   0,
+    checkoutLateTotal:  0,
+    // late checkout payment form (if not yet paid)
+    checkoutLatePayAmt: '',
+    checkoutLatePayCaja:'CAJA MAYOR' as string,
+    // vitrina items paid in this session (for Anular)
+    checkoutPaidVitrina: [] as PendingVitrinaItem[],
   });
 
   // Late checkout popup (from card menu)
@@ -901,22 +907,19 @@ export default function CalendarPage() {
       if (data?.[0]?.siaat_number) { siaat = data[0].siaat_number; wantInv = true; }
     }
 
-    // Fetch how much hospedaje has been paid for this reservation
+    // Fetch hospedaje already paid for this reservation
     const { data: paidTxs } = await supabase
-      .from('transactions')
-      .select('amount')
-      .eq('reservation_id', res.id)
-      .eq('type', 'ingreso')
-      .eq('category', 'H01-HOSPEDAJE');
+      .from('transactions').select('amount')
+      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H01-HOSPEDAJE');
     const alreadyPaid = (paidTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
 
-    const nights = Math.max(1, Math.round(
-      (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
-    ));
-    const hospTotal = (res.price_per_night ?? 0) * nights;
-    const hospPending = Math.max(0, hospTotal - alreadyPaid);
-    const vitrinaTotal = (pendingVitrina[res.id] ?? []).reduce((s, i) => s + i.total, 0);
-    const defaultAmt = (hospPending + vitrinaTotal).toFixed(2);
+    // Fetch late checkout transactions for this room (by room_id + category)
+    const { data: lateTxs } = await supabase
+      .from('transactions').select('amount')
+      .eq('room_id', res.room_id).eq('type', 'ingreso').eq('category', 'H02-LATE CHECKOUT')
+      .gte('date', res.check_in);
+    const latePaid  = (lateTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+    const lateTotal = latePaid; // already paid from late checkout popup; show it
 
     setCheckoutModal({
       open: true, res,
@@ -924,13 +927,15 @@ export default function CalendarPage() {
       is_invoice: wantInv,
       siaat_number:   siaat,
       invoice_number: invoice,
-      is_blacklist: (res as any).is_blacklist ?? false,
-      checkoutPaid:    alreadyPaid,
-      checkoutPayCaja: 'CAJA MAYOR',
-      checkoutSplit:   false,
-      checkoutAmtQr:   '',
-      checkoutAmtCash: '',
-      checkoutAmt:     defaultAmt !== '0.00' ? defaultAmt : '',
+      is_blacklist:   (res as any).is_blacklist ?? false,
+      checkoutPaid:        alreadyPaid,
+      checkoutHospPayAmt:  '',
+      checkoutHospPayCaja: 'CAJA MAYOR',
+      checkoutLatePaid:    latePaid,
+      checkoutLateTotal:   lateTotal,
+      checkoutLatePayAmt:  '',
+      checkoutLatePayCaja: 'CAJA MAYOR',
+      checkoutPaidVitrina: [],
     });
   }
 
@@ -938,32 +943,8 @@ export default function CalendarPage() {
     if (!checkoutModal.res) return;
     const res = checkoutModal.res;
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
-    const nights = Math.max(1, Math.round(
-      (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
-    ));
-    const nightStr = `${nights} noche${nights === 1 ? '' : 's'}`;
-    const hospDesc = `Hospedaje — ${res.guest_name} — ${nightStr}`;
 
-    // Process hospedaje payment if amount entered
-    if (checkoutModal.checkoutSplit) {
-      const amtQr   = parseFloat(checkoutModal.checkoutAmtQr)   || 0;
-      const amtCash = parseFloat(checkoutModal.checkoutAmtCash) || 0;
-      if (amtQr > 0) {
-        await supabase.from('transactions').insert({ date: today, type: 'ingreso', category: 'H01-HOSPEDAJE', room_id: res.room_id, reservation_id: res.id, amount: amtQr, description: hospDesc, caja: 'CUENTA BNB', responsible_id: profile?.id ?? null });
-      }
-      if (amtCash > 0) {
-        await supabase.from('transactions').insert({ date: today, type: 'ingreso', category: 'H01-HOSPEDAJE', room_id: res.room_id, reservation_id: res.id, amount: amtCash, description: hospDesc, caja: 'CAJA MAYOR', responsible_id: profile?.id ?? null });
-      }
-      if (amtQr + amtCash > 0) logActivity(profile?.id, profile?.name, 'Pago registrado (checkout)', 'transaction', res.id, `${res.room_id} — ${res.guest_name} · QR: Bs. ${amtQr.toFixed(2)}, Efectivo: Bs. ${amtCash.toFixed(2)}`);
-    } else {
-      const amt = parseFloat(checkoutModal.checkoutAmt) || 0;
-      if (amt > 0 && checkoutModal.checkoutPayCaja) {
-        await supabase.from('transactions').insert({ date: today, type: 'ingreso', category: 'H01-HOSPEDAJE', room_id: res.room_id, reservation_id: res.id, amount: amt, description: hospDesc, caja: checkoutModal.checkoutPayCaja, responsible_id: profile?.id ?? null });
-        logActivity(profile?.id, profile?.name, 'Pago registrado (checkout)', 'transaction', res.id, `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutPayCaja})`);
-      }
-    }
-
-    // Process pending vitrina transactions
+    // Process any remaining pending vitrina transactions
     const vitrinaItems = pendingVitrina[res.id] ?? [];
     for (const item of vitrinaItems) {
       await supabase.from('transactions').insert({ date: today, type: 'ingreso', category: 'H03-VENTA DE VITRINAS', room_id: res.room_id, reservation_id: res.id, amount: item.total, description: `${item.productName}${item.qty > 1 ? ` x${item.qty}` : ''} — ${res.guest_name}`, caja: item.caja || 'CAJA MAYOR', responsible_id: profile?.id ?? null });
@@ -1005,6 +986,107 @@ export default function CalendarPage() {
     logActivity(profile?.id, profile?.name, 'Salida registrada', 'reservation', res.id, `${res.room_id} — ${res.guest_name}`);
     setCheckoutModal(m => ({ ...m, open: false }));
     fetchData();
+  }
+
+  // ── per-section checkout payment helpers ──
+  async function checkoutPayHosp() {
+    const amt = parseFloat(checkoutModal.checkoutHospPayAmt) || 0;
+    if (amt <= 0 || !checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const now  = new Date();
+    const today   = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+    const timeStr = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+    const nights  = Math.max(1, Math.round(
+      (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
+    ));
+    await supabase.from('transactions').insert({
+      date: today, time: timeStr, type: 'ingreso', category: 'H01-HOSPEDAJE',
+      room_id: res.room_id, reservation_id: res.id, amount: amt,
+      description: `Hospedaje ${nights} noche${nights === 1 ? '' : 's'} — ${res.guest_name}`,
+      caja: checkoutModal.checkoutHospPayCaja, responsible_id: profile?.id ?? null,
+    });
+    logActivity(profile?.id, profile?.name, 'Pago hospedaje', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutHospPayCaja})`);
+    setCheckoutModal(m => ({ ...m, checkoutPaid: m.checkoutPaid + amt, checkoutHospPayAmt: '' }));
+  }
+
+  async function checkoutPayLate() {
+    const amt = parseFloat(checkoutModal.checkoutLatePayAmt) || 0;
+    if (amt <= 0 || !checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const now  = new Date();
+    const today   = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+    const timeStr = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+    await supabase.from('transactions').insert({
+      date: today, time: timeStr, type: 'ingreso', category: 'H02-LATE CHECKOUT',
+      room_id: res.room_id, reservation_id: res.id, amount: amt,
+      description: `Late Checkout — ${res.guest_name}`,
+      caja: checkoutModal.checkoutLatePayCaja, responsible_id: profile?.id ?? null,
+    });
+    logActivity(profile?.id, profile?.name, 'Pago late checkout', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutLatePayCaja})`);
+    setCheckoutModal(m => ({ ...m, checkoutLatePaid: m.checkoutLatePaid + amt, checkoutLateTotal: m.checkoutLateTotal + amt, checkoutLatePayAmt: '' }));
+  }
+
+  async function checkoutPayVitrinaItem(item: PendingVitrinaItem) {
+    if (!checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const now  = new Date();
+    const today   = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+    const timeStr = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+    await supabase.from('transactions').insert({
+      date: today, time: timeStr, type: 'ingreso', category: 'H03-VENTA DE VITRINAS',
+      room_id: res.room_id, reservation_id: res.id, amount: item.total,
+      description: `${item.productName}${item.qty > 1 ? ` x${item.qty}` : ''} — ${res.guest_name}`,
+      caja: item.caja || 'CAJA MAYOR', responsible_id: profile?.id ?? null,
+    });
+    const { data: prod } = await supabase.from('vitrina_products').select('quantity').eq('id', item.productId).single();
+    if (prod) await supabase.from('vitrina_products').update({ quantity: Math.max(0, prod.quantity - item.qty), updated_at: new Date().toISOString() }).eq('id', item.productId);
+    setPendingVitrina(prev => ({ ...prev, [res.id]: (prev[res.id] ?? []).filter(i => i.productId !== item.productId) }));
+    setCheckoutModal(m => ({ ...m, checkoutPaidVitrina: [...m.checkoutPaidVitrina, item] }));
+    logActivity(profile?.id, profile?.name, 'Vitrina pagada', 'transaction', res.id,
+      `${item.productName}${item.qty > 1 ? ` x${item.qty}` : ''} — ${res.room_id} Bs. ${item.total.toFixed(2)}`);
+  }
+
+  async function checkoutAnularHosp() {
+    if (!checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const { data: txs } = await supabase.from('transactions').select('id, amount')
+      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H01-HOSPEDAJE')
+      .order('created_at', { ascending: false }).limit(1);
+    const tx = txs?.[0];
+    if (!tx) return;
+    await supabase.from('transactions').delete().eq('id', tx.id);
+    logActivity(profile?.id, profile?.name, 'Pago anulado (hospedaje)', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${tx.amount.toFixed(2)}`);
+    setCheckoutModal(m => ({ ...m, checkoutPaid: Math.max(0, m.checkoutPaid - tx.amount) }));
+  }
+
+  async function checkoutAnularLate() {
+    if (!checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const { data: txs } = await supabase.from('transactions').select('id, amount')
+      .eq('room_id', res.room_id).eq('type', 'ingreso').eq('category', 'H02-LATE CHECKOUT')
+      .gte('date', res.check_in).order('created_at', { ascending: false }).limit(1);
+    const tx = txs?.[0];
+    if (!tx) return;
+    await supabase.from('transactions').delete().eq('id', tx.id);
+    logActivity(profile?.id, profile?.name, 'Pago anulado (late checkout)', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${tx.amount.toFixed(2)}`);
+    setCheckoutModal(m => ({ ...m, checkoutLatePaid: 0, checkoutLateTotal: 0 }));
+  }
+
+  async function checkoutAnularVitrinaItem(resId: string, txDesc: string, productId: string, qty: number, amount: number) {
+    const { data: txs } = await supabase.from('transactions').select('id')
+      .eq('reservation_id', resId).eq('type', 'ingreso').eq('category', 'H03-VENTA DE VITRINAS')
+      .ilike('description', `${txDesc}%`).order('created_at', { ascending: false }).limit(1);
+    const tx = txs?.[0];
+    if (!tx) return;
+    await supabase.from('transactions').delete().eq('id', tx.id);
+    // restore stock
+    const { data: prod } = await supabase.from('vitrina_products').select('quantity').eq('id', productId).single();
+    if (prod) await supabase.from('vitrina_products').update({ quantity: prod.quantity + qty, updated_at: new Date().toISOString() }).eq('id', productId);
+    logActivity(profile?.id, profile?.name, 'Vitrina anulada', 'transaction', resId, `Bs. ${amount.toFixed(2)} revertido`);
   }
 
   // ── guest lookup by phone or document ──
@@ -2440,7 +2522,7 @@ export default function CalendarPage() {
 
       {checkoutModal.open && checkoutModal.res && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm flex flex-col">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-orange-50 rounded-t-2xl">
               <div>
@@ -2454,7 +2536,7 @@ export default function CalendarPage() {
               </button>
             </div>
 
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
               {/* Hora de salida */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Hora de salida</label>
@@ -2518,7 +2600,7 @@ export default function CalendarPage() {
                 )}
               </div>
 
-              {/* Resumen financiero + pagos */}
+              {/* ── Pagos por sección ── */}
               {(() => {
                 const r = checkoutModal.res!;
                 const nights = Math.max(1, Math.round(
@@ -2529,109 +2611,156 @@ export default function CalendarPage() {
                 const hospPaid    = checkoutModal.checkoutPaid;
                 const hospPending = Math.max(0, hospTotal - hospPaid);
                 const vitItems    = pendingVitrina[r.id] ?? [];
-                const vitTotal    = vitItems.reduce((s, i) => s + i.total, 0);
-                const grandPending = hospPending + vitTotal;
+                const hasLate     = !!(r as any).late_checkout;
+
                 return (
-                  <>
+                  <div className="space-y-3">
+
+                    {/* ── Hospedaje ── */}
                     <div className="bg-gray-50 rounded-xl overflow-hidden border border-gray-200">
-                      <div className="px-4 py-2 bg-gray-100 text-xs font-bold uppercase tracking-wider text-gray-500">Resumen de estadía</div>
-                      <div className="px-4 py-3 space-y-1.5 text-sm">
+                      <div className="px-4 py-2 bg-gray-100 text-xs font-bold uppercase tracking-wider text-gray-500">🏨 Hospedaje</div>
+                      <div className="px-4 py-3 space-y-1 text-sm">
                         <div className="flex justify-between text-gray-600">
                           <span>📅 {r.check_in} → {r.check_out}</span>
                           <span className="font-semibold">{nights} noche{nights !== 1 ? 's' : ''}</span>
                         </div>
                         {pricePer > 0 && <>
-                          <div className="flex justify-between text-gray-600">
+                          <div className="flex justify-between text-gray-500 text-xs">
                             <span>Precio / noche</span><span>Bs. {pricePer.toFixed(2)}</span>
                           </div>
-                          <div className="flex justify-between text-gray-700 font-semibold border-t border-gray-200 pt-1">
-                            <span>Total hospedaje</span><span>Bs. {hospTotal.toFixed(2)}</span>
+                          <div className="flex justify-between font-semibold text-gray-800 border-t border-gray-200 pt-1">
+                            <span>Total</span><span>Bs. {hospTotal.toFixed(2)}</span>
                           </div>
                           {hospPaid > 0 && (
-                            <div className="flex justify-between text-green-700 text-xs">
-                              <span>✓ Ya pagado</span><span>Bs. {hospPaid.toFixed(2)}</span>
+                            <div className="flex justify-between items-center text-green-700 text-xs">
+                              <span>✓ Ya pagado — Bs. {hospPaid.toFixed(2)}</span>
+                              <button onClick={checkoutAnularHosp}
+                                className="text-[10px] text-red-400 hover:text-red-600 underline ml-2">
+                                Anular último
+                              </button>
                             </div>
                           )}
-                          <div className={`flex justify-between font-bold ${hospPending > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                            <span>Saldo hospedaje</span>
-                            <span>Bs. {hospPending.toFixed(2)}</span>
-                          </div>
+                          {hospPending > 0 ? (
+                            <>
+                              <div className="flex justify-between font-bold text-red-600">
+                                <span>Pendiente</span><span>Bs. {hospPending.toFixed(2)}</span>
+                              </div>
+                              <div className="flex gap-2 pt-1">
+                                <input type="number" min={0} step={0.5}
+                                  value={checkoutModal.checkoutHospPayAmt}
+                                  onChange={e => setCheckoutModal(m => ({ ...m, checkoutHospPayAmt: e.target.value }))}
+                                  placeholder={`${hospPending.toFixed(2)}`}
+                                  className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
+                                <CustomSelect
+                                  value={checkoutModal.checkoutHospPayCaja}
+                                  onChange={v => setCheckoutModal(m => ({ ...m, checkoutHospPayCaja: v }))}
+                                  options={[{ value: 'CAJA MAYOR', label: 'Efectivo' }, { value: 'CUENTA BNB', label: 'QR' }]}
+                                  placeholder="Caja" />
+                                <button onClick={checkoutPayHosp}
+                                  className="px-3 py-1.5 text-xs font-bold bg-green-500 hover:bg-green-400 text-white rounded-lg whitespace-nowrap">
+                                  💳 Pagar
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-center text-xs font-semibold text-green-700 pt-1">✓ Pagado completamente</div>
+                          )}
                         </>}
                       </div>
                     </div>
 
-                    {/* Vitrina pendiente */}
+                    {/* ── Late Checkout ── */}
+                    {hasLate && (
+                      <div className="bg-purple-50 rounded-xl overflow-hidden border border-purple-200">
+                        <div className="px-4 py-2 bg-purple-100 text-xs font-bold uppercase tracking-wider text-purple-700">🌙 Late Checkout</div>
+                        <div className="px-4 py-3 space-y-1 text-sm">
+                          {checkoutModal.checkoutLateTotal > 0 ? (
+                            <div className="flex justify-between items-center text-green-700 font-semibold">
+                              <span>✓ Ya registrado — Bs. {checkoutModal.checkoutLateTotal.toFixed(2)}</span>
+                              <button onClick={checkoutAnularLate}
+                                className="text-[10px] font-normal text-red-400 hover:text-red-600 underline ml-2">
+                                Anular
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-xs text-purple-600 mb-1">Sin cargo registrado — registrar ahora:</p>
+                              <div className="flex gap-2">
+                                <input type="number" min={0} step={0.5}
+                                  value={checkoutModal.checkoutLatePayAmt}
+                                  onChange={e => setCheckoutModal(m => ({ ...m, checkoutLatePayAmt: e.target.value }))}
+                                  placeholder="Monto Bs."
+                                  className="flex-1 border border-purple-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+                                <CustomSelect
+                                  value={checkoutModal.checkoutLatePayCaja}
+                                  onChange={v => setCheckoutModal(m => ({ ...m, checkoutLatePayCaja: v }))}
+                                  options={[{ value: 'CAJA MAYOR', label: 'Efectivo' }, { value: 'CUENTA BNB', label: 'QR' }]}
+                                  placeholder="Caja" />
+                                <button onClick={checkoutPayLate}
+                                  className="px-3 py-1.5 text-xs font-bold bg-purple-500 hover:bg-purple-400 text-white rounded-lg whitespace-nowrap">
+                                  💳 Pagar
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Vitrina pendiente ── */}
                     {vitItems.length > 0 && (
                       <div className="bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
-                        <div className="px-4 py-2 bg-amber-100 text-xs font-bold uppercase tracking-wider text-amber-700">🛒 Vitrina — se registrará al checkout</div>
-                        <div className="px-4 py-3 space-y-1 text-sm">
+                        <div className="px-4 py-2 bg-amber-100 text-xs font-bold uppercase tracking-wider text-amber-700">🛒 Vitrina</div>
+                        <div className="px-4 py-3 space-y-2">
                           {vitItems.map(item => (
-                            <div key={item.productId} className="flex justify-between text-gray-700">
-                              <span>{item.productName}{item.qty > 1 ? ` x${item.qty}` : ''} <span className="text-xs text-gray-400">({item.caja === 'CUENTA BNB' ? 'QR' : 'Efectivo'})</span></span>
-                              <span>Bs. {item.total.toFixed(2)}</span>
+                            <div key={item.productId} className="flex items-center justify-between gap-2">
+                              <div className="flex-1 text-sm text-gray-700">
+                                <span>{item.productName}{item.qty > 1 ? ` x${item.qty}` : ''}</span>
+                                <span className="text-xs text-gray-400 ml-1">({item.caja === 'CUENTA BNB' ? 'QR' : 'Efectivo'})</span>
+                              </div>
+                              <span className="text-sm font-semibold text-amber-700 flex-shrink-0">Bs. {item.total.toFixed(2)}</span>
+                              <button onClick={() => checkoutPayVitrinaItem(item)}
+                                className="px-2 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-400 text-white rounded-lg flex-shrink-0">
+                                💳 Pagar
+                              </button>
                             </div>
                           ))}
-                          <div className="flex justify-between font-bold text-amber-700 border-t border-amber-200 pt-1">
-                            <span>Total vitrina</span><span>Bs. {vitTotal.toFixed(2)}</span>
+                          <div className="flex justify-between font-bold text-amber-700 border-t border-amber-200 pt-1 text-sm">
+                            <span>Total vitrina</span>
+                            <span>Bs. {vitItems.reduce((s, i) => s + i.total, 0).toFixed(2)}</span>
                           </div>
                         </div>
                       </div>
                     )}
 
-                    {/* Payment form */}
-                    {grandPending > 0 && (
-                      <div className="bg-green-50 border border-green-200 rounded-xl p-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-bold text-gray-800">
-                            💳 Cobrar ahora <span className="text-green-700">Bs. {grandPending.toFixed(2)}</span>
-                          </p>
-                          <button
-                            onClick={() => setCheckoutModal(m => ({ ...m, checkoutSplit: !m.checkoutSplit, checkoutAmtQr: '', checkoutAmtCash: '' }))}
-                            className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${checkoutModal.checkoutSplit ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'}`}
-                          >
-                            {checkoutModal.checkoutSplit ? '✓ QR + Efectivo' : 'Dividir'}
-                          </button>
+                    {/* ── Vitrina ya pagada en esta sesión ── */}
+                    {checkoutModal.checkoutPaidVitrina.length > 0 && (
+                      <div className="bg-green-50 border border-green-200 rounded-xl overflow-hidden">
+                        <div className="px-4 py-2 bg-green-100 text-xs font-bold uppercase tracking-wider text-green-700">✓ Vitrina pagada</div>
+                        <div className="px-4 py-3 space-y-2">
+                          {checkoutModal.checkoutPaidVitrina.map((item, idx) => (
+                            <div key={`${item.productId}-${idx}`} className="flex items-center justify-between gap-2">
+                              <div className="flex-1 text-sm text-gray-700">
+                                <span>{item.productName}{item.qty > 1 ? ` x${item.qty}` : ''}</span>
+                                <span className="text-xs text-gray-400 ml-1">({item.caja === 'CUENTA BNB' ? 'QR' : 'Efectivo'})</span>
+                              </div>
+                              <span className="text-sm font-semibold text-green-700 flex-shrink-0">Bs. {item.total.toFixed(2)}</span>
+                              <button
+                                onClick={async () => {
+                                  await checkoutAnularVitrinaItem(r.id, item.productName, item.productId, item.qty, item.total);
+                                  setPendingVitrina(prev => ({ ...prev, [r.id]: [...(prev[r.id] ?? []), item] }));
+                                  setCheckoutModal(m => ({ ...m, checkoutPaidVitrina: m.checkoutPaidVitrina.filter((_, i) => i !== idx) }));
+                                }}
+                                className="text-[10px] text-red-400 hover:text-red-600 underline flex-shrink-0">
+                                Anular
+                              </button>
+                            </div>
+                          ))}
                         </div>
+                      </div>
+                    )}
 
-                        {checkoutModal.checkoutSplit ? (
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-500 w-28 flex-shrink-0">QR (CUENTA BNB)</span>
-                              <input type="number" min={0} step={0.5} value={checkoutModal.checkoutAmtQr}
-                                onChange={e => setCheckoutModal(m => ({ ...m, checkoutAmtQr: e.target.value }))}
-                                placeholder="0.00"
-                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-500 w-28 flex-shrink-0">Efectivo (CAJA)</span>
-                              <input type="number" min={0} step={0.5} value={checkoutModal.checkoutAmtCash}
-                                onChange={e => setCheckoutModal(m => ({ ...m, checkoutAmtCash: e.target.value }))}
-                                placeholder="0.00"
-                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex gap-2">
-                            <input type="number" min={0} step={0.5} value={checkoutModal.checkoutAmt}
-                              onChange={e => setCheckoutModal(m => ({ ...m, checkoutAmt: e.target.value }))}
-                              placeholder="Monto Bs."
-                              className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
-                            <CustomSelect
-                              value={checkoutModal.checkoutPayCaja}
-                              onChange={v => setCheckoutModal(m => ({ ...m, checkoutPayCaja: v }))}
-                              options={[{ value: 'CAJA MAYOR', label: 'CAJA MAYOR' }, { value: 'CUENTA BNB', label: 'CUENTA BNB' }]}
-                              placeholder="Caja" />
-                          </div>
-                        )}
-                        <p className="text-xs text-gray-400">Dejar en 0 para solo registrar la salida sin cobrar</p>
-                      </div>
-                    )}
-                    {grandPending === 0 && hospTotal > 0 && (
-                      <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-center text-sm font-semibold text-green-700">
-                        ✓ Todo pagado — Bs. {hospPaid.toFixed(2)}
-                      </div>
-                    )}
-                  </>
+                  </div>
                 );
               })()}
             </div>
