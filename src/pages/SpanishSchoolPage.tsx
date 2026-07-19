@@ -2,7 +2,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import {
-  ArrowLeft, Check, BookOpen, MessageCircle, Palette,
+  ArrowLeft, Check, BookOpen,
   ChevronLeft, ChevronRight, ShoppingBasket, MapPin,
   Music, Dumbbell, UtensilsCrossed, Sun, Moon,
 } from "lucide-react";
