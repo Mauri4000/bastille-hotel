@@ -9,7 +9,7 @@ function todayStr() {
 }
 function mondayStr() {
   const d = new Date();
-  const day = d.getDay(); // 0=Sun
+  const day = d.getDay(); // 0=Sun56+65+
   const diff = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + diff);
   return d.toISOString().split('T')[0];
