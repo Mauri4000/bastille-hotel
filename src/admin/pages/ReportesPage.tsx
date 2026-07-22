@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { FileText, Send, RefreshCw, CheckCircle, AlertCircle, Eye } from 'lucide-react';
+import DatePicker from '../components/DatePicker';
 
 const API = 'http://localhost:5001';
 
@@ -73,7 +74,7 @@ export default function ReportesPage() {
       </div>
 
       {/* Card: Parte Diario */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100">
           <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center">
             <FileText size={18} className="text-amber-600" />
@@ -87,22 +88,20 @@ export default function ReportesPage() {
         <div className="px-6 py-5 space-y-5">
           {/* Date range */}
           <div className="flex flex-wrap gap-4 items-end">
-            <div>
+            <div className="w-40">
               <label className="block text-xs font-medium text-gray-600 mb-1">Desde</label>
-              <input
-                type="date"
+              <DatePicker
                 value={fromDate}
-                onChange={e => { setFromDate(e.target.value); setPdfUrl(null); setSent(false); }}
-                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                onChange={v => { setFromDate(v); setPdfUrl(null); setSent(false); }}
+                placeholder="Desde"
               />
             </div>
-            <div>
+            <div className="w-40">
               <label className="block text-xs font-medium text-gray-600 mb-1">Hasta</label>
-              <input
-                type="date"
+              <DatePicker
                 value={toDate}
-                onChange={e => { setToDate(e.target.value); setPdfUrl(null); setSent(false); }}
-                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                onChange={v => { setToDate(v); setPdfUrl(null); setSent(false); }}
+                placeholder="Hasta"
               />
             </div>
 
