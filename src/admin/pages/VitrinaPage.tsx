@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Minus, Search, Package, RefreshCw } from 'lucide-react';
+import { Plus, Minus, Search, Package, RefreshCw, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../../lib/logActivity';
@@ -59,6 +59,21 @@ export default function VitrinaPage() {
     setProducts(prev => prev.map(x => x.id === p.id ? { ...x, quantity: newQty } : x));
     setPending(prev => { const n = { ...prev }; delete n[p.id]; return n; });
     setSaving(prev => ({ ...prev, [p.id]: false }));
+  }
+
+  async function deleteProduct(p: VitrinaProduct) {
+    if (!window.confirm(`¿Eliminar "${p.name}" de la vitrina? Esta acción no se puede deshacer.`)) return;
+    setSaving(prev => ({ ...prev, [p.id]: true }));
+    const { error } = await supabase.from('vitrina_products').delete().eq('id', p.id);
+    if (error) {
+      setFetchError(error.message);
+      setSaving(prev => ({ ...prev, [p.id]: false }));
+      return;
+    }
+    logActivity(profile?.id, profile?.name, 'Producto eliminado', 'vitrina', p.id, p.name);
+    setProducts(prev => prev.filter(x => x.id !== p.id));
+    setPending(prev => { const n = { ...prev }; delete n[p.id]; return n; });
+    setSaving(prev => { const n = { ...prev }; delete n[p.id]; return n; });
   }
 
   async function saveAll() {
@@ -159,6 +174,15 @@ export default function VitrinaPage() {
                   }`}>
                     {qty === 0 ? 'Agotado' : `${qty} ud`}
                   </div>
+                  {/* Delete button */}
+                  <button
+                    onClick={() => deleteProduct(p)}
+                    disabled={isSaving}
+                    className="absolute top-2 left-2 w-6 h-6 rounded-full bg-white/90 hover:bg-red-500 text-gray-500 hover:text-white flex items-center justify-center transition-colors disabled:opacity-50"
+                    title="Eliminar producto"
+                  >
+                    <Trash2 size={12} />
+                  </button>
                 </div>
 
                 {/* Info */}
