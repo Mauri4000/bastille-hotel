@@ -10,6 +10,11 @@ interface VitrinaProduct {
   image_filename: string;
 }
 
+function imageSrc(filename: string) {
+  if (!filename) return '';
+  return /^https?:\/\//.test(filename) ? filename : `/vitrinas/${filename}`;
+}
+
 export interface CartItem {
   product: VitrinaProduct;
   qty: number;
@@ -32,7 +37,9 @@ export default function VitrinaProductPicker({ onConfirm, onClose, onPayNow }: P
   const [cart,     setCart]     = useState<CartItem[]>([]);
 
   useEffect(() => {
-    supabase.from('vitrina_products').select('*').order('name')
+    supabase.from('vitrina_products').select('*')
+      .in('location', ['vitrina_recepcion', 'vitrina_ascensor'])
+      .order('name')
       .then(({ data }) => { setProducts(data ?? []); setLoading(false); });
   }, []);
 
@@ -156,7 +163,7 @@ export default function VitrinaProductPicker({ onConfirm, onClose, onPayNow }: P
                     >
                       <div className="relative">
                         <img
-                          src={`/vitrinas/${p.image_filename}`}
+                          src={imageSrc(p.image_filename)}
                           alt={p.name}
                           className="w-full h-24 object-cover bg-gray-100"
                           onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}

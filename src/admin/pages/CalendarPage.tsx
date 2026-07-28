@@ -178,6 +178,10 @@ export default function CalendarPage() {
   const [lateCheckoutModal, setLateCheckoutModal] = useState<{
     res: Reservation; time: string; extra_price: string; caja: string;
   } | null>(null);
+  // Stores late checkout price per reservation (in-session, used to pre-fill checkout modal)
+  const [pendingLatePrice, setPendingLatePrice] = useState<Record<string, string>>({});
+  // Snapshot of DB values when checkout modal opens (used to revert on Cancel)
+  const checkoutOriginalRef = useRef<{ departure_time: string; is_blacklist: boolean; wants_invoice: boolean; siaat_number: string; invoice_number: string } | null>(null);
 
   // Vitrina sale from card menu
   type VitrinaProduct = { id: string; name: string; price: number; quantity: number; image_filename: string };
@@ -921,6 +925,21 @@ export default function CalendarPage() {
     const latePaid  = (lateTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
     const lateTotal = latePaid; // already paid from late checkout popup; show it
 
+    const nights = Math.max(1, Math.round(
+      (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
+    ));
+    const hospTotal   = nights * (res.price_per_night ?? 0);
+    const hospPending = Math.max(0, hospTotal - alreadyPaid);
+
+    // Snapshot original DB values so Cancel can revert them
+    checkoutOriginalRef.current = {
+      departure_time: (res as any).departure_time ?? '',
+      is_blacklist:   (res as any).is_blacklist ?? false,
+      wants_invoice:  wantInv,
+      siaat_number:   siaat,
+      invoice_number: invoice,
+    };
+
     setCheckoutModal({
       open: true, res,
       departure_time: (res as any).departure_time ?? '',
@@ -929,14 +948,46 @@ export default function CalendarPage() {
       invoice_number: invoice,
       is_blacklist:   (res as any).is_blacklist ?? false,
       checkoutPaid:        alreadyPaid,
-      checkoutHospPayAmt:  '',
+      checkoutHospPayAmt:  hospPending > 0 ? hospPending.toFixed(2) : '',
       checkoutHospPayCaja: 'CAJA MAYOR',
       checkoutLatePaid:    latePaid,
       checkoutLateTotal:   lateTotal,
-      checkoutLatePayAmt:  '',
+      checkoutLatePayAmt:  pendingLatePrice[res.id] ?? '',
       checkoutLatePayCaja: 'CAJA MAYOR',
       checkoutPaidVitrina: [],
     });
+  }
+
+  async function cancelCheckout() {
+    // Revert any saved changes back to original DB values
+    if (checkoutModal.res && checkoutOriginalRef.current) {
+      const orig = checkoutOriginalRef.current;
+      await supabase.from('reservations').update({
+        departure_time: orig.departure_time || null,
+        wants_invoice:  orig.wants_invoice,
+        siaat_number:   orig.wants_invoice ? (orig.siaat_number || null) : null,
+        invoice_number: orig.wants_invoice ? (orig.invoice_number || null) : null,
+        is_blacklist:   orig.is_blacklist,
+        updated_at:     new Date().toISOString(),
+      }).eq('id', checkoutModal.res.id);
+    }
+    setCheckoutModal(m => ({ ...m, open: false }));
+  }
+
+  async function saveCheckoutFields() {
+    if (!checkoutModal.res) return;
+    await supabase.from('reservations').update({
+      departure_time: checkoutModal.departure_time || null,
+      wants_invoice:  checkoutModal.is_invoice,
+      siaat_number:   checkoutModal.is_invoice ? (checkoutModal.siaat_number   || null) : null,
+      invoice_number: checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
+      is_blacklist:   checkoutModal.is_blacklist,
+      updated_at:     new Date().toISOString(),
+    }).eq('id', checkoutModal.res.id);
+    logActivity(profile?.id, profile?.name, 'Checkout guardado', 'reservation', checkoutModal.res.id,
+      `${checkoutModal.res.room_id} — ${checkoutModal.res.guest_name}`);
+    setCheckoutModal(m => ({ ...m, open: false }));
+    fetchData();
   }
 
   async function handleCheckout() {
@@ -1414,8 +1465,8 @@ export default function CalendarPage() {
                                     </span>
                                   )}
                                   {(res as any).late_checkout ? (
-                                    <span className="text-[10px] font-bold bg-red-600 text-white rounded px-0.5 py-px leading-none">
-                                      🌙{departureTime ? ` ${departureTime}` : ' LC'}
+                                    <span className="text-[10px] font-bold bg-purple-700 text-white rounded px-1 py-px leading-none">
+                                      {departureTime ? `LC ${departureTime}` : 'LC'}
                                     </span>
                                   ) : departureTime ? (
                                     <span className="text-[10px] font-bold bg-red-600 text-white rounded px-0.5 py-px leading-none">
@@ -1439,8 +1490,8 @@ export default function CalendarPage() {
                                   {res.has_pet       && <span className="text-[10px] opacity-80">🐾</span>}
                                   {res.wants_invoice && <span className="text-[10px] opacity-80">🧾</span>}
                                   {(res as any).late_checkout ? (
-                                    <span className="text-[10px] font-bold bg-red-600 text-white rounded px-0.5 py-px leading-none">
-                                      🌙{departureTime ? ` ${departureTime}` : ' LC'}
+                                    <span className="text-[10px] font-bold bg-purple-700 text-white rounded px-1 py-px leading-none">
+                                      {departureTime ? `LC ${departureTime}` : 'LC'}
                                     </span>
                                   ) : isCheckOut && departureTime ? (
                                     <span className="text-[10px] font-bold bg-red-600 text-white rounded px-0.5 py-px leading-none">
@@ -2531,7 +2582,7 @@ export default function CalendarPage() {
                   {checkoutModal.res.room_id} — {checkoutModal.res.guest_name}
                 </p>
               </div>
-              <button onClick={() => setCheckoutModal(m => ({ ...m, open: false }))} className="text-gray-400 hover:text-gray-600">
+              <button onClick={cancelCheckout} className="text-gray-400 hover:text-gray-600">
                 <X size={20} />
               </button>
             </div>
@@ -2651,13 +2702,20 @@ export default function CalendarPage() {
                                   onChange={e => setCheckoutModal(m => ({ ...m, checkoutHospPayAmt: e.target.value }))}
                                   placeholder={`${hospPending.toFixed(2)}`}
                                   className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
-                                <CustomSelect
-                                  value={checkoutModal.checkoutHospPayCaja}
-                                  onChange={v => setCheckoutModal(m => ({ ...m, checkoutHospPayCaja: v }))}
-                                  options={[{ value: 'CAJA MAYOR', label: 'Efectivo' }, { value: 'CUENTA BNB', label: 'QR' }]}
-                                  placeholder="Caja" />
+                                <div className="flex rounded-lg overflow-hidden border border-gray-200 flex-shrink-0">
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutHospPayCaja: 'CAJA MAYOR' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold transition-colors ${checkoutModal.checkoutHospPayCaja === 'CAJA MAYOR' ? 'bg-green-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    Efectivo
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutHospPayCaja: 'CUENTA BNB' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutHospPayCaja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    QR
+                                  </button>
+                                </div>
                                 <button onClick={checkoutPayHosp}
-                                  className="px-3 py-1.5 text-xs font-bold bg-green-500 hover:bg-green-400 text-white rounded-lg whitespace-nowrap">
+                                  className="px-3 py-1.5 text-xs font-bold bg-green-500 hover:bg-green-400 text-white rounded-lg whitespace-nowrap flex-shrink-0">
                                   💳 Pagar
                                 </button>
                               </div>
@@ -2672,7 +2730,24 @@ export default function CalendarPage() {
                     {/* ── Late Checkout ── */}
                     {hasLate && (
                       <div className="bg-purple-50 rounded-xl overflow-hidden border border-purple-200">
-                        <div className="px-4 py-2 bg-purple-100 text-xs font-bold uppercase tracking-wider text-purple-700">🌙 Late Checkout</div>
+                        <div className="px-4 py-2 bg-purple-100 text-xs font-bold uppercase tracking-wider text-purple-700 flex items-center justify-between">
+                          <span>🌙 Late Checkout</span>
+                          <button
+                            onClick={async () => {
+                              await supabase.from('reservations').update({
+                                late_checkout: false, updated_at: new Date().toISOString(),
+                              }).eq('id', r.id);
+                              setPendingLatePrice(prev => { const n = { ...prev }; delete n[r.id]; return n; });
+                              // Update snapshot so cancel doesn't re-add it
+                              if (checkoutOriginalRef.current) checkoutOriginalRef.current = { ...checkoutOriginalRef.current };
+                              fetchData();
+                              setCheckoutModal(m => ({ ...m, open: false }));
+                            }}
+                            className="text-purple-400 hover:text-red-500 transition-colors"
+                            title="Eliminar late checkout">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                         <div className="px-4 py-3 space-y-1 text-sm">
                           {checkoutModal.checkoutLateTotal > 0 ? (
                             <div className="flex justify-between items-center text-green-700 font-semibold">
@@ -2685,19 +2760,26 @@ export default function CalendarPage() {
                           ) : (
                             <>
                               <p className="text-xs text-purple-600 mb-1">Sin cargo registrado — registrar ahora:</p>
-                              <div className="flex gap-2">
+                              <div className="flex gap-2 items-center">
                                 <input type="number" min={0} step={0.5}
                                   value={checkoutModal.checkoutLatePayAmt}
                                   onChange={e => setCheckoutModal(m => ({ ...m, checkoutLatePayAmt: e.target.value }))}
                                   placeholder="Monto Bs."
                                   className="flex-1 border border-purple-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
-                                <CustomSelect
-                                  value={checkoutModal.checkoutLatePayCaja}
-                                  onChange={v => setCheckoutModal(m => ({ ...m, checkoutLatePayCaja: v }))}
-                                  options={[{ value: 'CAJA MAYOR', label: 'Efectivo' }, { value: 'CUENTA BNB', label: 'QR' }]}
-                                  placeholder="Caja" />
+                                <div className="flex rounded-lg overflow-hidden border border-gray-200 flex-shrink-0">
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutLatePayCaja: 'CAJA MAYOR' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold transition-colors ${checkoutModal.checkoutLatePayCaja === 'CAJA MAYOR' ? 'bg-green-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    Efectivo
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutLatePayCaja: 'CUENTA BNB' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutLatePayCaja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    QR
+                                  </button>
+                                </div>
                                 <button onClick={checkoutPayLate}
-                                  className="px-3 py-1.5 text-xs font-bold bg-purple-500 hover:bg-purple-400 text-white rounded-lg whitespace-nowrap">
+                                  className="px-3 py-1.5 text-xs font-bold bg-purple-500 hover:bg-purple-400 text-white rounded-lg whitespace-nowrap flex-shrink-0">
                                   💳 Pagar
                                 </button>
                               </div>
@@ -2714,7 +2796,7 @@ export default function CalendarPage() {
                         <div className="px-4 py-3 space-y-2">
                           {vitItems.map(item => (
                             <div key={item.productId} className="flex items-center justify-between gap-2">
-                              <div className="flex-1 text-sm text-gray-700">
+                              <div className="flex-1 text-sm text-gray-700 min-w-0">
                                 <span>{item.productName}{item.qty > 1 ? ` x${item.qty}` : ''}</span>
                                 <span className="text-xs text-gray-400 ml-1">({item.caja === 'CUENTA BNB' ? 'QR' : 'Efectivo'})</span>
                               </div>
@@ -2722,6 +2804,12 @@ export default function CalendarPage() {
                               <button onClick={() => checkoutPayVitrinaItem(item)}
                                 className="px-2 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-400 text-white rounded-lg flex-shrink-0">
                                 💳 Pagar
+                              </button>
+                              <button
+                                onClick={() => setPendingVitrina(prev => ({ ...prev, [r.id]: (prev[r.id] ?? []).filter(i => i.productId !== item.productId) }))}
+                                className="text-gray-300 hover:text-red-500 flex-shrink-0 transition-colors"
+                                title="Eliminar">
+                                <Trash2 size={14} />
                               </button>
                             </div>
                           ))}
@@ -2766,9 +2854,13 @@ export default function CalendarPage() {
             </div>
 
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100 bg-white rounded-b-2xl">
-              <button onClick={() => setCheckoutModal(m => ({ ...m, open: false }))}
+              <button onClick={cancelCheckout}
                 className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg transition-colors">
                 Cancelar
+              </button>
+              <button onClick={saveCheckoutFields}
+                className="px-5 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-400 text-white rounded-lg transition-colors">
+                💾 Guardar cambios
               </button>
               <button onClick={handleCheckout}
                 className="px-6 py-2 text-sm font-semibold bg-orange-500 hover:bg-orange-400 text-white rounded-lg transition-colors">
@@ -2871,10 +2963,12 @@ export default function CalendarPage() {
                 ⚠️ Anular check-in completo
               </button>
             )}
-            <button onClick={e => { setCardMenu(null); handleDeleteRes(e as any, cardMenu.res.id); }}
-              className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50">
-              🗑 Borrar
-            </button>
+            {cardMenu.res.status !== 'ocupado' && (
+              <button onClick={e => { setCardMenu(null); handleDeleteRes(e as any, cardMenu.res.id); }}
+                className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50">
+                🗑 Borrar
+              </button>
+            )}
           </div>
         </>
       )}
@@ -3426,36 +3520,18 @@ export default function CalendarPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Precio extra a cobrar (Bs.)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Monto a cobrar (Bs.)</label>
                 <input
                   type="number" min={0} step={0.5}
                   value={lateCheckoutModal.extra_price}
                   onChange={e => setLateCheckoutModal(m => m ? { ...m, extra_price: e.target.value } : m)}
                   placeholder="0.00"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+                  className="w-full border border-purple-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
                 />
               </div>
-              {parseFloat(lateCheckoutModal.extra_price || '0') > 0 && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Registrar en caja</label>
-                  <CustomSelect
-                    value={lateCheckoutModal.caja}
-                    onChange={v => setLateCheckoutModal(m => m ? { ...m, caja: v } : m)}
-                    options={[
-                      { value: 'CAJA MAYOR', label: 'CAJA MAYOR' },
-                      { value: 'CAJA CHICA', label: 'CAJA CHICA' },
-                      { value: 'CUENTA BNB', label: 'CUENTA BNB' },
-                    ]}
-                    placeholder="— Seleccionar —"
-                  />
-                </div>
-              )}
-              {parseFloat(lateCheckoutModal.extra_price || '0') > 0 && (
-                <div className="bg-purple-50 border border-purple-100 rounded-xl px-4 py-3 text-sm font-semibold text-purple-700 flex justify-between">
-                  <span>Total a cobrar por late checkout</span>
-                  <span>Bs. {parseFloat(lateCheckoutModal.extra_price).toFixed(2)}</span>
-                </div>
-              )}
+              <div className="bg-purple-50 border border-purple-100 rounded-xl px-4 py-3 text-xs text-purple-600">
+                💡 El pago se registra desde el popup de <strong>Check out</strong>
+              </div>
             </div>
 
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
@@ -3466,24 +3542,13 @@ export default function CalendarPage() {
               <button
                 onClick={async () => {
                   const r = lateCheckoutModal.res;
-                  const extraPrice = parseFloat(lateCheckoutModal.extra_price || '0');
                   await supabase.from('reservations').update({
                     late_checkout: true,
                     departure_time: lateCheckoutModal.time || null,
                     updated_at: new Date().toISOString(),
                   }).eq('id', r.id);
-                  if (extraPrice > 0 && lateCheckoutModal.caja) {
-                    await supabase.from('transactions').insert({
-                      date:        new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' }),
-                      type:        'ingreso',
-                      category:    'H02-LATE CHECKOUT',
-                      room_id:     r.room_id,
-                      amount:      extraPrice,
-                      description: `Late Checkout — ${r.guest_name}`,
-                      caja:        lateCheckoutModal.caja,
-                      responsible_id: profile?.id ?? null,
-                    });
-                    logActivity(profile?.id, profile?.name, 'Late Checkout', 'transaction', r.id, `${r.room_id} — ${r.guest_name} · Bs. ${extraPrice.toFixed(2)} (${lateCheckoutModal.caja})`);
+                  if (lateCheckoutModal.extra_price) {
+                    setPendingLatePrice(prev => ({ ...prev, [r.id]: lateCheckoutModal.extra_price }));
                   }
                   logActivity(profile?.id, profile?.name, 'Reserva editada', 'reservation', r.id, `Late checkout ${r.room_id} — ${r.guest_name}`);
                   setLateCheckoutModal(null);
