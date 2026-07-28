@@ -35,6 +35,17 @@ const teachers = [
     accent: "from-violet-500 to-purple-700",
     tagColor: "bg-violet-500/20 text-violet-300 border-violet-500/30",
   },
+  {
+    id: "darleth", name: "Darleth",
+    photos: [
+      { src: "/teachers/darleth.jpg",       pos: "50% 25%" },
+      { src: "/teachers/darleth-dance.jpg", pos: "50% 30%" },
+    ],
+    tags: ["Folkloric Dance", "Culture & History", "Photography"],
+    bio: "Hi! I'm Darleth — a young woman deeply in love with Sucre. I'm passionate about local culture, history and Bolivian traditions, as well as adventure, photography and new experiences. I'm in the final stage of my teacher training and have experience teaching folkloric dance. I'm patient, curious and love building a space where conversation flows naturally. For me, language is the gateway to exchanging cultures — tell me about yours!",
+    accent: "from-teal-400 to-emerald-600",
+    tagColor: "bg-teal-500/20 text-teal-300 border-teal-500/30",
+  },
 ];
 
 const levels = [
