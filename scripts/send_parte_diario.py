@@ -15,7 +15,7 @@ from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage, KeepTogether
 from reportlab.platypus.flowables import Flowable
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
@@ -45,8 +45,8 @@ SUPABASE_KEY = (
 )
 GMAIL_USER = "bastillehotelsucre@gmail.com"
 GMAIL_PASS = "hxjglpbwbunqxczg"
-EMAIL_TO   = "mauridav377@gmail.com"   # PRUEBA
-EMAIL_CC   = []                        # PRUEBA
+EMAIL_TO   = "mauridav377@gmail.com"
+EMAIL_CC   = ["bastillehotelsucre@gmail.com"]
 
 HOTEL_NAME    = "BASTILLE HOTEL"
 HOTEL_ADDRESS = "Calle Aniceto Arce 247"
@@ -119,15 +119,24 @@ def fetch_reservations(fd, td):
     return supabase_get("reservations", p)
 
 def classify_for_day(rsvs, day):
+    """
+    ENTRANTE  : check_in  == day  (llegaron hoy)
+    SALIENTE  : check_out == day  (se fueron hoy, hora registrada en checkout)
+    PERMANENTE: check_in  <  day AND check_out > day  (siguen hospedados)
+    """
     e, p, s = [], [], []
-    nd = day + timedelta(days=1)
     for r in rsvs:
         ci = date.fromisoformat(r["check_in"])
         co = date.fromisoformat(r["check_out"])
-        if ci > day or co <= day: continue
-        if ci == day:   e.append(r)
-        elif co == nd:  s.append(r)
-        else:           p.append(r)
+        if ci > day or co < day: continue   # sin overlap con este dia
+        if ci == day and co == day:          # entrada y salida el mismo dia
+            e.append(r)
+        elif co == day:                      # se fueron hoy -> SALIENTE
+            s.append(r)
+        elif ci == day:                      # llegaron hoy  -> ENTRANTE
+            e.append(r)
+        else:                               # ci < day < co -> PERMANENTE
+            p.append(r)
     return e, p, s
 
 # -- PDF ---------------------------------------------------------------------
@@ -166,24 +175,24 @@ def build_pdf(from_date, to_date, reservations):
 
     def grow(r):
         def g(k, a=""): return str(r.get(k, "") or r.get(a, "") or "")
+        def dash(v): return v if v else "-"
         ms = g("guest_marital_status", "marital_status")
-        # Paragraph wraps text within cell so it never overflows into adjacent columns
         DL = S("dl", fontSize=7, leading=8, textColor=GRAY, alignment=TA_LEFT)
         DC = S("dc", fontSize=7, leading=8, textColor=GRAY, alignment=TA_CENTER)
-        def P(txt, style=DC): return Paragraph(txt, style) if txt else ""
+        def P(txt, style=DC): return Paragraph(txt if txt else "-", style)
         return [
-            P(g("guest_name","name"), DL),          # col 0  Nombre - left
-            g("guest_gender","gender"),              # col 1  Genero - narrow plain
-            g("guest_age","age"),                    # col 2  Edad   - narrow plain
-            ms[0].upper() if ms else "",             # col 3  Est.Civil - initial only
-            P(g("guest_country","country")),         # col 4  Pais   - center
-            P(g("guest_document","document")),       # col 5  Doc    - center
-            P(g("guest_profession","profession")),   # col 6  Prof   - center
-            P(g("guest_purpose","purpose")),         # col 7  Objeto - center
-            g("room_id"),                            # col 8  Hab    - narrow plain
-            P(g("guest_origin","origin")),           # col 9  Proced - center
-            P(g("guest_next_dest","next_dest")),     # col 10 Dest   - center
-            g("guest_transport","transport"),        # col 11 Via    - narrow plain
+            P(g("guest_name","name"), DL),           # col 0  Nombre - left
+            dash(g("guest_gender","gender")),         # col 1  Genero
+            dash(g("guest_age","age")),               # col 2  Edad
+            ms[0].upper() if ms else "-",             # col 3  Est.Civil
+            P(g("guest_country","country")),          # col 4  Pais
+            P(g("guest_document","document")),        # col 5  Doc
+            P(g("guest_profession","profession")),    # col 6  Prof
+            P(g("guest_purpose","purpose")),          # col 7  Objeto
+            dash(g("room_id")),                       # col 8  Hab
+            P(g("guest_origin","origin")),            # col 9  Proced
+            P(g("guest_next_dest","next_dest")),      # col 10 Dest
+            dash(g("guest_transport","transport")),   # col 11 Via
         ]
 
     def make_logo(path, h=1.3):
@@ -198,7 +207,6 @@ def build_pdf(from_date, to_date, reservations):
         tables = []
 
         def data_ts(bottom=False):
-            """TableStyle commands for a single data/empty row."""
             ts = [
                 ("FONTNAME",      (0,0),(nc-1,0), "Helvetica"),
                 ("FONTSIZE",      (0,0),(nc-1,0), 7),
@@ -208,12 +216,9 @@ def build_pdf(from_date, to_date, reservations):
                 ("BOTTOMPADDING", (0,0),(nc-1,0), 2),
                 ("LEFTPADDING",   (0,0),(nc-1,0), 2),
                 ("RIGHTPADDING",  (0,0),(nc-1,0), 2),
-                # Outer left + right edges
                 ("LINEBEFORE",    (0,0),(0,0), 0.4, colors.black),
                 ("LINEAFTER",     (nc-1,0),(nc-1,0), 0.4, colors.black),
-                # Vertical column separators — works reliably in 1-row tables
                 ("INNERGRID",     (0,0),(nc-1,0), 0.25, colors.black),
-                # Center all columns except Nombre (col 0)
                 ("ALIGN",         (1,0),(nc-1,0), "CENTER"),
             ]
             if bottom:
@@ -236,13 +241,8 @@ def build_pdf(from_date, to_date, reservations):
             ("LEFTPADDING",   (0,0),(nc-1,0), 2),
             ("RIGHTPADDING",  (0,0),(nc-1,0), 2),
         ]))
-        tables.append(ht)
 
-        sections = [("ENTRANTES", ent), ("PERMANENTES", per), ("SALIENTES", sal)]
-        for si, (lbl, lst) in enumerate(sections):
-            is_last_section = (si == len(sections) - 1)
-
-            # -- Label row — label in col 0, spaces in remaining cols so INNERGRID draws --
+        def make_label(lbl):
             lt = Table([[lbl] + [" "] * (nc - 1)], colWidths=CW)
             lt.setStyle(TableStyle([
                 ("FONTNAME",      (0,0),(nc-1,0), "Helvetica"),
@@ -256,9 +256,17 @@ def build_pdf(from_date, to_date, reservations):
                 ("LINEAFTER",     (nc-1,0),(nc-1,0), 0.4, colors.black),
                 ("INNERGRID",     (0,0),(nc-1,0), 0.25, colors.black),
             ]))
-            tables.append(lt)
+            return lt
 
-            # -- Collect guest rows --
+        def make_data_row(row_data, bottom=False):
+            rt = Table([row_data], colWidths=CW)
+            rt.setStyle(TableStyle(data_ts(bottom=bottom)))
+            return rt
+
+        sections = [("ENTRANTES", ent), ("PERMANENTES", per), ("SALIENTES", sal)]
+        for si, (lbl, lst) in enumerate(sections):
+            is_last_section = (si == len(sections) - 1)
+
             section_rows = []
             for r in lst:
                 section_rows.append(grow(r))
@@ -266,13 +274,18 @@ def build_pdf(from_date, to_date, reservations):
                     ag2 = dict(ag); ag2["room_id"] = r.get("room_id", "")
                     section_rows.append(grow(ag2))
             if not section_rows:
-                section_rows = [[" "] * nc]   # empty placeholder — space triggers INNERGRID
+                section_rows = [[" "] * nc]   # sección vacía → fila en blanco
 
+            lt = make_label(lbl)
+
+            data_tables = []
             for ri, row_data in enumerate(section_rows):
                 is_last_row = is_last_section and (ri == len(section_rows) - 1)
-                rt = Table([row_data], colWidths=CW)
-                rt.setStyle(TableStyle(data_ts(bottom=is_last_row)))
-                tables.append(rt)
+                data_tables.append(make_data_row(row_data, bottom=is_last_row))
+
+            anchor = [ht, lt, data_tables[0]] if si == 0 else [lt, data_tables[0]]
+            tables.append(KeepTogether(anchor))
+            tables.extend(data_tables[1:])
 
         return tables
 
