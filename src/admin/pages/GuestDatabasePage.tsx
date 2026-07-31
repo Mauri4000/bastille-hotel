@@ -242,7 +242,7 @@ export default function GuestDatabasePage() {
       .select('*', { count: 'exact' })
       .neq('status', 'habilitacion')
       .neq('guest_name', 'Habilitación')
-      .lt('check_out', today)
+      .lte('check_out', today)
       .order('check_out', { ascending: false })
       .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
