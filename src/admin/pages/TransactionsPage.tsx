@@ -89,20 +89,18 @@ export default function TransactionsPage() {
         .order('created_at', { ascending: false }),
       supabase
         .from('reservations')
-        .select('room_id, siaat_number, invoice_number, wants_invoice')
+        .select('id, siaat_number')
         .eq('wants_invoice', true)
-        .not('siaat_number', 'is', null)
-        .lte('check_in', lastDay)
-        .gte('check_out', firstDay),
+        .not('siaat_number', 'is', null),
     ]);
 
     setTransactions(data ?? []);
 
-    // Build room_id → siaat_number map
+    // Build reservation_id → siaat_number map
     const map: Record<string, string> = {};
     for (const r of reservData ?? []) {
-      if (r.room_id && r.siaat_number) {
-        map[r.room_id] = r.siaat_number;
+      if (r.id && r.siaat_number) {
+        map[r.id] = r.siaat_number;
       }
     }
     setSiaatMap(map);
@@ -455,8 +453,8 @@ export default function TransactionsPage() {
                           </td>
                           {/* N° Factura */}
                           <td className={`${tdCls}`}>
-                            {t.room_id && siaatMap[t.room_id]
-                              ? <span className="font-mono text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">{siaatMap[t.room_id]}</span>
+                            {t.reservation_id && siaatMap[t.reservation_id]
+                              ? <span className="font-mono text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">{siaatMap[t.reservation_id]}</span>
                               : <span className="text-gray-300 text-xs">—</span>
                             }
                           </td>

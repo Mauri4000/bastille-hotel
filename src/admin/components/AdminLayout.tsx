@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, CalendarDays, ArrowLeftRight,
-  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap,
+  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 const navItems = [
   { to: '/admin',             icon: LayoutDashboard, label: 'Dashboard',       exact: true },
   { to: '/admin/calendar',    icon: CalendarDays,    label: 'Calendario' },
+  { to: '/admin/limpiezas',   icon: Sparkles,        label: 'Limpiezas' },
   { to: '/admin/transactions',icon: ArrowLeftRight,  label: 'Ingresos / Egresos' },
   { to: '/admin/guests',      icon: BookUser,        label: 'Base de Huéspedes' },
   { to: '/admin/vitrina',     icon: ShoppingBag,     label: 'Stock Hotel' },
