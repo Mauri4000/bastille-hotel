@@ -10,7 +10,19 @@ import TimePicker from '../components/TimePicker';
 import { logActivity } from '../../lib/logActivity';
 import VitrinaProductPicker from '../components/VitrinaProductPicker';
 
-const CAJAS: CajaType[] = ['CAJA MAYOR', 'CAJA CHICA', 'CUENTA BNB'];
+const CAJAS: CajaType[] = ['CAJA MAYOR', 'CAJA CHICA', 'CUENTA BNB', 'TARJETA'];
+const CAJA_LABEL: Record<CajaType, string> = {
+  'CAJA MAYOR': 'Efectivo',
+  'CAJA CHICA': 'Caja Chica',
+  'CUENTA BNB': 'QR',
+  'TARJETA':    'Tarjeta',
+};
+const CAJA_COLOR: Record<CajaType, string> = {
+  'CAJA MAYOR': 'bg-green-100 text-green-700',
+  'CAJA CHICA': 'bg-yellow-100 text-yellow-700',
+  'CUENTA BNB': 'bg-blue-100 text-blue-700',
+  'TARJETA':    'bg-purple-100 text-purple-700',
+};
 
 const emptyForm = {
   date:        '',
@@ -309,16 +321,16 @@ export default function TransactionsPage() {
       </div>
 
       {/* Caja running balances */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {CAJAS.map(caja => {
           const bal = balances[caja];
           const isPos = bal >= 0;
-          const emoji = caja === 'CAJA MAYOR' ? '🏦' : caja === 'CAJA CHICA' ? '💵' : '🏧';
+          const emoji = caja === 'CAJA MAYOR' ? '💵' : caja === 'CAJA CHICA' ? '🪙' : caja === 'CUENTA BNB' ? '📱' : '💳';
           return (
             <div key={caja} className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-base">{emoji}</span>
-                <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">{caja}</span>
+                <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">{CAJA_LABEL[caja]}</span>
               </div>
               <p className={`text-xl font-bold ${isPos ? 'text-gray-900' : 'text-red-500'}`}>
                 {fmtAmount(bal)}
@@ -339,7 +351,7 @@ export default function TransactionsPage() {
           options={[{ value:'all', label:'Todos' },{ value:'ingreso', label:'Ingresos' },{ value:'egreso', label:'Egresos' }]}
           placeholder="Todos" />
         <CustomSelect size="sm" value={filterCaja} onChange={v => setFilterCaja(v as any)}
-          options={[{ value:'all', label:'Todas las cajas' }, ...CAJAS.map(c => ({ value: c, label: c }))]}
+          options={[{ value:'all', label:'Todas las cajas' }, ...CAJAS.map(c => ({ value: c, label: CAJA_LABEL[c] }))]}
           placeholder="Todas las cajas" />
         <CustomSelect size="sm" value={filterCat} onChange={v => setFilterCat(v)}
           options={[
@@ -429,7 +441,11 @@ export default function TransactionsPage() {
                             {saldo >= 0 ? '' : '−'}Bs. {Math.abs(saldo).toFixed(2)}
                           </td>
                           {/* Caja */}
-                          <td className={`${tdCls} text-gray-600 text-xs`}>{t.caja}</td>
+                          <td className={`${tdCls}`}>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${CAJA_COLOR[t.caja as CajaType] ?? 'bg-gray-100 text-gray-600'}`}>
+                              {CAJA_LABEL[t.caja as CajaType] ?? t.caja}
+                            </span>
+                          </td>
                           {/* Habitación */}
                           <td className={`${tdCls}`}>
                             {t.room_id
