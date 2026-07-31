@@ -32,7 +32,7 @@ export default function TransactionsPage() {
   const [month, setMonth] = useState(today.getMonth());
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [balances,     setBalances]     = useState<Record<CajaType, number>>({ 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0 });
+  const [balances,     setBalances]     = useState<Record<CajaType, number>>({ 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0, 'TARJETA': 0 });
   const [loading,      setLoading]      = useState(true);
   // room_id → siaat_number map (from reservations that have wants_invoice + siaat)
   const [siaatMap, setSiaatMap] = useState<Record<string, string>>({});
@@ -119,7 +119,7 @@ export default function TransactionsPage() {
         .from('transactions')
         .select('type, amount, caja');
       if (!data) return;
-      const totals: Record<CajaType, number> = { 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0 };
+      const totals: Record<CajaType, number> = { 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0, 'TARJETA': 0 };
       for (const t of data) {
         if (!(t.caja in totals)) continue;
         totals[t.caja as CajaType] += t.type === 'ingreso' ? t.amount : -t.amount;
@@ -238,7 +238,7 @@ export default function TransactionsPage() {
     // refresh running balances
     const { data: allTx } = await supabase.from('transactions').select('type, amount, caja');
     if (allTx) {
-      const totals: Record<CajaType, number> = { 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0 };
+      const totals: Record<CajaType, number> = { 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0, 'TARJETA': 0 };
       for (const t of allTx) {
         if (!(t.caja in totals)) continue;
         totals[t.caja as CajaType] += t.type === 'ingreso' ? t.amount : -t.amount;
