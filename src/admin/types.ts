@@ -58,7 +58,7 @@ export interface Reservation {
 }
 
 export type TransactionType = 'ingreso' | 'egreso';
-export type CajaType = 'CAJA MAYOR' | 'CAJA CHICA' | 'CUENTA BNB';
+export type CajaType = 'CAJA MAYOR' | 'CAJA CHICA' | 'CUENTA BNB' | 'TARJETA';
 
 export interface Transaction {
   id: string;

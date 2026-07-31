@@ -164,6 +164,10 @@ export default function CalendarPage() {
     // hospedaje payment form
     checkoutHospPayAmt: '',
     checkoutHospPayCaja:'CAJA MAYOR' as string,
+    checkoutHospSplit:  false,
+    checkoutHospAmt_cash: '',
+    checkoutHospAmt_qr:   '',
+    checkoutHospAmt_card: '',
     // late checkout (fetched on open)
     checkoutLatePaid:   0,
     checkoutLateTotal:  0,
@@ -185,7 +189,7 @@ export default function CalendarPage() {
 
   // Vitrina sale from card menu
   type VitrinaProduct = { id: string; name: string; price: number; quantity: number; image_filename: string };
-  type VitrinaCartItem = { product: VitrinaProduct; qty: number; total: number; caja: 'CAJA MAYOR' | 'CUENTA BNB' };
+  type VitrinaCartItem = { product: VitrinaProduct; qty: number; total: number; caja: 'CAJA MAYOR' | 'CUENTA BNB' | 'TARJETA' };
   type PendingVitrinaItem = { productId: string; productName: string; price: number; qty: number; total: number; caja: string };
   const [vitrinaSaleRes, setVitrinaSaleRes] = useState<Reservation | null>(null);
   // pendingVitrina: keyed by reservation_id, items not yet registered as transactions
@@ -305,7 +309,7 @@ export default function CalendarPage() {
   type PagoRow = { res: Reservation; total: number; paid: number; pending: number; vitrinaItems: PendingVitrinaItem[]; vitrinaTotal: number };
   const [pagoRows, setPagoRows]   = useState<PagoRow[]>([]);
   const [pagosLoading, setPagosLoading] = useState(false);
-  type PagoForm = { resId: string; amount: string; caja: string; split: boolean; amount_qr: string; amount_cash: string };
+  type PagoForm = { resId: string; amount: string; caja: string; split: boolean; amount_qr: string; amount_cash: string; amount_tarjeta: string };
   const [pagoForm, setPagoForm] = useState<PagoForm | null>(null);
   const [isPaying, setIsPaying] = useState(false);
 
@@ -364,27 +368,28 @@ export default function CalendarPage() {
     const desc     = `Hospedaje — ${row.res.guest_name} — ${nightStr}`;
 
     if (pagoForm.split) {
-      const amtQr   = parseFloat(pagoForm.amount_qr)   || 0;
-      const amtCash = parseFloat(pagoForm.amount_cash)  || 0;
-      if (amtQr <= 0 && amtCash <= 0) return;
-      if (amtQr > 0) {
+      const amtQr      = parseFloat(pagoForm.amount_qr)      || 0;
+      const amtCash    = parseFloat(pagoForm.amount_cash)     || 0;
+      const amtTarjeta = parseFloat(pagoForm.amount_tarjeta)  || 0;
+      if (amtQr <= 0 && amtCash <= 0 && amtTarjeta <= 0) return;
+      const splitInserts = [
+        amtQr      > 0 && { caja: 'CUENTA BNB', amount: amtQr      },
+        amtCash    > 0 && { caja: 'CAJA MAYOR',  amount: amtCash    },
+        amtTarjeta > 0 && { caja: 'TARJETA',     amount: amtTarjeta },
+      ].filter(Boolean) as { caja: string; amount: number }[];
+      for (const ins of splitInserts) {
         await supabase.from('transactions').insert({
           date: today, type: 'ingreso', category: 'H01-HOSPEDAJE',
           room_id: row.res.room_id, reservation_id: row.res.id,
-          amount: amtQr, description: desc, caja: 'CUENTA BNB',
+          amount: ins.amount, description: desc, caja: ins.caja,
           responsible_id: profile?.id ?? null,
         });
       }
-      if (amtCash > 0) {
-        await supabase.from('transactions').insert({
-          date: today, type: 'ingreso', category: 'H01-HOSPEDAJE',
-          room_id: row.res.room_id, reservation_id: row.res.id,
-          amount: amtCash, description: desc, caja: 'CAJA MAYOR',
-          responsible_id: profile?.id ?? null,
-        });
-      }
+      const parts = splitInserts.map(i =>
+        `${i.caja === 'CUENTA BNB' ? 'QR' : i.caja === 'TARJETA' ? 'Tarjeta' : 'Efectivo'}: Bs. ${i.amount.toFixed(2)}`
+      ).join(', ');
       logActivity(profile?.id, profile?.name, 'Pago registrado', 'transaction', row.res.id,
-        `${row.res.room_id} — ${row.res.guest_name} · QR: Bs. ${amtQr.toFixed(2)}, Efectivo: Bs. ${amtCash.toFixed(2)}`);
+        `${row.res.room_id} — ${row.res.guest_name} · ${parts}`);
     } else {
       const amount = parseFloat(pagoForm.amount);
       if (!amount || amount <= 0 || !pagoForm.caja) return;
@@ -950,6 +955,10 @@ export default function CalendarPage() {
       checkoutPaid:        alreadyPaid,
       checkoutHospPayAmt:  hospPending > 0 ? hospPending.toFixed(2) : '',
       checkoutHospPayCaja: 'CAJA MAYOR',
+      checkoutHospSplit:   false,
+      checkoutHospAmt_cash: '',
+      checkoutHospAmt_qr:   '',
+      checkoutHospAmt_card: '',
       checkoutLatePaid:    latePaid,
       checkoutLateTotal:   lateTotal,
       checkoutLatePayAmt:  pendingLatePrice[res.id] ?? '',
@@ -1041,24 +1050,50 @@ export default function CalendarPage() {
 
   // ── per-section checkout payment helpers ──
   async function checkoutPayHosp() {
-    const amt = parseFloat(checkoutModal.checkoutHospPayAmt) || 0;
-    if (amt <= 0 || !checkoutModal.res) return;
+    if (!checkoutModal.res) return;
     const res = checkoutModal.res;
-    const now  = new Date();
+    const now     = new Date();
     const today   = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
     const timeStr = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
     const nights  = Math.max(1, Math.round(
       (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
     ));
-    await supabase.from('transactions').insert({
-      date: today, time: timeStr, type: 'ingreso', category: 'H01-HOSPEDAJE',
-      room_id: res.room_id, reservation_id: res.id, amount: amt,
-      description: `Hospedaje ${nights} noche${nights === 1 ? '' : 's'} — ${res.guest_name}`,
-      caja: checkoutModal.checkoutHospPayCaja, responsible_id: profile?.id ?? null,
-    });
-    logActivity(profile?.id, profile?.name, 'Pago hospedaje', 'transaction', res.id,
-      `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutHospPayCaja})`);
-    setCheckoutModal(m => ({ ...m, checkoutPaid: m.checkoutPaid + amt, checkoutHospPayAmt: '' }));
+    const desc = `Hospedaje ${nights} noche${nights === 1 ? '' : 's'} — ${res.guest_name}`;
+
+    if (checkoutModal.checkoutHospSplit) {
+      const amtCash = parseFloat(checkoutModal.checkoutHospAmt_cash) || 0;
+      const amtQr   = parseFloat(checkoutModal.checkoutHospAmt_qr)   || 0;
+      const amtCard = parseFloat(checkoutModal.checkoutHospAmt_card)  || 0;
+      const total   = amtCash + amtQr + amtCard;
+      if (total <= 0) return;
+      const inserts = [
+        amtCash > 0 && { caja: 'CAJA MAYOR',  amount: amtCash },
+        amtQr   > 0 && { caja: 'CUENTA BNB',  amount: amtQr   },
+        amtCard > 0 && { caja: 'TARJETA',      amount: amtCard },
+      ].filter(Boolean) as { caja: string; amount: number }[];
+      for (const ins of inserts) {
+        await supabase.from('transactions').insert({
+          date: today, time: timeStr, type: 'ingreso', category: 'H01-HOSPEDAJE',
+          room_id: res.room_id, reservation_id: res.id,
+          amount: ins.amount, description: desc, caja: ins.caja, responsible_id: profile?.id ?? null,
+        });
+      }
+      const parts = inserts.map(i => `${i.caja === 'CUENTA BNB' ? 'QR' : i.caja === 'TARJETA' ? 'Tarjeta' : 'Efectivo'}: Bs. ${i.amount.toFixed(2)}`).join(', ');
+      logActivity(profile?.id, profile?.name, 'Pago hospedaje', 'transaction', res.id,
+        `${res.room_id} — ${res.guest_name} · ${parts}`);
+      setCheckoutModal(m => ({ ...m, checkoutPaid: m.checkoutPaid + total, checkoutHospSplit: false, checkoutHospAmt_cash: '', checkoutHospAmt_qr: '', checkoutHospAmt_card: '' }));
+    } else {
+      const amt = parseFloat(checkoutModal.checkoutHospPayAmt) || 0;
+      if (amt <= 0) return;
+      await supabase.from('transactions').insert({
+        date: today, time: timeStr, type: 'ingreso', category: 'H01-HOSPEDAJE',
+        room_id: res.room_id, reservation_id: res.id, amount: amt,
+        description: desc, caja: checkoutModal.checkoutHospPayCaja, responsible_id: profile?.id ?? null,
+      });
+      logActivity(profile?.id, profile?.name, 'Pago hospedaje', 'transaction', res.id,
+        `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutHospPayCaja})`);
+      setCheckoutModal(m => ({ ...m, checkoutPaid: m.checkoutPaid + amt, checkoutHospPayAmt: '' }));
+    }
   }
 
   async function checkoutPayLate() {
@@ -1247,17 +1282,28 @@ export default function CalendarPage() {
   const numDays = daysInMonth(year, month);
   const days = Array.from({ length: numDays }, (_, i) => i + 1);
 
+  // ── responsive ──
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const h = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', h);
+    return () => window.removeEventListener('resize', h);
+  }, []);
+  const CELL_W    = isMobile ? 56 : 116;
+  const ROOM_W    = isMobile ? 72 : 130;
+  const CELL_H    = isMobile ? 'h-12' : 'h-16';
+
   return (
-    <div className="flex flex-col h-full gap-4">
+    <div className="flex flex-col h-full gap-2 md:gap-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Calendario de Reservas</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h1 className="text-lg md:text-xl font-bold text-gray-900">Calendario de Reservas</h1>
+          <p className="text-xs md:text-sm text-gray-500 mt-0.5">
             {MONTH_NAMES[month]} {year}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex flex-col items-start md:items-end gap-2">
           {/* Month navigation */}
           <div className="flex items-center gap-2">
             <button onClick={prevMonth} className="p-2 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors">
@@ -1314,11 +1360,11 @@ export default function CalendarPage() {
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-2 md:gap-3">
         {(Object.entries(STATUS_CONFIG) as [ReservationStatus, typeof STATUS_CONFIG[ReservationStatus]][]).map(([key, cfg]) => (
-          <div key={key} className="flex items-center gap-1.5">
-            <div className={`w-3 h-3 rounded-sm ${cfg.bg}`} />
-            <span className="text-xs text-gray-600">{cfg.label}</span>
+          <div key={key} className="flex items-center gap-1">
+            <div className={`w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm ${cfg.bg}`} />
+            <span className="text-[10px] md:text-xs text-gray-600">{cfg.label}</span>
           </div>
         ))}
       </div>
@@ -1336,11 +1382,11 @@ export default function CalendarPage() {
         </div>
       ) : (
         <div ref={scrollRef} className="flex-1 overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-          <table className="border-collapse" style={{ minWidth: `${130 + numDays * 116}px` }}>
+          <table className="border-collapse" style={{ minWidth: `${ROOM_W + numDays * CELL_W}px` }}>
             <thead className="sticky top-0 z-20">
               <tr className="bg-gray-50">
                 {/* Room header */}
-                <th className="sticky left-0 z-30 bg-gray-50 text-left px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider border-b-2 border-r-2 border-gray-300 w-32">
+                <th className="sticky left-0 z-30 bg-gray-50 text-left px-2 md:px-4 py-2 md:py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider border-b-2 border-r-2 border-gray-300" style={{ width: ROOM_W, minWidth: ROOM_W }}>
                   Habitación
                 </th>
                 {days.map(d => {
@@ -1354,7 +1400,8 @@ export default function CalendarPage() {
                     <th
                       key={d}
                       data-day={d}
-                      className={`text-center border-b-2 border-r border-gray-300 px-2 py-2.5 w-[116px] min-w-[116px] transition-colors ${
+                      style={{ width: CELL_W, minWidth: CELL_W }}
+                      className={`text-center border-b-2 border-r border-gray-300 px-0.5 py-1.5 md:py-2.5 transition-colors ${
                         isToday
                           ? 'bg-amber-50 border-b-amber-400'
                           : isWeekend
@@ -1364,8 +1411,8 @@ export default function CalendarPage() {
                           : 'bg-gray-50 border-b-gray-400'
                       }`}
                     >
-                      <div className={`text-sm font-bold ${isToday ? 'text-amber-600' : 'text-gray-700'}`}>{d}</div>
-                      <div className={`text-xs font-medium ${isToday ? 'text-amber-500' : 'text-gray-400'}`}>
+                      <div className={`text-xs md:text-sm font-bold ${isToday ? 'text-amber-600' : 'text-gray-700'}`}>{d}</div>
+                      <div className={`text-[10px] md:text-xs font-medium ${isToday ? 'text-amber-500' : 'text-gray-400'}`}>
                         {DAY_NAMES[dow]}
                       </div>
                     </th>
@@ -1377,11 +1424,11 @@ export default function CalendarPage() {
               {rooms.map((room, ri) => (
                 <tr key={room.id} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
                   {/* Room label */}
-                  <td className={`sticky left-0 z-10 border-r-2 border-b border-gray-300 px-4 py-2 w-32 transition-colors ${
+                  <td style={{ width: ROOM_W, minWidth: ROOM_W }} className={`sticky left-0 z-10 border-r-2 border-b border-gray-300 px-2 md:px-4 py-1 md:py-2 transition-colors ${
                     hoveredCell?.roomId === room.id ? 'bg-amber-50' : ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
                   }`}>
-                    <div className={`font-bold text-sm transition-colors ${hoveredCell?.roomId === room.id ? 'text-amber-700' : 'text-gray-900'}`}>{room.id}</div>
-                    <div className="text-xs text-gray-400 truncate mt-0.5">{room.type}</div>
+                    <div className={`font-bold text-xs md:text-sm transition-colors ${hoveredCell?.roomId === room.id ? 'text-amber-700' : 'text-gray-900'}`}>{room.id}</div>
+                    <div className="hidden md:block text-xs text-gray-400 truncate mt-0.5">{room.type}</div>
                   </td>
 
                   {/* Day cells */}
@@ -1404,7 +1451,7 @@ export default function CalendarPage() {
                     return (
                       <td
                         key={d}
-                        className={`border-r border-b border-gray-300 p-1 h-16 align-top transition-colors ${
+                        className={`border-r border-b border-gray-300 p-0.5 md:p-1 ${CELL_H} align-top transition-colors ${
                           hoveredCell?.roomId === room.id && hoveredCell?.day === d
                             ? 'bg-amber-100/60'
                             : hoveredCell?.roomId === room.id
@@ -1538,7 +1585,7 @@ export default function CalendarPage() {
               {/* ── Total guests per day ── */}
               <tfoot className="sticky bottom-0 z-20">
                 <tr>
-                  <td className="sticky left-0 z-30 bg-gray-900 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-white border-t-2 border-gray-700 w-32">
+                  <td style={{ width: ROOM_W, minWidth: ROOM_W }} className="sticky left-0 z-30 bg-gray-900 px-2 md:px-4 py-2 md:py-2.5 text-[10px] md:text-xs font-bold uppercase tracking-wider text-white border-t-2 border-gray-700">
                     # Personas
                   </td>
                   {days.map(d => {
@@ -2696,28 +2743,81 @@ export default function CalendarPage() {
                               <div className="flex justify-between font-bold text-red-600">
                                 <span>Pendiente</span><span>Bs. {hospPending.toFixed(2)}</span>
                               </div>
-                              <div className="flex gap-2 pt-1">
-                                <input type="number" min={0} step={0.5}
-                                  value={checkoutModal.checkoutHospPayAmt}
-                                  onChange={e => setCheckoutModal(m => ({ ...m, checkoutHospPayAmt: e.target.value }))}
-                                  placeholder={`${hospPending.toFixed(2)}`}
-                                  className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
-                                <div className="flex rounded-lg overflow-hidden border border-gray-200 flex-shrink-0">
+                              <div className="space-y-2 pt-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs text-gray-500">Forma de pago</span>
                                   <button type="button"
-                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutHospPayCaja: 'CAJA MAYOR' }))}
-                                    className={`px-3 py-1.5 text-xs font-semibold transition-colors ${checkoutModal.checkoutHospPayCaja === 'CAJA MAYOR' ? 'bg-green-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
-                                    Efectivo
-                                  </button>
-                                  <button type="button"
-                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutHospPayCaja: 'CUENTA BNB' }))}
-                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutHospPayCaja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
-                                    QR
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutHospSplit: !m.checkoutHospSplit, checkoutHospAmt_cash: '', checkoutHospAmt_qr: '', checkoutHospAmt_card: '' }))}
+                                    className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${checkoutModal.checkoutHospSplit ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'}`}>
+                                    {checkoutModal.checkoutHospSplit ? '✓ Pago mixto' : 'Pago mixto'}
                                   </button>
                                 </div>
-                                <button onClick={checkoutPayHosp}
-                                  className="px-3 py-1.5 text-xs font-bold bg-green-500 hover:bg-green-400 text-white rounded-lg whitespace-nowrap flex-shrink-0">
-                                  💳 Pagar
-                                </button>
+                                {checkoutModal.checkoutHospSplit ? (
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs text-gray-500 w-20 flex-shrink-0">Efectivo</span>
+                                      <input type="number" min={0} step={0.5}
+                                        value={checkoutModal.checkoutHospAmt_cash}
+                                        onChange={e => setCheckoutModal(m => ({ ...m, checkoutHospAmt_cash: e.target.value }))}
+                                        placeholder="0.00"
+                                        className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs text-gray-500 w-20 flex-shrink-0">QR</span>
+                                      <input type="number" min={0} step={0.5}
+                                        value={checkoutModal.checkoutHospAmt_qr}
+                                        onChange={e => setCheckoutModal(m => ({ ...m, checkoutHospAmt_qr: e.target.value }))}
+                                        placeholder="0.00"
+                                        className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs text-gray-500 w-20 flex-shrink-0">Tarjeta</span>
+                                      <input type="number" min={0} step={0.5}
+                                        value={checkoutModal.checkoutHospAmt_card}
+                                        onChange={e => setCheckoutModal(m => ({ ...m, checkoutHospAmt_card: e.target.value }))}
+                                        placeholder="0.00"
+                                        className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+                                    </div>
+                                    {(parseFloat(checkoutModal.checkoutHospAmt_cash)||0)+(parseFloat(checkoutModal.checkoutHospAmt_qr)||0)+(parseFloat(checkoutModal.checkoutHospAmt_card)||0) > 0 && (
+                                      <p className="text-xs text-right text-gray-500">
+                                        Total: <span className="font-bold text-gray-800">Bs. {((parseFloat(checkoutModal.checkoutHospAmt_cash)||0)+(parseFloat(checkoutModal.checkoutHospAmt_qr)||0)+(parseFloat(checkoutModal.checkoutHospAmt_card)||0)).toFixed(2)}</span>
+                                      </p>
+                                    )}
+                                    <button onClick={checkoutPayHosp}
+                                      className="w-full px-3 py-1.5 text-xs font-bold bg-green-500 hover:bg-green-400 text-white rounded-lg">
+                                      💳 Registrar pago mixto
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex gap-2">
+                                    <input type="number" min={0} step={0.5}
+                                      value={checkoutModal.checkoutHospPayAmt}
+                                      onChange={e => setCheckoutModal(m => ({ ...m, checkoutHospPayAmt: e.target.value }))}
+                                      placeholder={`${hospPending.toFixed(2)}`}
+                                      className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
+                                    <div className="flex rounded-lg overflow-hidden border border-gray-200 flex-shrink-0">
+                                      <button type="button"
+                                        onClick={() => setCheckoutModal(m => ({ ...m, checkoutHospPayCaja: 'CAJA MAYOR' }))}
+                                        className={`px-3 py-1.5 text-xs font-semibold transition-colors ${checkoutModal.checkoutHospPayCaja === 'CAJA MAYOR' ? 'bg-green-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                        Efectivo
+                                      </button>
+                                      <button type="button"
+                                        onClick={() => setCheckoutModal(m => ({ ...m, checkoutHospPayCaja: 'CUENTA BNB' }))}
+                                        className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutHospPayCaja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                        QR
+                                      </button>
+                                      <button type="button"
+                                        onClick={() => setCheckoutModal(m => ({ ...m, checkoutHospPayCaja: 'TARJETA' }))}
+                                        className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutHospPayCaja === 'TARJETA' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                        Tarjeta
+                                      </button>
+                                    </div>
+                                    <button onClick={checkoutPayHosp}
+                                      className="px-3 py-1.5 text-xs font-bold bg-green-500 hover:bg-green-400 text-white rounded-lg whitespace-nowrap flex-shrink-0">
+                                      💳 Pagar
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             </>
                           ) : (
@@ -2777,6 +2877,11 @@ export default function CalendarPage() {
                                     className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutLatePayCaja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
                                     QR
                                   </button>
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutLatePayCaja: 'TARJETA' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutLatePayCaja === 'TARJETA' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    Tarjeta
+                                  </button>
                                 </div>
                                 <button onClick={checkoutPayLate}
                                   className="px-3 py-1.5 text-xs font-bold bg-purple-500 hover:bg-purple-400 text-white rounded-lg whitespace-nowrap flex-shrink-0">
@@ -2798,7 +2903,7 @@ export default function CalendarPage() {
                             <div key={item.productId} className="flex items-center justify-between gap-2">
                               <div className="flex-1 text-sm text-gray-700 min-w-0">
                                 <span>{item.productName}{item.qty > 1 ? ` x${item.qty}` : ''}</span>
-                                <span className="text-xs text-gray-400 ml-1">({item.caja === 'CUENTA BNB' ? 'QR' : 'Efectivo'})</span>
+                                <span className="text-xs text-gray-400 ml-1">({item.caja === 'CUENTA BNB' ? 'QR' : item.caja === 'TARJETA' ? 'Tarjeta' : 'Efectivo'})</span>
                               </div>
                               <span className="text-sm font-semibold text-amber-700 flex-shrink-0">Bs. {item.total.toFixed(2)}</span>
                               <button onClick={() => checkoutPayVitrinaItem(item)}
@@ -2830,7 +2935,7 @@ export default function CalendarPage() {
                             <div key={`${item.productId}-${idx}`} className="flex items-center justify-between gap-2">
                               <div className="flex-1 text-sm text-gray-700">
                                 <span>{item.productName}{item.qty > 1 ? ` x${item.qty}` : ''}</span>
-                                <span className="text-xs text-gray-400 ml-1">({item.caja === 'CUENTA BNB' ? 'QR' : 'Efectivo'})</span>
+                                <span className="text-xs text-gray-400 ml-1">({item.caja === 'CUENTA BNB' ? 'QR' : item.caja === 'TARJETA' ? 'Tarjeta' : 'Efectivo'})</span>
                               </div>
                               <span className="text-sm font-semibold text-green-700 flex-shrink-0">Bs. {item.total.toFixed(2)}</span>
                               <button
@@ -3386,6 +3491,11 @@ export default function CalendarPage() {
                               className={`flex-1 text-[9px] font-semibold py-0.5 rounded transition-colors ${item.caja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}>
                               QR
                             </button>
+                            <button
+                              onClick={() => setPendingVitrina(prev => ({ ...prev, [row.res.id]: (prev[row.res.id] ?? []).map(i => i.productId === item.productId ? { ...i, caja: 'TARJETA' } : i) }))}
+                              className={`flex-1 text-[9px] font-semibold py-0.5 rounded transition-colors ${item.caja === 'TARJETA' ? 'bg-purple-500 text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}>
+                              Tarjeta
+                            </button>
                           </div>
                         </div>
                       ))}
@@ -3404,17 +3514,27 @@ export default function CalendarPage() {
                         <div className="flex items-center justify-between">
                           <span className="text-xs text-gray-500">Método de pago</span>
                           <button
-                            onClick={() => setPagoForm(f => f ? { ...f, split: !f.split, amount_qr: '', amount_cash: '' } : f)}
+                            onClick={() => setPagoForm(f => f ? { ...f, split: !f.split, amount_qr: '', amount_cash: '', amount_tarjeta: '' } : f)}
                             className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${pagoForm.split ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'}`}
                           >
-                            {pagoForm.split ? '✓ Dividir QR + Efectivo' : 'Dividir QR + Efectivo'}
+                            {pagoForm.split ? '✓ Pago mixto' : 'Pago mixto'}
                           </button>
                         </div>
 
                         {pagoForm.split ? (
                           <div className="space-y-1.5">
                             <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-500 w-28 flex-shrink-0">QR (CUENTA BNB)</span>
+                              <span className="text-xs text-gray-500 w-20 flex-shrink-0">Efectivo</span>
+                              <input
+                                type="number" min={0} step={0.5}
+                                value={pagoForm.amount_cash}
+                                onChange={e => setPagoForm(f => f ? { ...f, amount_cash: e.target.value } : f)}
+                                placeholder="0.00"
+                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 w-20 flex-shrink-0">QR</span>
                               <input
                                 type="number" min={0} step={0.5}
                                 value={pagoForm.amount_qr}
@@ -3424,18 +3544,18 @@ export default function CalendarPage() {
                               />
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-500 w-28 flex-shrink-0">Efectivo (CAJA)</span>
+                              <span className="text-xs text-gray-500 w-20 flex-shrink-0">Tarjeta</span>
                               <input
                                 type="number" min={0} step={0.5}
-                                value={pagoForm.amount_cash}
-                                onChange={e => setPagoForm(f => f ? { ...f, amount_cash: e.target.value } : f)}
+                                value={pagoForm.amount_tarjeta}
+                                onChange={e => setPagoForm(f => f ? { ...f, amount_tarjeta: e.target.value } : f)}
                                 placeholder="0.00"
-                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
                               />
                             </div>
-                            {(parseFloat(pagoForm.amount_qr) || 0) + (parseFloat(pagoForm.amount_cash) || 0) > 0 && (
+                            {(parseFloat(pagoForm.amount_cash) || 0) + (parseFloat(pagoForm.amount_qr) || 0) + (parseFloat(pagoForm.amount_tarjeta) || 0) > 0 && (
                               <p className="text-xs text-gray-500 text-right">
-                                Total: <span className="font-bold text-gray-800">Bs. {((parseFloat(pagoForm.amount_qr) || 0) + (parseFloat(pagoForm.amount_cash) || 0)).toFixed(2)}</span>
+                                Total: <span className="font-bold text-gray-800">Bs. {((parseFloat(pagoForm.amount_cash) || 0) + (parseFloat(pagoForm.amount_qr) || 0) + (parseFloat(pagoForm.amount_tarjeta) || 0)).toFixed(2)}</span>
                               </p>
                             )}
                           </div>
@@ -3454,6 +3574,7 @@ export default function CalendarPage() {
                               options={[
                                 { value: 'CAJA MAYOR', label: 'CAJA MAYOR' },
                                 { value: 'CUENTA BNB', label: 'CUENTA BNB' },
+                                { value: 'TARJETA',    label: 'TARJETA' },
                               ]}
                               placeholder="Caja"
                             />
@@ -3462,7 +3583,7 @@ export default function CalendarPage() {
 
                         {liveTotal > 0 && (
                           <p className="text-xs text-amber-700 bg-amber-50 rounded px-2 py-1">
-                            🛒 Se agregarán Bs. {liveTotal.toFixed(2)} de vitrina a CAJA MAYOR
+                            🛒 Se agregarán Bs. {liveTotal.toFixed(2)} de vitrina (caja según cada ítem)
                           </p>
                         )}
 
@@ -3479,7 +3600,7 @@ export default function CalendarPage() {
                       </div>
                     ) : (
                       <button
-                        onClick={() => setPagoForm({ resId: row.res.id, amount: (row.pending + liveTotal).toFixed(2), caja: 'CAJA MAYOR', split: false, amount_qr: '', amount_cash: '' })}
+                        onClick={() => setPagoForm({ resId: row.res.id, amount: (row.pending + liveTotal).toFixed(2), caja: 'CAJA MAYOR', split: false, amount_qr: '', amount_cash: '', amount_tarjeta: '' })}
                         className="mt-2 w-full text-xs font-semibold text-green-700 border border-green-300 bg-green-100 hover:bg-green-200 rounded-lg px-3 py-1.5 transition-colors">
                         + Registrar pago {liveTotal > 0 ? `· Total: Bs. ${(row.pending + liveTotal).toFixed(2)}` : ''}
                       </button>

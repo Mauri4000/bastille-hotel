@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import Footer from '../components/Footer';
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, MapPin, Mail, MessageCircle, Users, ChevronLeft, ChevronRight } from "lucide-react";
@@ -194,6 +195,7 @@ function CountrySelect({ value, onChange, placeholder, hasError, testId }: {
           </div>
         </div>
       )}
+      <Footer />
     </div>
   );
 }

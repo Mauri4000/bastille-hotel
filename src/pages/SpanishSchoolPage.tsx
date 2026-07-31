@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Footer from '../components/Footer';
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import {
@@ -140,6 +141,7 @@ function DatePicker({ selected, onChange }: { selected: string[]; onChange: (d: 
           </div>
         </div>
       )}
+      <Footer />
     </div>
   );
 }

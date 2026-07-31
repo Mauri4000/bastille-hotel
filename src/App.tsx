@@ -12,6 +12,7 @@ import GalleryPage from "./pages/GalleryPage";
 import ConferencePage from "./pages/ConferencePage";
 import RooftopPage from "./pages/RooftopPage";
 import SpanishSchoolPage from "./pages/SpanishSchoolPage";
+import Footer from "./components/Footer";
 import type { BookingFilters } from "./components/BookingSearch";
 
 // Admin
@@ -46,6 +47,7 @@ function HomePage() {
       <BookingSearch onChange={setFilters} />
       <Rooms filters={filters} />
       <Contact />
+      <Footer />
     </>
   );
 }

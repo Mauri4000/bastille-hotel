@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import Footer from '../components/Footer';
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, ChevronLeft, ChevronRight, ArrowLeft } from "lucide-react";
@@ -234,6 +235,7 @@ export default function GalleryPage() {
           </motion.div>
         )}
       </AnimatePresence>
+      <Footer />
     </div>
   );
 }

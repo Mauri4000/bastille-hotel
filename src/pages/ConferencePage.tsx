@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import Footer from '../components/Footer';
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Users, Monitor, Wifi, Coffee, Camera, DollarSign } from "lucide-react";
@@ -67,6 +68,7 @@ export default function ConferencePage() {
         <SkeletonBlock icon={Coffee}     title="Catering" />
         <SkeletonBlock icon={DollarSign} title="Tarifas" />
       </div>
+      <Footer />
     </div>
   );
 }

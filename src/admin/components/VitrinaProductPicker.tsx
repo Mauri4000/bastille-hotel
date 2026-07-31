@@ -19,7 +19,7 @@ export interface CartItem {
   product: VitrinaProduct;
   qty: number;
   total: number;
-  caja: 'CAJA MAYOR' | 'CUENTA BNB';
+  caja: 'CAJA MAYOR' | 'CUENTA BNB' | 'TARJETA';
 }
 
 interface Props {
@@ -86,7 +86,7 @@ export default function VitrinaProductPicker({ onConfirm, onClose, onPayNow }: P
     }));
   }
 
-  function updateCartCaja(productId: string, caja: 'CAJA MAYOR' | 'CUENTA BNB') {
+  function updateCartCaja(productId: string, caja: 'CAJA MAYOR' | 'CUENTA BNB' | 'TARJETA') {
     setCart(prev => prev.map(i => i.product.id === productId ? { ...i, caja } : i));
   }
 
@@ -250,6 +250,15 @@ export default function VitrinaProductPicker({ onConfirm, onClose, onPayNow }: P
                             : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
                         }`}>
                         QR
+                      </button>
+                      <button
+                        onClick={() => updateCartCaja(item.product.id, 'TARJETA')}
+                        className={`flex-1 text-[10px] font-semibold py-0.5 rounded transition-colors ${
+                          item.caja === 'TARJETA'
+                            ? 'bg-purple-500 text-white'
+                            : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                        }`}>
+                        Tarjeta
                       </button>
                     </div>
                   </div>

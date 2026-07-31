@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import Footer from '../components/Footer';
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Camera, UtensilsCrossed, Clock, CalendarCheck, Star, MapPin } from "lucide-react";
@@ -101,6 +102,7 @@ export default function RooftopPage() {
         <SkeletonBlock icon={Star}          title="Eventos especiales" />
         <SkeletonBlock icon={MapPin}        title="Cómo llegar" />
       </div>
+      <Footer />
     </div>
   );
 }
