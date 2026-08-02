@@ -467,8 +467,8 @@ export default function TransactionsPage() {
                       <th className={`${thCls} text-right`}>Ingreso</th>
                       <th className={`${thCls} text-right`}>Egreso</th>
                       <th className={`${thCls} text-right`}>Saldo</th>
-                      {activeTab !== 'chica' && isAdmin && <th className={`${thCls} text-right`}>Ingreso QR/Tarjeta</th>}
-                      {activeTab !== 'chica' && isAdmin && <th className={`${thCls} text-center`}>Tarj/QR</th>}
+                      {activeTab !== 'chica' && <th className={`${thCls} text-right`}>Ingreso QR/Tarjeta</th>}
+                      {activeTab !== 'chica' && <th className={`${thCls} text-center`}>Tarj/QR</th>}
                       {activeTab !== 'chica' && <th className={`${thCls} text-left`}>Habitación</th>}
                       {activeTab !== 'chica' && <th className={`${thCls} text-left`}>N° Factura</th>}
                       <th className={`${thCls} text-left w-full`}>Descripción</th>
@@ -512,8 +512,8 @@ export default function TransactionsPage() {
                                 : <span className={saldo >= 0 ? 'text-gray-800' : 'text-red-600'}>{saldo >= 0 ? '' : '−'}Bs. {fmt(Math.abs(saldo))}</span>
                             }
                           </td>
-                          {/* Ingreso QR/Tarjeta (mayor + all tabs, admin only) */}
-                          {activeTab !== 'chica' && isAdmin && (
+                          {/* Ingreso QR/Tarjeta (mayor + all tabs) */}
+                          {activeTab !== 'chica' && (
                             <td className={`${tdCls} text-right font-semibold text-indigo-600`}>
                               {(t.caja === 'CUENTA BNB' || t.caja === 'TARJETA') && t.type === 'ingreso'
                                 ? `Bs. ${fmt(t.amount)}`
@@ -521,8 +521,8 @@ export default function TransactionsPage() {
                               }
                             </td>
                           )}
-                          {/* Tarj/QR label (mayor + all tabs, admin only) */}
-                          {activeTab !== 'chica' && isAdmin && (
+                          {/* Tarj/QR label (mayor + all tabs) */}
+                          {activeTab !== 'chica' && (
                             <td className={`${tdCls} text-center`}>
                               {t.caja === 'CUENTA BNB'
                                 ? <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded">QR</span>
@@ -608,7 +608,7 @@ export default function TransactionsPage() {
                         </td>
                       )}
                       {activeTab !== 'chica' && isAdmin && <td className="border-r border-gray-200" />}
-                      <td colSpan={activeTab === 'chica' ? 2 : (isAdmin ? 4 : 6)} className="border-r border-gray-200" />
+                      <td colSpan={activeTab === 'chica' ? 2 : 4} className="border-r border-gray-200" />
                     </tr>
                   </tfoot>
                 </table>
