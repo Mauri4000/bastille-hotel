@@ -24,7 +24,7 @@ function daysInMonth(year: number, month: number) {
 
 // Room subtype options by room type keyword
 function subtypeOptions(roomType: string): string[] {
-  if (roomType.includes('S/M/F')) return ['Simple', 'Matrimonial', 'Doble', 'Familiar'];
+  if (roomType.includes('S/M/MC/F') || roomType.includes('S/M/F')) return ['Simple', 'Matrimonial', 'Doble', 'Matri más Camita', 'Familiar'];
   if (roomType.includes('DOBLE/FAM')) return ['Doble', 'Familiar'];
   if (roomType.includes('S/M')) return ['Simple', 'Matrimonial'];
   return [];

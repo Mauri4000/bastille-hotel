@@ -124,7 +124,6 @@ export default function LimpiezasPage() {
       const payload = {
         task_type:   popup.isRoom ? popupTask : null,
         assigned_to: popupStaffs.join(' & '),
-        updated_at:  new Date().toISOString(),
       };
 
       // Optimistic update — show immediately in grid
@@ -141,15 +140,26 @@ export default function LimpiezasPage() {
 
       // Persist
       if (existing) {
-        await supabase.from('cleaning_tasks').update(payload).eq('id', existing.id);
+        const { error } = await supabase.from('cleaning_tasks').update(payload).eq('id', existing.id);
+        if (error) {
+          console.error('Error updating cleaning task:', error);
+          alert('Error al guardar: ' + error.message);
+        }
       } else {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('cleaning_tasks')
           .insert({ date, row_key: popup.rowKey, ...payload })
           .select('id')
           .single();
-        // Replace temp id with real id
-        if (data) setTaskMap(prev => ({ ...prev, [key]: { ...prev[key], id: data.id } }));
+        if (error) {
+          console.error('Error inserting cleaning task:', error);
+          alert('Error al guardar: ' + error.message);
+          // Revert optimistic update on failure
+          setTaskMap(prev => { const n = { ...prev }; delete n[key]; return n; });
+        } else if (data) {
+          // Replace temp id with real id
+          setTaskMap(prev => ({ ...prev, [key]: { ...prev[key], id: data.id } }));
+        }
       }
     }
 

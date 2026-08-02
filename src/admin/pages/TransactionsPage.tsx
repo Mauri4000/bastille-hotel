@@ -24,6 +24,8 @@ const CAJA_COLOR: Record<CajaType, string> = {
   'TARJETA':    'bg-purple-100 text-purple-700',
 };
 
+type Tab = 'all' | 'mayor' | 'chica';
+
 const emptyForm = {
   date:        '',
   time:        '',
@@ -48,6 +50,12 @@ export default function TransactionsPage() {
   const [loading,      setLoading]      = useState(true);
   // room_id → siaat_number map (from reservations that have wants_invoice + siaat)
   const [siaatMap, setSiaatMap] = useState<Record<string, string>>({});
+
+  const isAdmin = profile?.role === 'admin';
+  const [activeTab, setActiveTab] = useState<Tab>('mayor');
+  useEffect(() => {
+    if (isAdmin) setActiveTab(t => t === 'mayor' ? 'all' : t);
+  }, [isAdmin]);
 
   // filters
   const [filterType,  setFilterType]  = useState<'all' | TransactionType>('all');
@@ -85,8 +93,8 @@ export default function TransactionsPage() {
         .select('*, profiles(name)')
         .gte('date', firstDay)
         .lte('date', lastDay)
-        .order('date', { ascending: false })
-        .order('created_at', { ascending: false }),
+        .order('date', { ascending: true })
+        .order('created_at', { ascending: true }),
       supabase
         .from('reservations')
         .select('id, siaat_number')
@@ -140,15 +148,32 @@ export default function TransactionsPage() {
   }, []);
 
   // ── computed ──
+  // Shift-reference rows (Guardar Inicial / Final from ShiftPage) — shown only in mayor/chica tabs,
+  // displayed in SALDO column as a reference value, excluded from all totals and running balance.
+  const isShiftRef = (t: Transaction) =>
+    t.description === 'INICIO DE CAJA' || t.description === 'FINAL DE CAJA';
+
+  // mayor tab: shows Efectivo + QR + Tarjeta (excludes Caja Chica)
+  // chica tab: shows only Caja Chica
+  // all tab:   shows everything (with dropdown caja filter), excluding shift-ref rows
   const filtered = transactions.filter(t => {
-    if (filterType !== 'all' && t.type !== filterType)     return false;
-    if (filterCaja !== 'all' && t.caja !== filterCaja)     return false;
-    if (filterCat  !== 'all' && t.category !== filterCat)  return false;
+    if (activeTab === 'all' && isShiftRef(t))                                       return false;
+    if (activeTab === 'mayor' && t.caja === 'CAJA CHICA')                          return false;
+    if (activeTab === 'chica' && t.caja !== 'CAJA CHICA')                          return false;
+    if (filterType !== 'all' && t.type !== filterType)                             return false;
+    if (activeTab === 'all' && filterCaja !== 'all' && t.caja !== filterCaja)      return false;
+    if (filterCat  !== 'all' && t.category !== filterCat)                          return false;
     return true;
   });
 
-  const totalIncome  = filtered.filter(t => t.type === 'ingreso').reduce((s, t) => s + t.amount, 0);
-  const totalExpense = filtered.filter(t => t.type === 'egreso').reduce((s, t) => s + t.amount, 0);
+  // Balance card on mayor tab shows cash (Efectivo) only — shift-ref rows excluded from totals
+  const filteredCash = (activeTab === 'mayor'
+    ? filtered.filter(t => t.caja === 'CAJA MAYOR')
+    : filtered
+  ).filter(t => !isShiftRef(t));
+
+  const totalIncome  = filteredCash.filter(t => t.type === 'ingreso').reduce((s, t) => s + t.amount, 0);
+  const totalExpense = filteredCash.filter(t => t.type === 'egreso').reduce((s, t) => s + t.amount, 0);
   const balance      = totalIncome - totalExpense;
 
   const categories = form.type === 'ingreso' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
@@ -267,7 +292,12 @@ export default function TransactionsPage() {
     else setMonth(m => m + 1);
   }
 
-  const fmtAmount = (n: number) => `Bs. ${n.toFixed(2)}`;
+  /** 1.234,56 — miles con punto, decimales con coma */
+  const fmt = (n: number): string => {
+    const [int, dec] = Math.abs(n).toFixed(2).split('.');
+    return int.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + dec;
+  };
+  const fmtAmount = (n: number) => `Bs. ${fmt(n)}`;
 
   return (
     <div className="space-y-5">
@@ -291,53 +321,92 @@ export default function TransactionsPage() {
         </div>
       </div>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingUp size={16} className="text-green-500" />
-            <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Ingresos</span>
-          </div>
-          <p className="text-2xl font-bold text-green-600">{fmtAmount(totalIncome)}</p>
-        </div>
-        <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingDown size={16} className="text-red-500" />
-            <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Egresos</span>
-          </div>
-          <p className="text-2xl font-bold text-red-500">{fmtAmount(totalExpense)}</p>
-        </div>
-        <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
-          <div className="flex items-center gap-2 mb-2">
-            <DollarSign size={16} className="text-amber-500" />
-            <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Balance</span>
-          </div>
-          <p className={`text-2xl font-bold ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
-            {fmtAmount(balance)}
-          </p>
-        </div>
+      {/* ── Spreadsheet-style tabs ── */}
+      <div className="flex items-center border-b-2 border-gray-200">
+        {([
+          ...(isAdmin ? [{ id: 'all' as Tab, emoji: '📊', label: `${MONTH_NAMES[month]} ${year}` }] : []),
+          { id: 'mayor' as Tab, emoji: '💵', label: 'Caja Mayor' },
+          { id: 'chica' as Tab, emoji: '🪙', label: 'Caja Chica' },
+        ]).map(({ id, emoji, label }) => (
+          <button
+            key={id}
+            onClick={() => { setActiveTab(id); setFilterCaja('all'); }}
+            className={`flex items-center gap-1.5 px-5 py-2.5 text-sm font-semibold border-b-2 -mb-0.5 transition-colors ${
+              activeTab === id
+                ? 'border-amber-400 text-gray-900'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            {emoji} {label}
+          </button>
+        ))}
       </div>
 
-      {/* Caja running balances */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {CAJAS.map(caja => {
-          const bal = balances[caja];
-          const isPos = bal >= 0;
-          const emoji = caja === 'CAJA MAYOR' ? '💵' : caja === 'CAJA CHICA' ? '🪙' : caja === 'CUENTA BNB' ? '📱' : '💳';
-          return (
-            <div key={caja} className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-base">{emoji}</span>
-                <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">{CAJA_LABEL[caja]}</span>
-              </div>
-              <p className={`text-xl font-bold ${isPos ? 'text-gray-900' : 'text-red-500'}`}>
-                {fmtAmount(bal)}
-              </p>
-              <p className="text-[11px] text-gray-400 mt-1">Saldo acumulado</p>
+      {/* Summary cards — only on "Todos" tab */}
+      {activeTab === 'all' && (
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp size={16} className="text-green-500" />
+              <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Ingresos</span>
             </div>
-          );
-        })}
-      </div>
+            <p className="text-2xl font-bold text-green-600">{fmtAmount(totalIncome)}</p>
+          </div>
+          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingDown size={16} className="text-red-500" />
+              <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Egresos</span>
+            </div>
+            <p className="text-2xl font-bold text-red-500">{fmtAmount(totalExpense)}</p>
+          </div>
+          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <DollarSign size={16} className="text-amber-500" />
+              <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Balance</span>
+            </div>
+            <p className={`text-2xl font-bold ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
+              {fmtAmount(balance)}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* All-time caja balances — only on "Todos" tab */}
+      {activeTab === 'all' && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {CAJAS.map(caja => {
+            const bal = balances[caja];
+            const isPos = bal >= 0;
+            const emoji = caja === 'CAJA MAYOR' ? '💵' : caja === 'CAJA CHICA' ? '🪙' : caja === 'CUENTA BNB' ? '📱' : '💳';
+            return (
+              <div key={caja} className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-base">{emoji}</span>
+                  <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">{CAJA_LABEL[caja]}</span>
+                </div>
+                <p className={`text-xl font-bold ${isPos ? 'text-gray-900' : 'text-red-500'}`}>
+                  {fmtAmount(bal)}
+                </p>
+                <p className="text-[11px] text-gray-400 mt-1">Saldo acumulado</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Big balance card — only on Caja Mayor / Caja Chica tabs */}
+      {activeTab !== 'all' && (
+        <div className="flex justify-center">
+          <div className="bg-white rounded-2xl px-12 py-8 border border-gray-100 shadow-sm text-center w-full max-w-md">
+            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-4">
+              Balance {MONTH_NAMES[month]} {year}
+            </p>
+            <p className={`text-5xl font-bold tracking-tight ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
+              {balance < 0 && '−'}Bs. {fmt(Math.abs(balance))}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
@@ -348,9 +417,11 @@ export default function TransactionsPage() {
         <CustomSelect size="sm" value={filterType} onChange={v => setFilterType(v as any)}
           options={[{ value:'all', label:'Todos' },{ value:'ingreso', label:'Ingresos' },{ value:'egreso', label:'Egresos' }]}
           placeholder="Todos" />
-        <CustomSelect size="sm" value={filterCaja} onChange={v => setFilterCaja(v as any)}
-          options={[{ value:'all', label:'Todas las cajas' }, ...CAJAS.map(c => ({ value: c, label: CAJA_LABEL[c] }))]}
-          placeholder="Todas las cajas" />
+        {activeTab === 'all' && (
+          <CustomSelect size="sm" value={filterCaja} onChange={v => setFilterCaja(v as any)}
+            options={[{ value:'all', label:'Todas las cajas' }, ...CAJAS.map(c => ({ value: c, label: CAJA_LABEL[c] }))]}
+            placeholder="Todas las cajas" />
+        )}
         <CustomSelect size="sm" value={filterCat} onChange={v => setFilterCat(v)}
           options={[
             { value:'all', label:'Todas las categorías' },
@@ -371,7 +442,10 @@ export default function TransactionsPage() {
         let run = 0;
         const balanceMap: Record<string, number> = {};
         for (const t of sortedAsc) {
-          run += t.type === 'ingreso' ? t.amount : -t.amount;
+          // Shift-ref rows (INICIADO / CIERRE) and QR/Tarjeta don't affect running saldo
+          if (!isShiftRef(t) && t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA') {
+            run += t.type === 'ingreso' ? t.amount : -t.amount;
+          }
           balanceMap[t.id] = run;
         }
 
@@ -399,9 +473,10 @@ export default function TransactionsPage() {
                       <th className={`${thCls} text-right`}>Ingreso</th>
                       <th className={`${thCls} text-right`}>Egreso</th>
                       <th className={`${thCls} text-right`}>Saldo</th>
-                      <th className={`${thCls} text-left`}>Caja</th>
-                      <th className={`${thCls} text-left`}>Habitación</th>
-                      <th className={`${thCls} text-left`}>N° Factura</th>
+                      {activeTab !== 'chica' && isAdmin && <th className={`${thCls} text-right`}>Ingreso QR/Tarjeta</th>}
+                      {activeTab !== 'chica' && isAdmin && <th className={`${thCls} text-center`}>Tarj/QR</th>}
+                      {activeTab !== 'chica' && <th className={`${thCls} text-left`}>Habitación</th>}
+                      {activeTab !== 'chica' && <th className={`${thCls} text-left`}>N° Factura</th>}
                       <th className={`${thCls} text-left w-full`}>Descripción</th>
                       <th className="px-2 py-3 border-r-0" />
                     </tr>
@@ -422,61 +497,84 @@ export default function TransactionsPage() {
                           </td>
                           {/* Ingreso */}
                           <td className={`${tdCls} text-right font-semibold text-green-600`}>
-                            {t.type === 'ingreso'
-                              ? `Bs. ${t.amount.toFixed(2)}`
+                            {!isShiftRef(t) && t.type === 'ingreso' && t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA'
+                              ? `Bs. ${fmt(t.amount)}`
                               : <span className="text-gray-300">—</span>
                             }
                           </td>
                           {/* Egreso */}
                           <td className={`${tdCls} text-right font-semibold text-red-500`}>
-                            {t.type === 'egreso'
-                              ? `Bs. ${t.amount.toFixed(2)}`
+                            {!isShiftRef(t) && t.type === 'egreso' && t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA'
+                              ? `Bs. ${fmt(t.amount)}`
                               : <span className="text-gray-300">—</span>
                             }
                           </td>
-                          {/* Saldo acumulado */}
-                          <td className={`${tdCls} text-right font-bold text-xs ${saldo >= 0 ? 'text-gray-800' : 'text-red-600'}`}>
-                            {saldo >= 0 ? '' : '−'}Bs. {Math.abs(saldo).toFixed(2)}
-                          </td>
-                          {/* Caja */}
-                          <td className={`${tdCls}`}>
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${CAJA_COLOR[t.caja as CajaType] ?? 'bg-gray-100 text-gray-600'}`}>
-                              {CAJA_LABEL[t.caja as CajaType] ?? t.caja}
-                            </span>
-                          </td>
-                          {/* Habitación */}
-                          <td className={`${tdCls}`}>
-                            {t.room_id
-                              ? <span className="font-semibold text-gray-800 bg-gray-100 px-2 py-0.5 rounded text-xs">{t.room_id}</span>
-                              : <span className="text-gray-300 text-xs">—</span>
+                          {/* Saldo: shift-ref rows show their own amount as reference; others show running balance */}
+                          <td className={`${tdCls} text-right font-bold text-xs`}>
+                            {isShiftRef(t)
+                              ? <span className="text-red-400 italic">Bs. {fmt(t.amount)}</span>
+                              : t.caja === 'CUENTA BNB' || t.caja === 'TARJETA'
+                                ? <span className="text-gray-300">—</span>
+                                : <span className={saldo >= 0 ? 'text-gray-800' : 'text-red-600'}>{saldo >= 0 ? '' : '−'}Bs. {fmt(Math.abs(saldo))}</span>
                             }
                           </td>
-                          {/* N° Factura */}
-                          <td className={`${tdCls}`}>
-                            {t.reservation_id && siaatMap[t.reservation_id]
-                              ? <span className="font-mono text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">{siaatMap[t.reservation_id]}</span>
-                              : <span className="text-gray-300 text-xs">—</span>
-                            }
-                          </td>
+                          {/* Ingreso QR/Tarjeta (mayor + all tabs, admin only) */}
+                          {activeTab !== 'chica' && isAdmin && (
+                            <td className={`${tdCls} text-right font-semibold text-indigo-600`}>
+                              {(t.caja === 'CUENTA BNB' || t.caja === 'TARJETA') && t.type === 'ingreso'
+                                ? `Bs. ${fmt(t.amount)}`
+                                : <span className="text-gray-300">—</span>
+                              }
+                            </td>
+                          )}
+                          {/* Tarj/QR label (mayor + all tabs, admin only) */}
+                          {activeTab !== 'chica' && isAdmin && (
+                            <td className={`${tdCls} text-center`}>
+                              {t.caja === 'CUENTA BNB'
+                                ? <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded">QR</span>
+                                : t.caja === 'TARJETA'
+                                ? <span className="bg-purple-100 text-purple-700 text-[10px] font-bold px-1.5 py-0.5 rounded">Tarj</span>
+                                : <span className="text-gray-300">—</span>
+                              }
+                            </td>
+                          )}
+                          {/* Habitación (mayor + all tabs) */}
+                          {activeTab !== 'chica' && (
+                            <td className={`${tdCls}`}>
+                              {t.room_id
+                                ? <span className="font-semibold text-gray-800 bg-gray-100 px-2 py-0.5 rounded text-xs">{t.room_id}</span>
+                                : <span className="text-gray-300 text-xs">—</span>
+                              }
+                            </td>
+                          )}
+                          {/* N° Factura (mayor + all tabs) */}
+                          {activeTab !== 'chica' && (
+                            <td className={`${tdCls}`}>
+                              {t.reservation_id && siaatMap[t.reservation_id]
+                                ? <span className="font-mono text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">{siaatMap[t.reservation_id]}</span>
+                                : <span className="text-gray-300 text-xs">—</span>
+                              }
+                            </td>
+                          )}
                           {/* Descripción — wide */}
                           <td className="px-3 py-2.5 text-gray-700 text-xs min-w-[260px] max-w-xs truncate border-r border-gray-200">
                             {t.description || <span className="text-gray-300">—</span>}
                           </td>
-                          {/* Actions */}
+                          {/* Actions — hidden for shift-ref rows (INICIO/FINAL DE CAJA) */}
                           <td className="px-2 py-2.5">
                             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                              <button
+                              {!isShiftRef(t) && <button
                                 onClick={() => openEdit(t)}
                                 className="p-1.5 rounded-lg text-gray-300 hover:text-blue-500 hover:bg-blue-50 transition-all"
                                 title="Editar"
                               >
                                 <Pencil size={13} />
-                              </button>
-                              <button
+                              </button>}
+                              {!isShiftRef(t) && <button
                                 onClick={() => setConfirmDialog({
                                   open: true,
                                   title: 'Eliminar movimiento',
-                                  body: `¿Eliminar "${t.description || t.category}" de Bs. ${t.amount.toFixed(2)}? Esta acción no se puede deshacer.`,
+                                  body: `¿Eliminar "${t.description || t.category}" de Bs. ${fmt(t.amount)}? Esta acción no se puede deshacer.`,
                                   onConfirm: async () => {
                                     await supabase.from('transactions').delete().eq('id', t.id);
                                     logActivity(profile?.id, profile?.name, t.type === 'ingreso' ? 'Ingreso eliminado' : 'Egreso eliminado', 'transaction', t.id, `${t.category} — Bs. ${t.amount} (${t.caja})`);
@@ -488,7 +586,7 @@ export default function TransactionsPage() {
                                 title="Eliminar"
                               >
                                 <Trash2 size={13} />
-                              </button>
+                              </button>}
                             </div>
                           </td>
                         </tr>
@@ -502,15 +600,21 @@ export default function TransactionsPage() {
                         Total ({filtered.length})
                       </td>
                       <td className="px-3 py-2.5 text-right font-bold text-green-600 text-sm border-r border-gray-200">
-                        Bs. {totalIncome.toFixed(2)}
+                        Bs. {fmt(totalIncome)}
                       </td>
                       <td className="px-3 py-2.5 text-right font-bold text-red-500 text-sm border-r border-gray-200">
-                        Bs. {totalExpense.toFixed(2)}
+                        Bs. {fmt(totalExpense)}
                       </td>
                       <td className={`px-3 py-2.5 text-right font-bold text-sm border-r border-gray-200 ${balance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
-                        {balance >= 0 ? '' : '−'}Bs. {Math.abs(balance).toFixed(2)}
+                        {balance >= 0 ? '' : '−'}Bs. {fmt(Math.abs(balance))}
                       </td>
-                      <td colSpan={5} className="border-r border-gray-200" />
+                      {activeTab !== 'chica' && isAdmin && (
+                        <td className="px-3 py-2.5 text-right font-bold text-indigo-600 text-sm border-r border-gray-200">
+                          Bs. {fmt(filtered.filter(t => (t.caja === 'CUENTA BNB' || t.caja === 'TARJETA') && t.type === 'ingreso').reduce((s, t) => s + t.amount, 0))}
+                        </td>
+                      )}
+                      {activeTab !== 'chica' && isAdmin && <td className="border-r border-gray-200" />}
+                      <td colSpan={activeTab === 'chica' ? 2 : (isAdmin ? 4 : 6)} className="border-r border-gray-200" />
                     </tr>
                   </tfoot>
                 </table>
@@ -629,18 +733,18 @@ export default function TransactionsPage() {
                         </div>
                         {sel.price_per_night > 0 && <>
                           <div className="flex justify-between text-gray-600">
-                            <span>Precio / noche</span><span>Bs. {sel.price_per_night.toFixed(2)}</span>
+                            <span>Precio / noche</span><span>Bs. {fmt(sel.price_per_night)}</span>
                           </div>
                           <div className="flex justify-between font-semibold text-gray-800 border-t border-blue-200 pt-1">
-                            <span>Total</span><span>Bs. {total.toFixed(2)}</span>
+                            <span>Total</span><span>Bs. {fmt(total)}</span>
                           </div>
                           {paidSoFar > 0 && (
                             <div className="flex justify-between text-green-700">
-                              <span>Ya pagado</span><span>− Bs. {paidSoFar.toFixed(2)}</span>
+                              <span>Ya pagado</span><span>− Bs. {fmt(paidSoFar)}</span>
                             </div>
                           )}
                           <div className="flex justify-between font-bold text-base border-t border-blue-200 pt-1 text-blue-700">
-                            <span>Saldo pendiente</span><span>Bs. {saldo.toFixed(2)}</span>
+                            <span>Saldo pendiente</span><span>Bs. {fmt(saldo)}</span>
                           </div>
                         </>}
                       </div>
