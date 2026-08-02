@@ -17,12 +17,6 @@ const CAJA_LABEL: Record<CajaType, string> = {
   'CUENTA BNB': 'QR',
   'TARJETA':    'Tarjeta',
 };
-const CAJA_COLOR: Record<CajaType, string> = {
-  'CAJA MAYOR': 'bg-green-100 text-green-700',
-  'CAJA CHICA': 'bg-yellow-100 text-yellow-700',
-  'CUENTA BNB': 'bg-blue-100 text-blue-700',
-  'TARJETA':    'bg-purple-100 text-purple-700',
-};
 
 type Tab = 'all' | 'mayor' | 'chica';
 
@@ -560,7 +554,7 @@ export default function TransactionsPage() {
                           <td className="px-3 py-2.5 text-gray-700 text-xs min-w-[260px] max-w-xs truncate border-r border-gray-200">
                             {t.description || <span className="text-gray-300">—</span>}
                           </td>
-                          {/* Actions — hidden for shift-ref rows (INICIO/FINAL DE CAJA) */}
+                          {/* Actions */}
                           <td className="px-2 py-2.5">
                             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
                               {!isShiftRef(t) && <button
@@ -570,7 +564,7 @@ export default function TransactionsPage() {
                               >
                                 <Pencil size={13} />
                               </button>}
-                              {!isShiftRef(t) && <button
+                              <button
                                 onClick={() => setConfirmDialog({
                                   open: true,
                                   title: 'Eliminar movimiento',
@@ -586,7 +580,7 @@ export default function TransactionsPage() {
                                 title="Eliminar"
                               >
                                 <Trash2 size={13} />
-                              </button>}
+                              </button>
                             </div>
                           </td>
                         </tr>

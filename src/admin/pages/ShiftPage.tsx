@@ -46,6 +46,12 @@ function isoToDisplay(s: string): string {
   return `${d}/${mo}/${y}`;
 }
 
+/** Extract HH:MM from an ISO timestamp in local time */
+function createdAtTime(ts: string): string {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
 function nowTime(): string {
   const n = new Date();
   return `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`;
@@ -338,7 +344,10 @@ export default function ShiftPage() {
                   const hasFinal  = finalSet.has(r.date);
                   return (
                     <tr key={r.id} className="hover:bg-gray-50/50 transition-colors">
-                      <td className={`${tdCls} text-gray-700 font-medium`}>{isoToDisplay(r.date)}</td>
+                      <td className={`${tdCls} text-gray-700 font-medium`}>
+                        <div>{isoToDisplay(r.date)}</div>
+                        <div className="text-xs text-gray-400 font-normal">{createdAtTime(r.created_at)}</div>
+                      </td>
                       <td className={tdCls}>
                         <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${shiftColor[r.shift]}`}>
                           {r.shift}
