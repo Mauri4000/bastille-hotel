@@ -18,7 +18,7 @@ const CAJA_LABEL: Record<CajaType, string> = {
   'TARJETA':    'Tarjeta',
 };
 
-type Tab = 'all' | 'mayor' | 'chica';
+type Tab = 'all' | 'mayor' | 'chica' | 'bnb' | 'bnb_eg';
 
 const emptyForm = {
   date:        '',
@@ -151,16 +151,22 @@ export default function TransactionsPage() {
   // chica tab: shows only Caja Chica
   // all tab:   shows everything (with dropdown caja filter), excluding shift-ref rows
   const filtered = transactions.filter(t => {
-    if (activeTab === 'all' && isShiftRef(t))                                       return false;
-    if (activeTab === 'mayor' && t.caja === 'CAJA CHICA')                          return false;
-    if (activeTab === 'chica' && t.caja !== 'CAJA CHICA')                          return false;
-    if (filterType !== 'all' && t.type !== filterType)                             return false;
+    if (activeTab === 'all'   && isShiftRef(t))                                                   return false;
+    if (activeTab === 'mayor' && t.caja === 'CAJA CHICA')                                        return false;
+    if (activeTab === 'chica' && t.caja !== 'CAJA CHICA')                                        return false;
+    if (activeTab === 'bnb'   && t.caja !== 'CUENTA BNB')                                        return false;
+    if (activeTab === 'bnb_eg' && (t.caja !== 'CUENTA BNB' || t.type !== 'egreso'))              return false;
+    // BNB egresos only appear in the BNB tabs — never in Caja Mayor or Agosto 2026
+    if (activeTab !== 'bnb' && activeTab !== 'bnb_eg' && t.caja === 'CUENTA BNB' && t.type === 'egreso') return false;
+    // Hide balance-forward SALDO QR entries from receptionists (admin-only reference rows)
+    if (!isAdmin && t.category === 'SALDO QR')                                                    return false;
+    if (filterType !== 'all' && t.type !== filterType)                                            return false;
     if (activeTab === 'all' && filterCaja !== 'all' && t.caja !== filterCaja)      return false;
     if (filterCat  !== 'all' && t.category !== filterCat)                          return false;
     return true;
   });
 
-  // Balance card on mayor tab shows cash (Efectivo) only — shift-ref rows excluded from totals
+  // Balance card: mayor→CAJA MAYOR only; bnb→CUENTA BNB only; others→all — shift-ref excluded
   const filteredCash = (activeTab === 'mayor'
     ? filtered.filter(t => t.caja === 'CAJA MAYOR')
     : filtered
@@ -321,6 +327,8 @@ export default function TransactionsPage() {
           ...(isAdmin ? [{ id: 'all' as Tab, emoji: '📊', label: `${MONTH_NAMES[month]} ${year}` }] : []),
           { id: 'mayor' as Tab, emoji: '💵', label: 'Caja Mayor' },
           { id: 'chica' as Tab, emoji: '🪙', label: 'Caja Chica' },
+          { id: 'bnb_eg' as Tab, emoji: '💳', label: 'Egresos BNB' },
+          ...(isAdmin ? [{ id: 'bnb' as Tab, emoji: '🏦', label: 'BNB Mauri' }] : []),
         ]).map(({ id, emoji, label }) => (
           <button
             key={id}
@@ -388,12 +396,12 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {/* Big balance card — only on Caja Mayor / Caja Chica tabs */}
+      {/* Big balance card — only on Caja Mayor / Caja Chica / BNB tabs */}
       {activeTab !== 'all' && (
         <div className="flex justify-center">
           <div className="bg-white rounded-2xl px-12 py-8 border border-gray-100 shadow-sm text-center w-full max-w-md">
             <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-4">
-              Balance {MONTH_NAMES[month]} {year}
+              {activeTab === 'bnb' ? `BNB Mauri · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_eg' ? `Egresos BNB · ${MONTH_NAMES[month]} ${year}` : `Balance ${MONTH_NAMES[month]} ${year}`}
             </p>
             <p className={`text-5xl font-bold tracking-tight ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
               {balance < 0 && '−'}Bs. {fmt(Math.abs(balance))}
@@ -436,8 +444,9 @@ export default function TransactionsPage() {
         let run = 0;
         const balanceMap: Record<string, number> = {};
         for (const t of sortedAsc) {
-          // Shift-ref rows (INICIADO / CIERRE) and QR/Tarjeta don't affect running saldo
-          if (!isShiftRef(t) && t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA') {
+          // Shift-ref rows don't affect running saldo
+          // On BNB/bnb_eg tabs, include CUENTA BNB in the running balance; otherwise skip QR/Tarjeta
+          if (!isShiftRef(t) && (activeTab === 'bnb' || activeTab === 'bnb_eg' || (t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA'))) {
             run += t.type === 'ingreso' ? t.amount : -t.amount;
           }
           balanceMap[t.id] = run;
@@ -467,10 +476,10 @@ export default function TransactionsPage() {
                       <th className={`${thCls} text-right`}>Ingreso</th>
                       <th className={`${thCls} text-right`}>Egreso</th>
                       <th className={`${thCls} text-right`}>Saldo</th>
-                      {activeTab !== 'chica' && <th className={`${thCls} text-right`}>Ingreso QR/Tarjeta</th>}
-                      {activeTab !== 'chica' && <th className={`${thCls} text-center`}>Tarj/QR</th>}
-                      {activeTab !== 'chica' && <th className={`${thCls} text-left`}>Habitación</th>}
-                      {activeTab !== 'chica' && <th className={`${thCls} text-left`}>N° Factura</th>}
+                      {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && <th className={`${thCls} text-right`}>Ingreso QR/Tarjeta</th>}
+                      {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && <th className={`${thCls} text-center`}>Tarj/QR</th>}
+                      {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && <th className={`${thCls} text-left`}>Habitación</th>}
+                      {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && <th className={`${thCls} text-left`}>N° Factura</th>}
                       <th className={`${thCls} text-left w-full`}>Descripción</th>
                       <th className="px-2 py-3 border-r-0" />
                     </tr>
@@ -490,15 +499,15 @@ export default function TransactionsPage() {
                             {(t.profiles as any)?.name ?? '—'}
                           </td>
                           {/* Ingreso */}
-                          <td className={`${tdCls} text-right font-semibold text-green-600`}>
-                            {!isShiftRef(t) && t.type === 'ingreso' && t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA'
+                          <td className={`${tdCls} text-right font-semibold ${activeTab === 'bnb' ? 'text-indigo-600' : 'text-green-600'}`}>
+                            {!isShiftRef(t) && t.type === 'ingreso' && (activeTab === 'bnb' || activeTab === 'bnb_eg' || (t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA'))
                               ? `Bs. ${fmt(t.amount)}`
                               : <span className="text-gray-300">—</span>
                             }
                           </td>
                           {/* Egreso */}
                           <td className={`${tdCls} text-right font-semibold text-red-500`}>
-                            {!isShiftRef(t) && t.type === 'egreso' && t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA'
+                            {!isShiftRef(t) && t.type === 'egreso' && (activeTab === 'bnb' || activeTab === 'bnb_eg' || (t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA'))
                               ? `Bs. ${fmt(t.amount)}`
                               : <span className="text-gray-300">—</span>
                             }
@@ -507,13 +516,13 @@ export default function TransactionsPage() {
                           <td className={`${tdCls} text-right font-bold text-xs`}>
                             {isShiftRef(t)
                               ? <span className="text-red-400 italic">Bs. {fmt(t.amount)}</span>
-                              : t.caja === 'CUENTA BNB' || t.caja === 'TARJETA'
+                              : (t.caja === 'CUENTA BNB' && activeTab !== 'bnb' && activeTab !== 'bnb_eg') || t.caja === 'TARJETA'
                                 ? <span className="text-gray-300">—</span>
                                 : <span className={saldo >= 0 ? 'text-gray-800' : 'text-red-600'}>{saldo >= 0 ? '' : '−'}Bs. {fmt(Math.abs(saldo))}</span>
                             }
                           </td>
-                          {/* Ingreso QR/Tarjeta (mayor + all tabs) */}
-                          {activeTab !== 'chica' && (
+                          {/* Ingreso QR/Tarjeta (mayor + all tabs only) */}
+                          {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && (
                             <td className={`${tdCls} text-right font-semibold text-indigo-600`}>
                               {(t.caja === 'CUENTA BNB' || t.caja === 'TARJETA') && t.type === 'ingreso'
                                 ? `Bs. ${fmt(t.amount)}`
@@ -521,8 +530,8 @@ export default function TransactionsPage() {
                               }
                             </td>
                           )}
-                          {/* Tarj/QR label (mayor + all tabs) */}
-                          {activeTab !== 'chica' && (
+                          {/* Tarj/QR label (mayor + all tabs only) */}
+                          {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && (
                             <td className={`${tdCls} text-center`}>
                               {t.caja === 'CUENTA BNB'
                                 ? <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded">QR</span>
@@ -532,8 +541,8 @@ export default function TransactionsPage() {
                               }
                             </td>
                           )}
-                          {/* Habitación (mayor + all tabs) */}
-                          {activeTab !== 'chica' && (
+                          {/* Habitación (mayor + all tabs only) */}
+                          {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && (
                             <td className={`${tdCls}`}>
                               {t.room_id
                                 ? <span className="font-semibold text-gray-800 bg-gray-100 px-2 py-0.5 rounded text-xs">{t.room_id}</span>
@@ -541,8 +550,8 @@ export default function TransactionsPage() {
                               }
                             </td>
                           )}
-                          {/* N° Factura (mayor + all tabs) */}
-                          {activeTab !== 'chica' && (
+                          {/* N° Factura (mayor + all tabs only) */}
+                          {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && (
                             <td className={`${tdCls}`}>
                               {t.reservation_id && siaatMap[t.reservation_id]
                                 ? <span className="font-mono text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">{siaatMap[t.reservation_id]}</span>
@@ -602,13 +611,13 @@ export default function TransactionsPage() {
                       <td className={`px-3 py-2.5 text-right font-bold text-sm border-r border-gray-200 ${balance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
                         {balance >= 0 ? '' : '−'}Bs. {fmt(Math.abs(balance))}
                       </td>
-                      {activeTab !== 'chica' && isAdmin && (
+                      {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && isAdmin && (
                         <td className="px-3 py-2.5 text-right font-bold text-indigo-600 text-sm border-r border-gray-200">
                           Bs. {fmt(filtered.filter(t => (t.caja === 'CUENTA BNB' || t.caja === 'TARJETA') && t.type === 'ingreso').reduce((s, t) => s + t.amount, 0))}
                         </td>
                       )}
-                      {activeTab !== 'chica' && isAdmin && <td className="border-r border-gray-200" />}
-                      <td colSpan={activeTab === 'chica' ? 2 : 4} className="border-r border-gray-200" />
+                      {activeTab !== 'chica' && activeTab !== 'bnb' && activeTab !== 'bnb_eg' && isAdmin && <td className="border-r border-gray-200" />}
+                      <td colSpan={activeTab === 'chica' || activeTab === 'bnb' || activeTab === 'bnb_eg' ? 2 : 4} className="border-r border-gray-200" />
                     </tr>
                   </tfoot>
                 </table>

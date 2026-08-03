@@ -40,6 +40,8 @@ export const EXPENSE_CATEGORIES = [
   'B15-CONSTRUCCIÓN TERRAZA',
   'GASTOS FAMILIARES',
   'RETIROS DOÑA SONIA',
+  'DEUDAS MAURI',
+  'ESCUELA ESPAÑOL',
 ] as const;
 
 export const STATUS_CONFIG: Record<

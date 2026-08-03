@@ -197,29 +197,37 @@ export default function CalendarPage() {
 
   // Nota modal (existing cards — all rooms)
   const [notaModal, setNotaModal] = useState<{ res: Reservation; text: string } | null>(null);
+  const [notaError, setNotaError] = useState('');
   async function handleSaveNota() {
     if (!notaModal) return;
-    await supabase.from('reservations').update({ notes: notaModal.text || null, updated_at: new Date().toISOString() }).eq('id', notaModal.res.id);
+    setNotaError('');
+    const { error } = await supabase
+      .from('reservations')
+      .update({ notes: notaModal.text || null })
+      .eq('id', notaModal.res.id);
+    if (error) { setNotaError('Error: ' + error.message); return; }
     setNotaModal(null);
     fetchData();
   }
 
   // Quick nota modal (from empty cell — creates a 1-day placeholder)
   const [quickNotaModal, setQuickNotaModal] = useState<{ roomId: string; day: number; text: string } | null>(null);
+  const [quickNotaError, setQuickNotaError] = useState('');
   async function handleSaveQuickNota() {
     if (!quickNotaModal) return;
+    setQuickNotaError('');
     const date = toDateStr(new Date(year, month, quickNotaModal.day));
     const next = toDateStr(new Date(year, month, quickNotaModal.day + 1));
-    await supabase.from('reservations').insert({
-      room_id: quickNotaModal.roomId,
+    const { error } = await supabase.from('reservations').insert({
+      room_id:    quickNotaModal.roomId,
       guest_name: '📝 Nota',
       num_guests: 0,
-      check_in: date,
-      check_out: next,
-      status: 'habilitacion' as ReservationStatus,
-      notes: quickNotaModal.text,
-      updated_at: new Date().toISOString(),
+      check_in:   date,
+      check_out:  next,
+      status:     'reserva' as ReservationStatus,
+      notes:      quickNotaModal.text,
     });
+    if (error) { setQuickNotaError('Error: ' + error.message); return; }
     setQuickNotaModal(null);
     fetchData();
   }
@@ -1434,7 +1442,10 @@ export default function CalendarPage() {
                   {/* Day cells */}
                   {days.map(d => {
                     const res = cellMap[room.id]?.[d];
-                    const cfg = res ? STATUS_CONFIG[res.status] : null;
+                    const isNota = res?.guest_name?.startsWith('📝');
+                    const cfg = isNota
+                      ? { bg: 'bg-red-500', text: 'text-white', border: 'border-red-600', label: 'Nota', dot: 'bg-red-500' }
+                      : res ? STATUS_CONFIG[res.status] : null;
                     const dateStr = toDateStr(new Date(year, month, d));
 
                     // Determine cell role in the reservation span
@@ -1482,7 +1493,11 @@ export default function CalendarPage() {
                                 : 'hover:opacity-80 cursor-pointer'
                             }`}
                           >
-                            {res.status === 'mantenimiento' ? (
+                            {isNota ? (
+                              <div className="text-[10px] font-bold leading-tight break-words">
+                                📝 {(res as any).notes || 'Nota'}
+                              </div>
+                            ) : res.status === 'mantenimiento' ? (
                               <div className="text-xs font-bold leading-tight break-words">
                                 🔧 {(res as any).notes || 'Mantenimiento'}
                               </div>
@@ -3129,15 +3144,16 @@ export default function CalendarPage() {
               <h3 className="font-bold text-gray-900">📝 Agregar nota — {quickNotaModal.roomId}</h3>
               <button onClick={() => setQuickNotaModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
             </div>
-            <div className="px-6 py-5">
+            <div className="px-6 py-5 space-y-2">
               <textarea
                 autoFocus
                 value={quickNotaModal.text}
-                onChange={e => setQuickNotaModal(n => n ? { ...n, text: e.target.value } : n)}
+                onChange={e => { setQuickNotaError(''); setQuickNotaModal(n => n ? { ...n, text: e.target.value } : n); }}
                 rows={3}
                 placeholder="Escribe una nota para este día..."
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
               />
+              {quickNotaError && <p className="text-red-500 text-xs">{quickNotaError}</p>}
             </div>
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
               <button onClick={() => setQuickNotaModal(null)}
@@ -3719,15 +3735,16 @@ export default function CalendarPage() {
               </div>
               <button onClick={() => setNotaModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
             </div>
-            <div className="px-6 py-5">
+            <div className="px-6 py-5 space-y-2">
               <textarea
                 rows={4}
                 value={notaModal.text}
-                onChange={e => setNotaModal(m => m ? { ...m, text: e.target.value } : m)}
+                onChange={e => { setNotaError(''); setNotaModal(m => m ? { ...m, text: e.target.value } : m); }}
                 placeholder="Escribe una nota para este día..."
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
                 autoFocus
               />
+              {notaError && <p className="text-red-500 text-xs">{notaError}</p>}
             </div>
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
               <button onClick={() => setNotaModal(null)}
