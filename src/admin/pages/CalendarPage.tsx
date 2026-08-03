@@ -312,6 +312,9 @@ export default function CalendarPage() {
   // Calendar hover highlight
   const [hoveredCell, setHoveredCell] = useState<{ roomId: string; day: number } | null>(null);
 
+  // Note tooltip (Excel-style hover)
+  const [noteTooltip, setNoteTooltip] = useState<{ notes: string; x: number; y: number } | null>(null);
+
   // Pagos Pendientes panel
   const [pagosOpen, setPagosOpen] = useState(false);
   type PagoRow = { res: Reservation; total: number; paid: number; pending: number; vitrinaItems: PendingVitrinaItem[]; vitrinaTotal: number };
@@ -1475,8 +1478,14 @@ export default function CalendarPage() {
                         {res ? (
                           <div
                             className={`relative w-full h-full group ${selectMode && selectedType && selectedType !== res.status ? 'opacity-30' : ''}`}
-                            onMouseEnter={() => setHoveredCell({ roomId: room.id, day: d })}
-                            onMouseLeave={() => setHoveredCell(null)}
+                            onMouseEnter={e => {
+                              setHoveredCell({ roomId: room.id, day: d });
+                              if (!isNota && (res as any).notes) {
+                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setNoteTooltip({ notes: (res as any).notes, x: rect.right + 8, y: rect.top });
+                              }
+                            }}
+                            onMouseLeave={() => { setHoveredCell(null); setNoteTooltip(null); }}
                           >
                           <button
                             onClick={e => {
@@ -1564,6 +1573,14 @@ export default function CalendarPage() {
                               </>
                             )}
                           </button>
+
+                          {/* ── Note indicator (Excel-style corner triangle) ── */}
+                          {!isNota && (res as any).notes && (
+                            <div
+                              className="absolute top-0 right-0 w-0 h-0 pointer-events-none z-10"
+                              style={{ borderTop: '9px solid #facc15', borderLeft: '9px solid transparent' }}
+                            />
+                          )}
 
                           {/* ── Selection checkmark ── */}
                           {selectMode && isCheckIn && (
@@ -2987,6 +3004,19 @@ export default function CalendarPage() {
                 ✓ Check out
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Note tooltip (Excel-style, fixed positioned) ── */}
+      {noteTooltip && (
+        <div
+          className="fixed z-[600] pointer-events-none"
+          style={{ top: noteTooltip.y, left: noteTooltip.x }}
+        >
+          <div className="bg-yellow-50 border border-yellow-300 rounded-lg shadow-xl px-3 py-2 max-w-[240px]">
+            <div className="text-[10px] font-bold text-yellow-700 mb-1 uppercase tracking-wide">📝 Nota</div>
+            <p className="text-xs text-gray-800 leading-relaxed whitespace-pre-wrap">{noteTooltip.notes}</p>
           </div>
         </div>
       )}
