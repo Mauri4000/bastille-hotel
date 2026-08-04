@@ -100,6 +100,9 @@ const emptyForm = {
   num_nights:        1,
   // Empresa
   empresa_name:      '',
+  // Adelanto
+  adelanto:          '',
+  adelanto_caja:     'CAJA MAYOR' as string,
   // SALON fields
   start_time:        '',
   end_time:          '',
@@ -488,7 +491,7 @@ export default function CalendarPage() {
     const lastDay  = `${year}-${String(month + 1).padStart(2,'0')}-${String(daysInMonth(year, month)).padStart(2,'0')}`;
 
     const { data: roomData, error: roomErr } = await supabase
-      .from('rooms').select('*').order('id');
+      .from('rooms').select('*').eq('is_active', true).order('id');
 
     if (roomErr) {
       setFetchError(`Error cargando habitaciones: ${roomErr.message} (${roomErr.code})`);
@@ -734,7 +737,7 @@ export default function CalendarPage() {
         : form.guest_name.trim(),
       num_guests:      form.num_guests,
       check_in:        form.check_in,
-      check_out:       isSalon ? form.check_in : form.check_out,
+      check_out:       isSalon ? (form.check_out || form.check_in) : form.check_out,
       status:          form.status,
       room_subtype:    !isSalon && form.room_subtype ? form.room_subtype : null,
       arrival_time:    !isSalon && form.arrival_time   ? form.arrival_time   : null,
@@ -777,12 +780,36 @@ export default function CalendarPage() {
       updated_at:      new Date().toISOString(),
     };
 
-    const { error } = editingId
-      ? await supabase.from('reservations').update(payload).eq('id', editingId)
-      : await supabase.from('reservations').insert(payload);
+    let savedId = editingId;
+    if (editingId) {
+      const { error } = await supabase.from('reservations').update(payload).eq('id', editingId);
+      setSaving(false);
+      if (error) { setFormError('Error al guardar: ' + error.message); return; }
+    } else {
+      const { data: ins, error } = await supabase.from('reservations').insert(payload).select('id').single();
+      setSaving(false);
+      if (error) { setFormError('Error al guardar: ' + error.message); return; }
+      savedId = ins?.id ?? null;
+    }
 
-    setSaving(false);
-    if (error) { setFormError('Error al guardar: ' + error.message); return; }
+    // Register adelanto transaction if provided
+    const adelantoAmt = parseFloat(form.adelanto || '0');
+    if (adelantoAmt > 0) {
+      const todayLocal = new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+      await supabase.from('transactions').insert({
+        date:           form.check_in || todayLocal,
+        time:           null,
+        description:    `Adelanto pagado — ${resolvedName}`,
+        amount:         adelantoAmt,
+        type:           'ingreso',
+        category:       isSalon ? 'H02-ALQUILER DE SALÓN' : 'H01-HOSPEDAJE',
+        caja:           form.adelanto_caja,
+        room_id:        form.room_id || null,
+        reservation_id: savedId,
+        responsible_id: profile?.id ?? null,
+      });
+    }
+
     logActivity(profile?.id, profile?.name, editingId ? 'Reserva editada' : 'Reserva creada', 'reservation', editingId ?? undefined, `${form.room_id} — ${resolvedName} (${form.check_in} → ${form.check_out})`);
 
     setModalOpen(false);
@@ -1717,27 +1744,38 @@ export default function CalendarPage() {
                     />
                   </div>
 
-                  {/* Fecha + N° personas */}
+                  {/* Fecha inicio → Fecha fin */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Fecha *</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Fecha inicio *</label>
                       <DatePicker
                         value={form.check_in}
-                        onChange={v => setForm(f => ({ ...f, check_in: v, check_out: v }))}
-                        placeholder="Fecha del evento"
+                        onChange={v => setForm(f => ({ ...f, check_in: v }))}
+                        placeholder="Inicio del evento"
                         accentClass="border-indigo-400 ring-indigo-100"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">N° personas</label>
-                      <input
-                        type="number"
-                        min={1} max={100}
-                        value={form.num_guests}
-                        onChange={e => setForm(f => ({ ...f, num_guests: parseInt(e.target.value) || 1 }))}
-                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:border-indigo-400 focus:ring-indigo-100"
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Fecha fin</label>
+                      <DatePicker
+                        value={form.check_out}
+                        onChange={v => setForm(f => ({ ...f, check_out: v }))}
+                        placeholder="Fin (opcional)"
+                        accentClass="border-indigo-400 ring-indigo-100"
                       />
                     </div>
+                  </div>
+
+                  {/* N° personas */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">N° personas</label>
+                    <input
+                      type="number"
+                      min={1} max={100}
+                      value={form.num_guests}
+                      onChange={e => setForm(f => ({ ...f, num_guests: parseInt(e.target.value) || 1 }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:border-indigo-400 focus:ring-indigo-100"
+                    />
                   </div>
 
                   {/* Hora inicio → Hora fin */}
@@ -1775,6 +1813,29 @@ export default function CalendarPage() {
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
                       placeholder="0.00"
                     />
+                  </div>
+
+                  {/* Adelanto */}
+                  <div className="rounded-xl border border-green-200 bg-green-50 p-3 space-y-2">
+                    <label className="block text-sm font-semibold text-green-800">💵 Adelanto (opcional)</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="number" min={0} step={0.01}
+                        value={form.adelanto}
+                        onChange={e => setForm(f => ({ ...f, adelanto: e.target.value }))}
+                        className="w-full border border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 bg-white"
+                        placeholder="0.00"
+                      />
+                      <select
+                        value={form.adelanto_caja}
+                        onChange={e => setForm(f => ({ ...f, adelanto_caja: e.target.value }))}
+                        className="w-full border border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 bg-white"
+                      >
+                        <option value="CAJA MAYOR">Efectivo</option>
+                        <option value="CUENTA BNB">QR</option>
+                        <option value="TARJETA">Tarjeta</option>
+                      </select>
+                    </div>
                   </div>
 
                   {/* Catering */}
@@ -1993,6 +2054,29 @@ export default function CalendarPage() {
                         );
                       })()}
 
+                      {/* Adelanto */}
+                      <div className="rounded-xl border border-green-200 bg-green-50 p-3 space-y-2">
+                        <label className="block text-sm font-semibold text-green-800">💵 Adelanto (opcional)</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="number" min={0} step={0.01}
+                            value={form.adelanto}
+                            onChange={e => setForm(f => ({ ...f, adelanto: e.target.value }))}
+                            className="w-full border border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 bg-white"
+                            placeholder="0.00"
+                          />
+                          <select
+                            value={form.adelanto_caja}
+                            onChange={e => setForm(f => ({ ...f, adelanto_caja: e.target.value }))}
+                            className="w-full border border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 bg-white"
+                          >
+                            <option value="CAJA MAYOR">Efectivo</option>
+                            <option value="CUENTA BNB">QR</option>
+                            <option value="TARJETA">Tarjeta</option>
+                          </select>
+                        </div>
+                      </div>
+
                       {/* Mascota */}
                       <button type="button"
                         onClick={() => setForm(f => ({ ...f, has_pet: !f.has_pet }))}
@@ -2075,6 +2159,29 @@ export default function CalendarPage() {
                           </div>
                         );
                       })()}
+
+                      {/* Adelanto */}
+                      <div className="rounded-xl border border-green-200 bg-green-50 p-3 space-y-2">
+                        <label className="block text-sm font-semibold text-green-800">💵 Adelanto (opcional)</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="number" min={0} step={0.01}
+                            value={form.adelanto}
+                            onChange={e => setForm(f => ({ ...f, adelanto: e.target.value }))}
+                            className="w-full border border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 bg-white"
+                            placeholder="0.00"
+                          />
+                          <select
+                            value={form.adelanto_caja}
+                            onChange={e => setForm(f => ({ ...f, adelanto_caja: e.target.value }))}
+                            className="w-full border border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 bg-white"
+                          >
+                            <option value="CAJA MAYOR">Efectivo</option>
+                            <option value="CUENTA BNB">QR</option>
+                            <option value="TARJETA">Tarjeta</option>
+                          </select>
+                        </div>
+                      </div>
 
                       {/* Estado */}
                       <div className="grid grid-cols-2 gap-3">

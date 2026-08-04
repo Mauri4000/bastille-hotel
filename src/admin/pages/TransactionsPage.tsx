@@ -160,6 +160,8 @@ export default function TransactionsPage() {
     if (activeTab !== 'bnb' && activeTab !== 'bnb_eg' && t.caja === 'CUENTA BNB' && t.type === 'egreso') return false;
     // Hide balance-forward SALDO QR entries from receptionists (admin-only reference rows)
     if (!isAdmin && t.category === 'SALDO QR')                                                    return false;
+    // Hide payroll from receptionists
+    if (!isAdmin && t.category === 'B05-SUELDOS Y SALARIOS')                                      return false;
     if (filterType !== 'all' && t.type !== filterType)                                            return false;
     if (activeTab === 'all' && filterCaja !== 'all' && t.caja !== filterCaja)      return false;
     if (filterCat  !== 'all' && t.category !== filterCat)                          return false;
@@ -176,7 +178,8 @@ export default function TransactionsPage() {
   const totalExpense = filteredCash.filter(t => t.type === 'egreso').reduce((s, t) => s + t.amount, 0);
   const balance      = totalIncome - totalExpense;
 
-  const categories = form.type === 'ingreso' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+  const categories = (form.type === 'ingreso' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES)
+    .filter((c: string) => isAdmin || c !== 'B05-SUELDOS Y SALARIOS');
 
   // ── open modal (new) ──
   function openNew() {
