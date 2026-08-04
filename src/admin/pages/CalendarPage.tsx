@@ -680,6 +680,8 @@ export default function CalendarPage() {
       guest_origin:         r.guest_origin         ?? '',
       guest_next_dest:      r.guest_next_dest      ?? '',
       guest_transport:      r.guest_transport      ?? '',
+      adelanto:             '',
+      adelanto_caja:        'CAJA MAYOR',
     });
     const allGuestData = (r.additional_guests ?? []) as any[];
     setAdditionalGuests(allGuestData.filter((g: any) => !g.role || g.role === 'adult') as AdditionalGuest[]);
