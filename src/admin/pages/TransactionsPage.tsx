@@ -160,8 +160,8 @@ export default function TransactionsPage() {
     if (activeTab !== 'bnb' && activeTab !== 'bnb_eg' && t.caja === 'CUENTA BNB' && t.type === 'egreso') return false;
     // Hide balance-forward SALDO QR entries from receptionists (admin-only reference rows)
     if (!isAdmin && t.category === 'SALDO QR')                                                    return false;
-    // Hide payroll from receptionists
-    if (!isAdmin && t.category === 'B05-SUELDOS Y SALARIOS')                                      return false;
+    // Payroll: receptionists see cash payments (affects their register) but not other payment methods
+    if (!isAdmin && t.category === 'B05-SUELDOS Y SALARIOS' && t.caja !== 'CAJA MAYOR' && t.caja !== 'CAJA CHICA') return false;
     if (filterType !== 'all' && t.type !== filterType)                                            return false;
     if (activeTab === 'all' && filterCaja !== 'all' && t.caja !== filterCaja)      return false;
     if (filterCat  !== 'all' && t.category !== filterCat)                          return false;

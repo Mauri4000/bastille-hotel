@@ -1467,7 +1467,10 @@ export default function CalendarPage() {
                   <td style={{ width: ROOM_W, minWidth: ROOM_W }} className={`sticky left-0 z-10 border-r-2 border-b border-gray-300 px-2 md:px-4 py-1 md:py-2 transition-colors ${
                     hoveredCell?.roomId === room.id ? 'bg-amber-50' : ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
                   }`}>
-                    <div className={`font-bold text-xs md:text-sm transition-colors ${hoveredCell?.roomId === room.id ? 'text-amber-700' : 'text-gray-900'}`}>{room.id}</div>
+                    <div className={`font-bold text-xs md:text-sm transition-colors flex items-center gap-1 ${hoveredCell?.roomId === room.id ? 'text-amber-700' : 'text-gray-900'}`}>
+                      {room.id}
+                      {/^A\d/.test(room.id) && <span title="Ducha eléctrica" className="text-[11px]">🚿⚡</span>}
+                    </div>
                     <div className="hidden md:block text-xs text-gray-400 truncate mt-0.5">{room.type}</div>
                   </td>
 
