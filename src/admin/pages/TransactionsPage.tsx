@@ -160,7 +160,7 @@ export default function TransactionsPage() {
     // Personal BNB (admin-only): CUENTA BNB payroll egresos only
     if (activeTab === 'bnb_personal' && (t.caja !== 'CUENTA BNB' || t.type !== 'egreso' || t.category !== 'B05-SUELDOS Y SALARIOS')) return false;
     // CUENTA BNB egresos only appear in BNB tabs — never in Caja Mayor / Agosto 2026
-    if (activeTab !== 'bnb' && activeTab !== 'bnb_eg' && activeTab !== 'bnb_personal' && activeTab !== 'bnb_personal' && t.caja === 'CUENTA BNB' && t.type === 'egreso') return false;
+    if (activeTab !== 'bnb' && activeTab !== 'bnb_eg' && t.caja === 'CUENTA BNB' && t.type === 'egreso') return false;
     // Hide balance-forward SALDO QR entries from receptionists (admin-only reference rows)
     if (!isAdmin && t.category === 'SALDO QR')                                                    return false;
     // CUENTA BNB payroll is admin-only (handled by bnb_personal tab) — receptionists see all cash payroll
