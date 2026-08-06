@@ -927,6 +927,7 @@ export default function CalendarPage() {
       guest_next_dest:      confirmModal.guest_next_dest      || null,
       guest_transport:      confirmModal.guest_transport      || null,
       additional_guests:    confirmAdditionalGuests,
+      num_guests:           1 + confirmAdditionalGuests.length,
       updated_at:           new Date().toISOString(),
     }).eq('id', confirmModal.res.id);
     logActivity(profile?.id, profile?.name, 'Llegada confirmada', 'reservation', confirmModal.res.id, `${confirmModal.res.room_id} — ${confirmModal.guest_name_edit || confirmModal.res.guest_name}`);
