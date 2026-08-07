@@ -52,9 +52,10 @@ export default function TransactionsPage() {
   }, [isAdmin]);
 
   // filters
-  const [filterType,  setFilterType]  = useState<'all' | TransactionType>('all');
-  const [filterCaja,  setFilterCaja]  = useState<'all' | CajaType>('all');
-  const [filterCat,   setFilterCat]   = useState('all');
+  const [filterType,   setFilterType]  = useState<'all' | TransactionType>('all');
+  const [filterCaja,   setFilterCaja]  = useState<'all' | CajaType>('all');
+  const [filterCat,    setFilterCat]   = useState('all');
+  const [filterB03Sub, setFilterB03Sub] = useState('');
 
   // modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -167,6 +168,7 @@ export default function TransactionsPage() {
     if (filterType !== 'all' && t.type !== filterType)                                            return false;
     if (activeTab === 'all' && filterCaja !== 'all' && t.caja !== filterCaja)      return false;
     if (filterCat  !== 'all' && t.category !== filterCat)                          return false;
+    if (filterCat === 'B03-SERVICIOS BÁSICOS' && filterB03Sub && !t.description?.includes(filterB03Sub)) return false;
     return true;
   });
 
@@ -431,7 +433,7 @@ export default function TransactionsPage() {
             options={[{ value:'all', label:'Todas las cajas' }, ...CAJAS.map(c => ({ value: c, label: CAJA_LABEL[c] }))]}
             placeholder="Todas las cajas" />
         )}
-        <CustomSelect size="sm" value={filterCat} onChange={v => setFilterCat(v)}
+        <CustomSelect size="sm" value={filterCat} onChange={v => { setFilterCat(v); setFilterB03Sub(''); }}
           options={[
             { value:'all', label:'Todas las categorías' },
             ...INCOME_CATEGORIES.map(c => ({ value: c, label: `↑ ${c}` })),
@@ -439,6 +441,40 @@ export default function TransactionsPage() {
           ]}
           placeholder="Todas las categorías" />
       </div>
+
+      {/* B03 Subcategory filter */}
+      {filterCat === 'B03-SERVICIOS BÁSICOS' && (
+        <div className="flex flex-wrap gap-2 bg-white rounded-xl px-4 py-3 border border-blue-100 shadow-sm">
+          <span className="text-xs font-semibold text-blue-500 uppercase tracking-wider self-center mr-1">Servicio:</span>
+          {['Wifi salon','Wifi recepcion','Wifi Mauri','Gas','Agua Doméstica','Agua Comercial','Luz Domiciliar 1','Luz Domiciliar 2','Luz Domiciliar 3','Luz Comercial'].map(svc => {
+            const count = filtered.filter(t => t.description?.includes(svc)).length;
+            const total = filtered.filter(t => t.description?.includes(svc)).reduce((s,t) => s + t.amount, 0);
+            const active = filterB03Sub === svc;
+            return (
+              <button key={svc} type="button"
+                onClick={() => setFilterB03Sub(active ? '' : svc)}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-semibold transition-colors ${
+                  active
+                    ? 'bg-blue-600 border-blue-700 text-white'
+                    : 'bg-white border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600'
+                }`}>
+                {svc}
+                {count > 0 && (
+                  <span className={`text-[10px] font-bold rounded-full px-1 ${active ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                    {count} · Bs.{total}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {filterB03Sub && (
+            <button onClick={() => setFilterB03Sub('')}
+              className="text-xs text-gray-400 hover:text-gray-600 underline self-center ml-1">
+              Ver todo
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Table */}
       {(() => {
@@ -694,6 +730,30 @@ export default function TransactionsPage() {
                   options={categories.map(c => ({ value: c, label: c }))}
                   placeholder="— Seleccionar —" />
               </div>
+
+              {/* Servicios Básicos sub-selector */}
+              {form.category === 'B03-SERVICIOS BÁSICOS' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Servicio *</label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      'Wifi salon','Wifi recepcion','Wifi Mauri',
+                      'Gas','Agua Doméstica','Agua Comercial',
+                      'Luz Domiciliar 1','Luz Domiciliar 2','Luz Domiciliar 3','Luz Comercial',
+                    ].map(svc => (
+                      <button key={svc} type="button"
+                        onClick={() => setForm(f => ({ ...f, description: svc }))}
+                        className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
+                          form.description === svc
+                            ? 'bg-red-500 border-red-600 text-white'
+                            : 'bg-white border-gray-200 text-gray-600 hover:border-red-300 hover:text-red-600'
+                        }`}>
+                        {svc}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Room picker for HOSPEDAJE */}
               {form.category === 'H01-HOSPEDAJE' && occupiedRooms.length > 0 && (() => {

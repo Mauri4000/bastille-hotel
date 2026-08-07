@@ -22,6 +22,7 @@ const EXTRA_TASKS = [
   'Limpieza ascensor', 'Limpieza vidrios', 'Desempolvado',
   'Lavado alfombras baño', 'Limpieza Cocina', 'Limpieza Comedor',
   'Lavado Manteles', 'Lavado colchas',
+  'Ayudas en Cretassic Hostal',
 ] as const;
 
 const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];

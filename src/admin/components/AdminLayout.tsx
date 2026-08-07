@@ -20,7 +20,8 @@ const navItems = [
 ];
 
 const adminItems = [
-  { to: '/admin/staff', icon: Users, label: 'Personal' },
+  { to: '/admin/staff',    icon: Users,        label: 'Personal' },
+  { to: '/admin/billetes', icon: ClipboardList, label: 'Billetes' },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {

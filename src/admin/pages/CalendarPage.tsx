@@ -88,6 +88,7 @@ const emptyForm = {
   arrival_time:      '',
   departure_time:    '',
   late_checkout:     false,
+  early_checkin:     false,
   is_blacklist:      false,
   is_empresa:        false,
   has_pet:           false,
@@ -177,6 +178,10 @@ export default function CalendarPage() {
     // late checkout payment form (if not yet paid)
     checkoutLatePayAmt: '',
     checkoutLatePayCaja:'CAJA MAYOR' as string,
+    // early check-in
+    checkoutEarlyPaid:   0,
+    checkoutEarlyPayAmt: '',
+    checkoutEarlyPayCaja:'CAJA MAYOR' as string,
     // vitrina items paid in this session (for Anular)
     checkoutPaidVitrina: [] as PendingVitrinaItem[],
   });
@@ -187,6 +192,12 @@ export default function CalendarPage() {
   } | null>(null);
   // Stores late checkout price per reservation (in-session, used to pre-fill checkout modal)
   const [pendingLatePrice, setPendingLatePrice] = useState<Record<string, string>>({});
+
+  // Early Check-in popup (from card menu)
+  const [earlyCheckinModal, setEarlyCheckinModal] = useState<{
+    res: Reservation; time: string; extra_price: string; caja: string;
+  } | null>(null);
+  const [pendingEarlyPrice, setPendingEarlyPrice] = useState<Record<string, string>>({});
   // Snapshot of DB values when checkout modal opens (used to revert on Cancel)
   const checkoutOriginalRef = useRef<{ departure_time: string; is_blacklist: boolean; wants_invoice: boolean; siaat_number: string; invoice_number: string } | null>(null);
 
@@ -652,6 +663,7 @@ export default function CalendarPage() {
       arrival_time:      r.arrival_time ?? '',
       departure_time:    r.departure_time ?? '',
       late_checkout:     r.late_checkout ?? false,
+      early_checkin:     r.early_checkin ?? false,
       is_blacklist:      r.is_blacklist ?? false,
       is_empresa:        res.is_empresa,
       has_pet:           res.has_pet,
@@ -745,6 +757,7 @@ export default function CalendarPage() {
       arrival_time:    !isSalon && form.arrival_time   ? form.arrival_time   : null,
       departure_time:  !isSalon && form.departure_time ? form.departure_time : null,
       late_checkout:   !isSalon ? form.late_checkout  : false,
+      early_checkin:   !isSalon ? form.early_checkin  : false,
       is_blacklist:    !isSalon ? form.is_blacklist    : false,
       is_empresa:      form.is_empresa,
       has_pet:         isSalon ? false : form.has_pet,
@@ -971,6 +984,13 @@ export default function CalendarPage() {
     const latePaid  = (lateTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
     const lateTotal = latePaid; // already paid from late checkout popup; show it
 
+    // Fetch early check-in transactions
+    const { data: earlyTxs } = await supabase
+      .from('transactions').select('amount')
+      .eq('room_id', res.room_id).eq('type', 'ingreso').eq('category', 'H04-EARLY CHECK-IN')
+      .gte('date', res.check_in);
+    const earlyPaid = (earlyTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+
     const nights = Math.max(1, Math.round(
       (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
     ));
@@ -1004,6 +1024,9 @@ export default function CalendarPage() {
       checkoutLateTotal:   lateTotal,
       checkoutLatePayAmt:  pendingLatePrice[res.id] ?? '',
       checkoutLatePayCaja: 'CAJA MAYOR',
+      checkoutEarlyPaid:   earlyPaid,
+      checkoutEarlyPayAmt: pendingEarlyPrice[res.id] ?? '',
+      checkoutEarlyPayCaja:'CAJA MAYOR',
       checkoutPaidVitrina: [],
     });
   }
@@ -1201,6 +1224,38 @@ export default function CalendarPage() {
     logActivity(profile?.id, profile?.name, 'Pago anulado (late checkout)', 'transaction', res.id,
       `${res.room_id} — ${res.guest_name} · Bs. ${tx.amount.toFixed(2)}`);
     setCheckoutModal(m => ({ ...m, checkoutLatePaid: 0, checkoutLateTotal: 0 }));
+  }
+
+  async function checkoutPayEarly() {
+    const amt = parseFloat(checkoutModal.checkoutEarlyPayAmt) || 0;
+    if (amt <= 0 || !checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const now  = new Date();
+    const today   = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+    const timeStr = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+    await supabase.from('transactions').insert({
+      date: today, time: timeStr, type: 'ingreso', category: 'H04-EARLY CHECK-IN',
+      room_id: res.room_id, reservation_id: res.id, amount: amt,
+      description: `Early Check-in — ${res.guest_name}`,
+      caja: checkoutModal.checkoutEarlyPayCaja, responsible_id: profile?.id ?? null,
+    });
+    logActivity(profile?.id, profile?.name, 'Pago early check-in', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutEarlyPayCaja})`);
+    setCheckoutModal(m => ({ ...m, checkoutEarlyPaid: m.checkoutEarlyPaid + amt, checkoutEarlyPayAmt: '' }));
+  }
+
+  async function checkoutAnularEarly() {
+    if (!checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const { data: txs } = await supabase.from('transactions').select('id, amount')
+      .eq('room_id', res.room_id).eq('type', 'ingreso').eq('category', 'H04-EARLY CHECK-IN')
+      .gte('date', res.check_in).order('created_at', { ascending: false }).limit(1);
+    const tx = txs?.[0];
+    if (!tx) return;
+    await supabase.from('transactions').delete().eq('id', tx.id);
+    logActivity(profile?.id, profile?.name, 'Pago anulado (early check-in)', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${tx.amount.toFixed(2)}`);
+    setCheckoutModal(m => ({ ...m, checkoutEarlyPaid: Math.max(0, m.checkoutEarlyPaid - tx.amount) }));
   }
 
   async function checkoutAnularVitrinaItem(resId: string, txDesc: string, productId: string, qty: number, amount: number) {
@@ -1568,6 +1623,9 @@ export default function CalendarPage() {
                                       ⬇ {arrivalTime}
                                     </span>
                                   )}
+                                  {(res as any).early_checkin && (
+                                    <span className="text-[10px] font-bold bg-orange-600 text-white rounded px-1 py-px leading-none">EC</span>
+                                  )}
                                   {(res as any).late_checkout ? (
                                     <span className="text-[10px] font-bold bg-purple-700 text-white rounded px-1 py-px leading-none">
                                       {departureTime ? `LC ${departureTime}` : 'LC'}
@@ -1593,6 +1651,9 @@ export default function CalendarPage() {
                                   {res.is_empresa    && <Building2 size={9} className="opacity-80" />}
                                   {res.has_pet       && <span className="text-[10px] opacity-80">🐾</span>}
                                   {res.wants_invoice && <span className="text-[10px] opacity-80">🧾</span>}
+                                  {(res as any).early_checkin && (
+                                    <span className="text-[10px] font-bold bg-orange-600 text-white rounded px-1 py-px leading-none">EC</span>
+                                  )}
                                   {(res as any).late_checkout ? (
                                     <span className="text-[10px] font-bold bg-purple-700 text-white rounded px-1 py-px leading-none">
                                       {departureTime ? `LC ${departureTime}` : 'LC'}
@@ -2232,7 +2293,10 @@ export default function CalendarPage() {
                           {([
                             ['has_pet',       '🐾', 'Mascota',      'bg-orange-50 border-orange-400 text-orange-700'],
                             ['wants_invoice', '🧾', 'Factura',      'bg-green-50 border-green-400 text-green-700'],
-                            ...( form.arrival_type !== 'directo' ? [['late_checkout', '🌙', 'Late Checkout','bg-purple-50 border-purple-400 text-purple-700']] : []),
+                            ...( form.arrival_type !== 'directo' ? [
+                              ['early_checkin', '🌅', 'Early Check-in','bg-orange-50 border-orange-400 text-orange-700'],
+                              ['late_checkout',  '🌙', 'Late Checkout', 'bg-purple-50 border-purple-400 text-purple-700'],
+                            ] : []),
                           ] as [keyof typeof form, string, string, string][]).map(([key, emoji, label, activeClass]) => (
                             <button key={key} type="button"
                               onClick={() => setForm(f => ({ ...f, [key]: !f[key as keyof typeof f] }))}
@@ -2972,6 +3036,71 @@ export default function CalendarPage() {
                       </div>
                     </div>
 
+                    {/* ── Early Check-in ── */}
+                    {!!(r as any).early_checkin && (
+                      <div className="bg-orange-50 rounded-xl overflow-hidden border border-orange-200">
+                        <div className="px-4 py-2 bg-orange-100 text-xs font-bold uppercase tracking-wider text-orange-700 flex items-center justify-between">
+                          <span>🌅 Early Check-in</span>
+                          <button
+                            onClick={async () => {
+                              await supabase.from('reservations').update({
+                                early_checkin: false, updated_at: new Date().toISOString(),
+                              }).eq('id', r.id);
+                              setPendingEarlyPrice(prev => { const n = { ...prev }; delete n[r.id]; return n; });
+                              fetchData();
+                              setCheckoutModal(m => ({ ...m, open: false }));
+                            }}
+                            className="text-orange-400 hover:text-red-500 transition-colors"
+                            title="Eliminar early check-in">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                        <div className="px-4 py-3 space-y-1 text-sm">
+                          {checkoutModal.checkoutEarlyPaid > 0 ? (
+                            <div className="flex justify-between items-center text-green-700 font-semibold">
+                              <span>✓ Ya registrado — Bs. {checkoutModal.checkoutEarlyPaid.toFixed(2)}</span>
+                              <button onClick={checkoutAnularEarly}
+                                className="text-[10px] font-normal text-red-400 hover:text-red-600 underline ml-2">
+                                Anular
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-xs text-orange-600 mb-1">Sin cargo registrado — registrar ahora:</p>
+                              <div className="flex gap-2 items-center">
+                                <input type="number" min={0} step={0.5}
+                                  value={checkoutModal.checkoutEarlyPayAmt}
+                                  onChange={e => setCheckoutModal(m => ({ ...m, checkoutEarlyPayAmt: e.target.value }))}
+                                  placeholder="Monto Bs."
+                                  className="flex-1 border border-orange-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                                <div className="flex rounded-lg overflow-hidden border border-gray-200 flex-shrink-0">
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutEarlyPayCaja: 'CAJA MAYOR' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold transition-colors ${checkoutModal.checkoutEarlyPayCaja === 'CAJA MAYOR' ? 'bg-green-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    Efectivo
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutEarlyPayCaja: 'CUENTA BNB' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutEarlyPayCaja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    QR
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutEarlyPayCaja: 'TARJETA' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutEarlyPayCaja === 'TARJETA' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    Tarjeta
+                                  </button>
+                                </div>
+                                <button onClick={checkoutPayEarly}
+                                  className="px-3 py-1.5 text-xs font-bold bg-orange-500 hover:bg-orange-400 text-white rounded-lg whitespace-nowrap flex-shrink-0">
+                                  💳 Pagar
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     {/* ── Late Checkout ── */}
                     {hasLate && (
                       <div className="bg-purple-50 rounded-xl overflow-hidden border border-purple-200">
@@ -3161,6 +3290,10 @@ export default function CalendarPage() {
               <button onClick={e => { setCardMenu(null); openCheckoutModal(e as any, cardMenu.res); }}
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-orange-600 hover:bg-orange-50">
                 ⬆ Check out
+              </button>
+              <button onClick={() => { setEarlyCheckinModal({ res: cardMenu.res, time: '', extra_price: '', caja: 'CAJA MAYOR' }); setCardMenu(null); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-orange-600 hover:bg-orange-50">
+                🌅 Early Check-in
               </button>
               <button onClick={() => { setLateCheckoutModal({ res: cardMenu.res, time: '', extra_price: '', caja: 'CAJA MAYOR' }); setCardMenu(null); }}
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-purple-600 hover:bg-purple-50">
@@ -3835,6 +3968,73 @@ export default function CalendarPage() {
                   fetchData();
                 }}
                 className="px-5 py-2 text-sm font-semibold bg-purple-600 hover:bg-purple-500 text-white rounded-lg">
+                ✓ Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Early Check-in popup ── */}
+      {earlyCheckinModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-orange-50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-900">🌅 Early Check-in</h3>
+                <p className="text-xs text-orange-700 font-semibold mt-0.5">
+                  {earlyCheckinModal.res.room_id} — {earlyCheckinModal.res.guest_name}
+                </p>
+              </div>
+              <button onClick={() => setEarlyCheckinModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Hora de llegada</label>
+                <TimePicker
+                  value={earlyCheckinModal.time}
+                  onChange={v => setEarlyCheckinModal(m => m ? { ...m, time: v } : m)}
+                  placeholder="-- : --" emoji="🕐"
+                  accentClass="border-orange-400 ring-orange-100"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Monto a cobrar (Bs.)</label>
+                <input
+                  type="number" min={0} step={0.5}
+                  value={earlyCheckinModal.extra_price}
+                  onChange={e => setEarlyCheckinModal(m => m ? { ...m, extra_price: e.target.value } : m)}
+                  placeholder="0.00"
+                  className="w-full border border-orange-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+              <div className="bg-orange-50 border border-orange-100 rounded-xl px-4 py-3 text-xs text-orange-600">
+                💡 El pago se registra desde el popup de <strong>Check out</strong>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setEarlyCheckinModal(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const r = earlyCheckinModal.res;
+                  await supabase.from('reservations').update({
+                    early_checkin: true,
+                    arrival_time: earlyCheckinModal.time || null,
+                    updated_at: new Date().toISOString(),
+                  }).eq('id', r.id);
+                  if (earlyCheckinModal.extra_price) {
+                    setPendingEarlyPrice(prev => ({ ...prev, [r.id]: earlyCheckinModal.extra_price }));
+                  }
+                  logActivity(profile?.id, profile?.name, 'Reserva editada', 'reservation', r.id, `Early check-in ${r.room_id} — ${r.guest_name}`);
+                  setEarlyCheckinModal(null);
+                  fetchData();
+                }}
+                className="px-5 py-2 text-sm font-semibold bg-orange-500 hover:bg-orange-400 text-white rounded-lg">
                 ✓ Confirmar
               </button>
             </div>
