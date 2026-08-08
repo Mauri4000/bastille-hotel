@@ -14,14 +14,14 @@ const navItems = [
   { to: '/admin/guests',      icon: BookUser,        label: 'Base de Huéspedes' },
   { to: '/admin/vitrina',     icon: ShoppingBag,     label: 'Stock Hotel' },
   { to: '/admin/shift',       icon: ClipboardList,   label: 'Cambio de Turno' },
+  { to: '/admin/billetes',   icon: ClipboardList,   label: 'Billetes' },
   { to: '/admin/reportes',    icon: BarChart2,       label: 'Reportes' },
   { to: '/admin/historial',    icon: History,         label: 'Historial', adminOnly: true },
   { to: '/admin/spanish',      icon: GraduationCap,   label: 'Spanish School' },
 ];
 
 const adminItems = [
-  { to: '/admin/staff',    icon: Users,        label: 'Personal' },
-  { to: '/admin/billetes', icon: ClipboardList, label: 'Billetes' },
+  { to: '/admin/staff', icon: Users, label: 'Personal' },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
