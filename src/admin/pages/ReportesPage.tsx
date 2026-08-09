@@ -119,7 +119,17 @@ export default function ReportesPage() {
           check_in: r.check_in, check_out: r.check_out,
         });
         push(r, r.room_id);
-        for (const ag of (r.additional_guests ?? []) as any[]) push(ag, r.room_id);
+        for (const ag of (r.additional_guests ?? []) as any[]) {
+          if (ag.role === 'babies') continue; // bebés son un conteo, no fila individual
+          // Niños heredan procedencia/vía/destino del padre (huésped 1)
+          const enriched = ag.role === 'child' ? {
+            ...ag,
+            origin:    ag.origin    || r.guest_origin    || '',
+            next_dest: ag.next_dest || r.guest_next_dest || '',
+            transport: ag.transport || r.guest_transport || '',
+          } : ag;
+          push(enriched, r.room_id);
+        }
       }
       setRows(result);
     } catch (e: any) { setError(e.message ?? 'Error'); }
@@ -210,9 +220,13 @@ export default function ReportesPage() {
       function getRow(r: any, roomId: string): string[] {
         const g = (k: string, alt = '') => String(r[k] ?? r[alt] ?? '');
         const ms = g('guest_marital_status','marital_status');
+        // Age: prefer stored value, fall back to computing from birthdate
+        const age = r.guest_age ?? r.age
+          ?? ageFromBirthdate(r.guest_birthdate ?? r.birthdate ?? null)
+          ?? '';
         return [
           g('guest_name','name'), g('guest_gender','gender'),
-          g('guest_age','age'),   ms ? ms[0].toUpperCase() : '',
+          String(age),            ms ? ms[0].toUpperCase() : '',
           g('guest_country','country'),       g('guest_document','document'),
           g('guest_profession','profession'), g('guest_purpose','purpose'),
           roomId,
@@ -224,7 +238,17 @@ export default function ReportesPage() {
         const out: string[][] = [];
         for (const r of list) {
           out.push(getRow(r, r.room_id));
-          for (const ag of (r.additional_guests || []) as any[]) out.push(getRow(ag, r.room_id));
+          for (const ag of (r.additional_guests || []) as any[]) {
+            if (ag.role === 'babies') continue; // bebés son un conteo, no fila individual
+            // Niños heredan procedencia/vía/destino del padre (huésped 1)
+            const enriched = ag.role === 'child' ? {
+              ...ag,
+              origin:    ag.origin    || r.guest_origin    || '',
+              next_dest: ag.next_dest || r.guest_next_dest || '',
+              transport: ag.transport || r.guest_transport || '',
+            } : ag;
+            out.push(getRow(enriched, r.room_id));
+          }
         }
         return out;
       }
