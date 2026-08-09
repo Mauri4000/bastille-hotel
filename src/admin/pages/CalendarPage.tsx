@@ -182,6 +182,12 @@ export default function CalendarPage() {
     checkoutEarlyPaid:   0,
     checkoutEarlyPayAmt: '',
     checkoutEarlyPayCaja:'CAJA MAYOR' as string,
+    // mascota
+    checkoutMascotaPaid:    0,
+    checkoutMascotaPayAmt:  '',
+    checkoutMascotaPayCaja: 'CAJA MAYOR' as string,
+    // per-night prices (editable breakdown)
+    checkoutNightPrices: [] as number[],
     // vitrina items paid in this session (for Anular)
     checkoutPaidVitrina: [] as PendingVitrinaItem[],
   });
@@ -198,6 +204,12 @@ export default function CalendarPage() {
     res: Reservation; time: string; extra_price: string; caja: string;
   } | null>(null);
   const [pendingEarlyPrice, setPendingEarlyPrice] = useState<Record<string, string>>({});
+
+  // Mascota popup (from card menu)
+  const [mascotaModal, setMascotaModal] = useState<{
+    res: Reservation; extra_price: string; caja: string;
+  } | null>(null);
+  const [pendingMascotaPrice, setPendingMascotaPrice] = useState<Record<string, string>>({});
   // Snapshot of DB values when checkout modal opens (used to revert on Cancel)
   const checkoutOriginalRef = useRef<{ departure_time: string; is_blacklist: boolean; wants_invoice: boolean; siaat_number: string; invoice_number: string } | null>(null);
 
@@ -991,10 +1003,21 @@ export default function CalendarPage() {
       .gte('date', res.check_in);
     const earlyPaid = (earlyTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
 
+    // Fetch mascota transactions
+    const { data: mascotaTxs } = await supabase
+      .from('transactions').select('amount')
+      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H05-MASCOTAS');
+    const mascotaPaid = (mascotaTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+
     const nights = Math.max(1, Math.round(
       (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
     ));
-    const hospTotal   = nights * (res.price_per_night ?? 0);
+    // Build per-night prices: use saved array if it matches, else default to price_per_night
+    const savedNightPrices = (res as any).night_prices as number[] | null;
+    const nightPrices: number[] = (savedNightPrices && savedNightPrices.length === nights)
+      ? savedNightPrices
+      : Array(nights).fill(res.price_per_night ?? 0);
+    const hospTotal   = nightPrices.reduce((s, p) => s + p, 0);
     const hospPending = Math.max(0, hospTotal - alreadyPaid);
 
     // Snapshot original DB values so Cancel can revert them
@@ -1027,6 +1050,10 @@ export default function CalendarPage() {
       checkoutEarlyPaid:   earlyPaid,
       checkoutEarlyPayAmt: pendingEarlyPrice[res.id] ?? '',
       checkoutEarlyPayCaja:'CAJA MAYOR',
+      checkoutMascotaPaid:    mascotaPaid,
+      checkoutMascotaPayAmt:  pendingMascotaPrice[res.id] ?? '',
+      checkoutMascotaPayCaja: 'CAJA MAYOR',
+      checkoutNightPrices: nightPrices,
       checkoutPaidVitrina: [],
     });
   }
@@ -1050,12 +1077,13 @@ export default function CalendarPage() {
   async function saveCheckoutFields() {
     if (!checkoutModal.res) return;
     await supabase.from('reservations').update({
-      departure_time: checkoutModal.departure_time || null,
-      wants_invoice:  checkoutModal.is_invoice,
-      siaat_number:   checkoutModal.is_invoice ? (checkoutModal.siaat_number   || null) : null,
-      invoice_number: checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
-      is_blacklist:   checkoutModal.is_blacklist,
-      updated_at:     new Date().toISOString(),
+      departure_time:  checkoutModal.departure_time || null,
+      wants_invoice:   checkoutModal.is_invoice,
+      siaat_number:    checkoutModal.is_invoice ? (checkoutModal.siaat_number   || null) : null,
+      invoice_number:  checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
+      is_blacklist:    checkoutModal.is_blacklist,
+      night_prices:    checkoutModal.checkoutNightPrices.length > 0 ? checkoutModal.checkoutNightPrices : null,
+      updated_at:      new Date().toISOString(),
     }).eq('id', checkoutModal.res.id);
     logActivity(profile?.id, profile?.name, 'Checkout guardado', 'reservation', checkoutModal.res.id,
       `${checkoutModal.res.room_id} — ${checkoutModal.res.guest_name}`);
@@ -1081,12 +1109,13 @@ export default function CalendarPage() {
     }
 
     await supabase.from('reservations').update({
-      departure_time: checkoutModal.departure_time || null,
-      wants_invoice:  checkoutModal.is_invoice,
-      siaat_number:   checkoutModal.is_invoice ? (checkoutModal.siaat_number   || null) : null,
-      invoice_number: checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
-      is_blacklist:   checkoutModal.is_blacklist,
-      updated_at:     new Date().toISOString(),
+      departure_time:  checkoutModal.departure_time || null,
+      wants_invoice:   checkoutModal.is_invoice,
+      siaat_number:    checkoutModal.is_invoice ? (checkoutModal.siaat_number   || null) : null,
+      invoice_number:  checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
+      is_blacklist:    checkoutModal.is_blacklist,
+      night_prices:    checkoutModal.checkoutNightPrices.length > 0 ? checkoutModal.checkoutNightPrices : null,
+      updated_at:      new Date().toISOString(),
     }).eq('id', res.id);
 
     // Auto-create habilitación for the day after checkout (= check_out date)
@@ -1256,6 +1285,38 @@ export default function CalendarPage() {
     logActivity(profile?.id, profile?.name, 'Pago anulado (early check-in)', 'transaction', res.id,
       `${res.room_id} — ${res.guest_name} · Bs. ${tx.amount.toFixed(2)}`);
     setCheckoutModal(m => ({ ...m, checkoutEarlyPaid: Math.max(0, m.checkoutEarlyPaid - tx.amount) }));
+  }
+
+  async function checkoutPayMascota() {
+    const amt = parseFloat(checkoutModal.checkoutMascotaPayAmt) || 0;
+    if (amt <= 0 || !checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const now  = new Date();
+    const today   = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+    const timeStr = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+    await supabase.from('transactions').insert({
+      date: today, time: timeStr, type: 'ingreso', category: 'H05-MASCOTAS',
+      room_id: res.room_id, reservation_id: res.id, amount: amt,
+      description: `Mascota — ${res.guest_name}`,
+      caja: checkoutModal.checkoutMascotaPayCaja, responsible_id: profile?.id ?? null,
+    });
+    logActivity(profile?.id, profile?.name, 'Pago mascota', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutMascotaPayCaja})`);
+    setCheckoutModal(m => ({ ...m, checkoutMascotaPaid: m.checkoutMascotaPaid + amt, checkoutMascotaPayAmt: '' }));
+  }
+
+  async function checkoutAnularMascota() {
+    if (!checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const { data: txs } = await supabase.from('transactions').select('id, amount')
+      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H05-MASCOTAS')
+      .order('created_at', { ascending: false }).limit(1);
+    const tx = txs?.[0];
+    if (!tx) return;
+    await supabase.from('transactions').delete().eq('id', tx.id);
+    logActivity(profile?.id, profile?.name, 'Pago anulado (mascota)', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${tx.amount.toFixed(2)}`);
+    setCheckoutModal(m => ({ ...m, checkoutMascotaPaid: Math.max(0, m.checkoutMascotaPaid - tx.amount) }));
   }
 
   async function checkoutAnularVitrinaItem(resId: string, txDesc: string, productId: string, qty: number, amount: number) {
@@ -1711,19 +1772,31 @@ export default function CalendarPage() {
               {/* ── Total guests per day ── */}
               <tfoot className="sticky bottom-0 z-20">
                 <tr>
-                  <td style={{ width: ROOM_W, minWidth: ROOM_W }} className="sticky left-0 z-30 bg-gray-900 px-2 md:px-4 py-2 md:py-2.5 text-[10px] md:text-xs font-bold uppercase tracking-wider text-white border-t-2 border-gray-700">
-                    # Personas
+                  <td style={{ width: ROOM_W, minWidth: ROOM_W }} className="sticky left-0 z-30 bg-gray-900 px-2 md:px-4 py-1.5 md:py-2 text-[10px] md:text-xs font-bold uppercase tracking-wider text-white border-t-2 border-gray-700">
+                    <div># Personas</div>
+                    <div className="text-[9px] font-normal text-blue-300 mt-0.5">+Niños</div>
                   </td>
                   {days.map(d => {
-                    const total = rooms.reduce((sum, room) => {
+                    let adults = 0;
+                    let kids = 0;
+                    rooms.forEach(room => {
                       const res = cellMap[room.id]?.[d];
-                      return sum + (res && room.id !== 'SALON' ? res.num_guests : 0);
-                    }, 0);
+                      if (!res || room.id === 'SALON') return;
+                      adults += res.num_guests;
+                      const allGuests = (res as any).additional_guests ?? [];
+                      kids += allGuests.filter((g: any) => g.role === 'child').length;
+                      kids += allGuests.find((g: any) => g.role === 'babies')?.count ?? 0;
+                    });
                     return (
-                      <td key={d} className="bg-gray-900 text-center border-t-2 border-gray-700 border-r border-gray-800 py-2">
-                        {total > 0
-                          ? <span className="text-sm font-bold text-amber-400">{total}</span>
-                          : <span className="text-xs text-gray-500">—</span>}
+                      <td key={d} className="bg-gray-900 text-center border-t-2 border-gray-700 border-r border-gray-800 py-1.5">
+                        {adults > 0 || kids > 0 ? (
+                          <div className="flex flex-col items-center gap-0.5">
+                            {adults > 0 && <span className="text-sm font-bold text-amber-400">{adults}</span>}
+                            {kids > 0 && <span className="text-[10px] font-semibold text-blue-300">+{kids}</span>}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-500">—</span>
+                        )}
                       </td>
                     );
                   })}
@@ -2913,8 +2986,10 @@ export default function CalendarPage() {
                 const nights = Math.max(1, Math.round(
                   (new Date(r.check_out + 'T00:00:00').getTime() - new Date(r.check_in + 'T00:00:00').getTime()) / 86400000
                 ));
-                const pricePer    = r.price_per_night ?? 0;
-                const hospTotal   = nights * pricePer;
+                const nightPrices = checkoutModal.checkoutNightPrices.length === nights
+                  ? checkoutModal.checkoutNightPrices
+                  : Array(nights).fill(r.price_per_night ?? 0);
+                const hospTotal   = nightPrices.reduce((s, p) => s + p, 0);
                 const hospPaid    = checkoutModal.checkoutPaid;
                 const hospPending = Math.max(0, hospTotal - hospPaid);
                 const vitItems    = pendingVitrina[r.id] ?? [];
@@ -2931,9 +3006,38 @@ export default function CalendarPage() {
                           <span>📅 {r.check_in} → {r.check_out}</span>
                           <span className="font-semibold">{nights} noche{nights !== 1 ? 's' : ''}</span>
                         </div>
-                        {pricePer > 0 && <>
-                          <div className="flex justify-between text-gray-500 text-xs">
-                            <span>Precio / noche</span><span>Bs. {pricePer.toFixed(2)}</span>
+                        {nightPrices.length > 0 && <>
+                          <div className="space-y-1 pt-0.5">
+                            {nightPrices.map((price, i) => {
+                              const d = new Date(r.check_in + 'T00:00:00');
+                              d.setDate(d.getDate() + i);
+                              const label = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
+                              return (
+                                <div key={i} className="flex items-center gap-2">
+                                  <span className="text-xs text-gray-400 w-16 flex-shrink-0">Noche {i+1} · {label}</span>
+                                  <div className="flex-1 border-b border-dashed border-gray-200" />
+                                  <div className="flex items-center gap-1 flex-shrink-0">
+                                    <span className="text-xs text-gray-400">Bs.</span>
+                                    <input
+                                      type="number" min={0} step={0.5}
+                                      value={price}
+                                      onChange={e => {
+                                        const newPrices = [...checkoutModal.checkoutNightPrices];
+                                        newPrices[i] = parseFloat(e.target.value) || 0;
+                                        const newTotal = newPrices.reduce((s, p) => s + p, 0);
+                                        const newPending = Math.max(0, newTotal - checkoutModal.checkoutPaid);
+                                        setCheckoutModal(m => ({
+                                          ...m,
+                                          checkoutNightPrices: newPrices,
+                                          checkoutHospPayAmt: newPending > 0 ? newPending.toFixed(2) : '',
+                                        }));
+                                      }}
+                                      className="w-20 text-right border border-amber-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400 bg-white"
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                           <div className="flex justify-between font-semibold text-gray-800 border-t border-gray-200 pt-1">
                             <span>Total</span><span>Bs. {hospTotal.toFixed(2)}</span>
@@ -3092,6 +3196,71 @@ export default function CalendarPage() {
                                 </div>
                                 <button onClick={checkoutPayEarly}
                                   className="px-3 py-1.5 text-xs font-bold bg-orange-500 hover:bg-orange-400 text-white rounded-lg whitespace-nowrap flex-shrink-0">
+                                  💳 Pagar
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Mascota ── */}
+                    {!!(r as any).has_pet && (
+                      <div className="bg-teal-50 rounded-xl overflow-hidden border border-teal-200">
+                        <div className="px-4 py-2 bg-teal-100 text-xs font-bold uppercase tracking-wider text-teal-700 flex items-center justify-between">
+                          <span>🐾 Mascota</span>
+                          <button
+                            onClick={async () => {
+                              await supabase.from('reservations').update({
+                                has_pet: false, updated_at: new Date().toISOString(),
+                              }).eq('id', r.id);
+                              setPendingMascotaPrice(prev => { const n = { ...prev }; delete n[r.id]; return n; });
+                              fetchData();
+                              setCheckoutModal(m => ({ ...m, open: false }));
+                            }}
+                            className="text-teal-400 hover:text-red-500 transition-colors"
+                            title="Quitar mascota">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                        <div className="px-4 py-3 space-y-1 text-sm">
+                          {checkoutModal.checkoutMascotaPaid > 0 ? (
+                            <div className="flex justify-between items-center text-green-700 font-semibold">
+                              <span>✓ Ya registrado — Bs. {checkoutModal.checkoutMascotaPaid.toFixed(2)}</span>
+                              <button onClick={checkoutAnularMascota}
+                                className="text-[10px] font-normal text-red-400 hover:text-red-600 underline ml-2">
+                                Anular
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-xs text-teal-600 mb-1">Sin cargo registrado — registrar ahora:</p>
+                              <div className="flex gap-2 items-center">
+                                <input type="number" min={0} step={0.5}
+                                  value={checkoutModal.checkoutMascotaPayAmt}
+                                  onChange={e => setCheckoutModal(m => ({ ...m, checkoutMascotaPayAmt: e.target.value }))}
+                                  placeholder="Monto Bs."
+                                  className="flex-1 border border-teal-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-400" />
+                                <div className="flex rounded-lg overflow-hidden border border-gray-200 flex-shrink-0">
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutMascotaPayCaja: 'CAJA MAYOR' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold transition-colors ${checkoutModal.checkoutMascotaPayCaja === 'CAJA MAYOR' ? 'bg-green-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    Efectivo
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutMascotaPayCaja: 'CUENTA BNB' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutMascotaPayCaja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    QR
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutMascotaPayCaja: 'TARJETA' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutMascotaPayCaja === 'TARJETA' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    Tarjeta
+                                  </button>
+                                </div>
+                                <button onClick={checkoutPayMascota}
+                                  className="px-3 py-1.5 text-xs font-bold bg-teal-500 hover:bg-teal-400 text-white rounded-lg whitespace-nowrap flex-shrink-0">
                                   💳 Pagar
                                 </button>
                               </div>
@@ -3294,6 +3463,10 @@ export default function CalendarPage() {
               <button onClick={() => { setEarlyCheckinModal({ res: cardMenu.res, time: '', extra_price: '', caja: 'CAJA MAYOR' }); setCardMenu(null); }}
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-orange-600 hover:bg-orange-50">
                 🌅 Early Check-in
+              </button>
+              <button onClick={() => { setMascotaModal({ res: cardMenu.res, extra_price: '', caja: 'CAJA MAYOR' }); setCardMenu(null); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-teal-600 hover:bg-teal-50">
+                🐾 Mascota
               </button>
               <button onClick={() => { setLateCheckoutModal({ res: cardMenu.res, time: '', extra_price: '', caja: 'CAJA MAYOR' }); setCardMenu(null); }}
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-purple-600 hover:bg-purple-50">
@@ -4035,6 +4208,64 @@ export default function CalendarPage() {
                   fetchData();
                 }}
                 className="px-5 py-2 text-sm font-semibold bg-orange-500 hover:bg-orange-400 text-white rounded-lg">
+                ✓ Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Mascota popup ── */}
+      {mascotaModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-teal-50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-900">🐾 Mascota</h3>
+                <p className="text-xs text-teal-700 font-semibold mt-0.5">
+                  {mascotaModal.res.room_id} — {mascotaModal.res.guest_name}
+                </p>
+              </div>
+              <button onClick={() => setMascotaModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Monto a cobrar (Bs.)</label>
+                <input
+                  type="number" min={0} step={0.5}
+                  value={mascotaModal.extra_price}
+                  onChange={e => setMascotaModal(m => m ? { ...m, extra_price: e.target.value } : m)}
+                  placeholder="0.00"
+                  className="w-full border border-teal-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-400"
+                  autoFocus
+                />
+              </div>
+              <div className="bg-teal-50 border border-teal-100 rounded-xl px-4 py-3 text-xs text-teal-600">
+                💡 El pago se registra desde el popup de <strong>Check out</strong>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setMascotaModal(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const r = mascotaModal.res;
+                  await supabase.from('reservations').update({
+                    has_pet: true,
+                    updated_at: new Date().toISOString(),
+                  }).eq('id', r.id);
+                  if (mascotaModal.extra_price) {
+                    setPendingMascotaPrice(prev => ({ ...prev, [r.id]: mascotaModal.extra_price }));
+                  }
+                  logActivity(profile?.id, profile?.name, 'Reserva editada', 'reservation', r.id, `Mascota ${r.room_id} — ${r.guest_name}`);
+                  setMascotaModal(null);
+                  fetchData();
+                }}
+                className="px-5 py-2 text-sm font-semibold bg-teal-600 hover:bg-teal-500 text-white rounded-lg">
                 ✓ Confirmar
               </button>
             </div>
