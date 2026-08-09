@@ -74,8 +74,9 @@ interface ChildGuest {
   name:      string;
   document:  string;
   birthdate: string;
+  gender:    '' | 'M' | 'F';
 }
-const emptyChildGuest = (): ChildGuest => ({ name: '', document: '', birthdate: '' });
+const emptyChildGuest = (): ChildGuest => ({ name: '', document: '', birthdate: '', gender: '' });
 
 // ────── empty form ──────
 const emptyForm = {
@@ -709,7 +710,7 @@ export default function CalendarPage() {
     });
     const allGuestData = (r.additional_guests ?? []) as any[];
     setAdditionalGuests(allGuestData.filter((g: any) => !g.role || g.role === 'adult') as AdditionalGuest[]);
-    setChildGuests(allGuestData.filter((g: any) => g.role === 'child').map((g: any) => ({ name: g.name ?? '', document: g.document ?? '', birthdate: g.birthdate ?? '' })));
+    setChildGuests(allGuestData.filter((g: any) => g.role === 'child').map((g: any) => ({ name: g.name ?? '', document: g.document ?? '', birthdate: g.birthdate ?? '', gender: g.gender ?? '' })));
     setNumBabies(allGuestData.find((g: any) => g.role === 'babies')?.count ?? 0);
     setEditingId(res.id);
     setFormError('');
@@ -798,7 +799,7 @@ export default function CalendarPage() {
         ...additionalGuests,
         ...childGuests.filter(c => c.name.trim()).map(c => ({
           ...emptyAdditionalGuest(),
-          name: c.name, document: c.document, birthdate: c.birthdate,
+          name: c.name, document: c.document, birthdate: c.birthdate, gender: c.gender,
           role: 'child',
         })),
         ...(numBabies > 0 ? [{ role: 'babies', count: numBabies }] : []),
@@ -2568,11 +2569,16 @@ export default function CalendarPage() {
                               <input type="text" placeholder="Nombre completo" value={child.name}
                                 onChange={e => setChildGuests(prev => prev.map((c, i) => i === idx ? { ...c, name: e.target.value } : c))}
                                 className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-                              <div className="grid grid-cols-2 gap-2">
-                                <input type="text" placeholder="CI / Documento (opcional)" value={child.document}
+                              <div className="grid grid-cols-3 gap-2">
+                                <CustomSelect size="sm"
+                                  value={child.gender}
+                                  onChange={v => setChildGuests(prev => prev.map((c, i) => i === idx ? { ...c, gender: v as '' | 'M' | 'F' } : c))}
+                                  options={[{ value: 'M', label: 'M — Masc.' }, { value: 'F', label: 'F — Fem.' }]}
+                                  placeholder="Género" />
+                                <input type="text" placeholder="CI / Doc." value={child.document}
                                   onChange={e => setChildGuests(prev => prev.map((c, i) => i === idx ? { ...c, document: e.target.value } : c))}
                                   className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-                                <DatePicker birthdateMode value={child.birthdate}
+                                <DatePicker birthdateMode useFixed value={child.birthdate}
                                   onChange={v => setChildGuests(prev => prev.map((c, i) => i === idx ? { ...c, birthdate: v } : c))}
                                   placeholder="Fecha Nac." />
                               </div>

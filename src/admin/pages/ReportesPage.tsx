@@ -78,6 +78,7 @@ export default function ReportesPage() {
   const [toDate,    setToDate]    = useState(todayStr());
   const [rows,      setRows]      = useState<GuestRow[] | null>(null);
   const [rawRes,    setRawRes]    = useState<RawRes[]>([]);
+  const [onlyIncomplete, setOnlyIncomplete] = useState(false);
   const [loading,   setLoading]   = useState(false);
   const [pdfLoad,   setPdfLoad]   = useState(false);
   const [pyPdfLoad, setPyPdfLoad] = useState(false);
@@ -121,12 +122,14 @@ export default function ReportesPage() {
         push(r, r.room_id);
         for (const ag of (r.additional_guests ?? []) as any[]) {
           if (ag.role === 'babies') continue; // bebés son un conteo, no fila individual
-          // Niños heredan procedencia/vía/destino del padre (huésped 1)
+          // Niños heredan procedencia/vía/destino/motivo del padre (huésped 1)
           const enriched = ag.role === 'child' ? {
             ...ag,
+            marital_status: 'S',
             origin:    ag.origin    || r.guest_origin    || '',
             next_dest: ag.next_dest || r.guest_next_dest || '',
             transport: ag.transport || r.guest_transport || '',
+            purpose:   ag.purpose   || r.guest_purpose   || '',
           } : ag;
           push(enriched, r.room_id);
         }
@@ -240,12 +243,14 @@ export default function ReportesPage() {
           out.push(getRow(r, r.room_id));
           for (const ag of (r.additional_guests || []) as any[]) {
             if (ag.role === 'babies') continue; // bebés son un conteo, no fila individual
-            // Niños heredan procedencia/vía/destino del padre (huésped 1)
+            // Niños heredan procedencia/vía/destino/motivo del padre (huésped 1)
             const enriched = ag.role === 'child' ? {
               ...ag,
+              marital_status: 'S',
               origin:    ag.origin    || r.guest_origin    || '',
               next_dest: ag.next_dest || r.guest_next_dest || '',
               transport: ag.transport || r.guest_transport || '',
+              purpose:   ag.purpose   || r.guest_purpose   || '',
             } : ag;
             out.push(getRow(enriched, r.room_id));
           }
@@ -508,7 +513,24 @@ export default function ReportesPage() {
             <div className="p-3 rounded-lg bg-green-50 border border-green-200 text-green-700 text-xs">{sendMsg}</div>
           )}
 
-          {rows && (
+          {rows && (() => {
+            // Fields considered required for the official form
+            const REQUIRED_FIELDS: (keyof GuestRow)[] = ['gender','age','marital','document','purpose','origin','next_dest','transport'];
+            const isMissing = (r: GuestRow, f: keyof GuestRow) => {
+              const v = r[f];
+              return v === null || v === undefined || String(v).trim() === '';
+            };
+            const isIncomplete = (r: GuestRow) => REQUIRED_FIELDS.some(f => isMissing(r, f));
+            const incompleteCount = rows.filter(isIncomplete).length;
+            const displayRows = onlyIncomplete ? rows.filter(isIncomplete) : rows;
+
+            // Cell style: red bg if value is missing
+            const cell = (r: GuestRow, f: keyof GuestRow, cls = '') =>
+              isMissing(r, f)
+                ? `px-3 py-2 bg-red-50 text-red-400 ${cls}`
+                : `px-3 py-2 text-gray-600 ${cls}`;
+
+            return (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-3">
                 <button onClick={downloadXLSX} disabled={xlsLoad}
@@ -534,6 +556,19 @@ export default function ReportesPage() {
                 <span className="text-xs text-gray-400">
                   {rows.length} huésped{rows.length !== 1 ? 'es' : ''} facturado{rows.length !== 1 ? 's' : ''}
                 </span>
+                {incompleteCount > 0 && (
+                  <button
+                    onClick={() => setOnlyIncomplete(v => !v)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                      onlyIncomplete
+                        ? 'bg-red-500 text-white border-red-500'
+                        : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                    }`}
+                  >
+                    ⚠️ {incompleteCount} incompleto{incompleteCount !== 1 ? 's' : ''}
+                    {onlyIncomplete ? ' — ver todos' : ' — filtrar'}
+                  </button>
+                )}
               </div>
 
               <div className="overflow-x-auto rounded-xl border border-gray-200">
@@ -548,32 +583,42 @@ export default function ReportesPage() {
                       <th className="px-3 py-3 text-left font-semibold">Documento</th>
                       <th className="px-3 py-3 text-left font-semibold">Objeto</th>
                       <th className="px-3 py-3 text-center font-semibold">Hab.</th>
+                      <th className="px-3 py-3 text-left font-semibold">Proced.</th>
+                      <th className="px-3 py-3 text-left font-semibold">Destino</th>
+                      <th className="px-3 py-3 text-center font-semibold">Vía</th>
                       <th className="px-3 py-3 text-left font-semibold">Ingreso</th>
                       <th className="px-3 py-3 text-left font-semibold">Salida</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {rows.length === 0 ? (
-                      <tr><td colSpan={10} className="px-3 py-8 text-center text-gray-400 text-sm">Sin huéspedes facturados</td></tr>
-                    ) : rows.map((r, i) => (
-                      <tr key={i} className="hover:bg-gray-50">
-                        <td className="px-3 py-2 text-gray-800 font-medium">{r.name}</td>
-                        <td className="px-3 py-2 text-center text-gray-600">{r.gender}</td>
-                        <td className="px-3 py-2 text-center text-gray-600">{r.age ?? '—'}</td>
-                        <td className="px-3 py-2 text-center text-gray-600">{r.marital}</td>
-                        <td className="px-3 py-2 text-gray-600">{r.country}</td>
-                        <td className="px-3 py-2 text-gray-600 font-mono text-xs">{r.document}</td>
-                        <td className="px-3 py-2 text-gray-600">{r.purpose}</td>
-                        <td className="px-3 py-2 text-center font-semibold text-gray-900">{r.room}</td>
-                        <td className="px-3 py-2 text-gray-500 text-xs">{fmt(r.check_in)}</td>
-                        <td className="px-3 py-2 text-gray-500 text-xs">{fmt(r.check_out)}</td>
-                      </tr>
-                    ))}
+                    {displayRows.length === 0 ? (
+                      <tr><td colSpan={13} className="px-3 py-8 text-center text-gray-400 text-sm">Sin huéspedes {onlyIncomplete ? 'incompletos' : 'facturados'}</td></tr>
+                    ) : displayRows.map((r, i) => {
+                      const incomplete = isIncomplete(r);
+                      return (
+                        <tr key={i} className={incomplete ? 'bg-red-50/40 hover:bg-red-50' : 'hover:bg-gray-50'}>
+                          <td className={`px-3 py-2 font-medium ${incomplete ? 'text-gray-800' : 'text-gray-800'}`}>{r.name}</td>
+                          <td className={cell(r, 'gender', 'text-center')}>{r.gender || '—'}</td>
+                          <td className={`px-3 py-2 text-center ${r.age === null || r.age === undefined ? 'bg-red-50 text-red-400' : 'text-gray-600'}`}>{r.age ?? '—'}</td>
+                          <td className={cell(r, 'marital', 'text-center')}>{r.marital || '—'}</td>
+                          <td className={`px-3 py-2 text-gray-600`}>{r.country}</td>
+                          <td className={cell(r, 'document', 'font-mono text-xs')}>{r.document || '—'}</td>
+                          <td className={cell(r, 'purpose')}>{r.purpose || '—'}</td>
+                          <td className="px-3 py-2 text-center font-semibold text-gray-900">{r.room}</td>
+                          <td className={cell(r, 'origin')}>{r.origin || '—'}</td>
+                          <td className={cell(r, 'next_dest')}>{r.next_dest || '—'}</td>
+                          <td className={cell(r, 'transport', 'text-center')}>{r.transport || '—'}</td>
+                          <td className="px-3 py-2 text-gray-500 text-xs">{fmt(r.check_in)}</td>
+                          <td className="px-3 py-2 text-gray-500 text-xs">{fmt(r.check_out)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
-          )}
+            );
+          })()}
         </div>
       </div>
 
