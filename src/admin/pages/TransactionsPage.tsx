@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Plus, X, TrendingUp, TrendingDown, DollarSign, Filter, Trash2, Pencil } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -47,9 +47,28 @@ export default function TransactionsPage() {
 
   const isAdmin = profile?.role === 'admin';
   const [activeTab, setActiveTab] = useState<Tab>('mayor');
+  const tableBodyRef = useRef<HTMLTableSectionElement>(null);
   useEffect(() => {
     if (isAdmin) setActiveTab(t => t === 'mayor' ? 'all' : t);
   }, [isAdmin]);
+
+  // Scroll to today's row whenever tab or data changes
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+  useEffect(() => {
+    if (!tableBodyRef.current) return;
+    // Find first row whose date matches today
+    const rows = tableBodyRef.current.querySelectorAll('tr[data-date]');
+    let target: Element | null = null;
+    rows.forEach(row => {
+      if (!target && row.getAttribute('data-date') === todayStr) target = row;
+    });
+    if (target) {
+      (target as HTMLElement).scrollIntoView({ behavior: 'instant', block: 'center' });
+    } else {
+      // No today row — scroll to bottom (most recent)
+      tableBodyRef.current.lastElementChild?.scrollIntoView({ behavior: 'instant', block: 'end' });
+    }
+  }, [activeTab, transactions]);
 
   // filters
   const [filterType,   setFilterType]  = useState<'all' | TransactionType>('all');
@@ -527,11 +546,11 @@ export default function TransactionsPage() {
                       <th className="px-2 py-3 border-r-0" />
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200">
+                  <tbody ref={tableBodyRef} className="divide-y divide-gray-200">
                     {filtered.map(t => {
                       const saldo = balanceMap[t.id] ?? 0;
                       return (
-                        <tr key={t.id} className="hover:bg-amber-50/40 transition-colors group">
+                        <tr key={t.id} data-date={t.date} className="hover:bg-amber-50/40 transition-colors group">
                           {/* Fecha */}
                           <td className={`${tdCls} text-gray-600 text-xs`}>
                             <div className="font-medium">{t.date}</div>
@@ -607,7 +626,7 @@ export default function TransactionsPage() {
                             {t.description || <span className="text-gray-300">—</span>}
                           </td>
                           {/* Actions */}
-                          <td className="px-2 py-2.5">
+                          <td className="px-2 py-2.5 min-w-[72px]">
                             <div className="flex items-center gap-1">
                               {!isShiftRef(t) && <button
                                 onClick={() => openEdit(t)}
@@ -616,8 +635,8 @@ export default function TransactionsPage() {
                               >
                                 <Pencil size={13} />
                               </button>}
-                              {/* Receptionists can delete Caja Mayor/Chica; admins can delete anything except shift refs */}
-                              {!isShiftRef(t) && (isAdmin || t.caja === 'CAJA MAYOR' || t.caja === 'CAJA CHICA') && (
+                              {/* Anyone can delete non-shift entries */}
+                              {!isShiftRef(t) && (
                                 <button
                                   onClick={() => setConfirmDialog({
                                     open: true,
@@ -635,7 +654,7 @@ export default function TransactionsPage() {
                                       fetchData();
                                     },
                                   })}
-                                  className="p-1.5 rounded-lg text-gray-200 hover:text-red-500 hover:bg-red-50 transition-all"
+                                  className="p-1.5 rounded-lg text-red-300 hover:text-red-600 hover:bg-red-50 transition-all"
                                   title="Eliminar"
                                 >
                                   <Trash2 size={13} />

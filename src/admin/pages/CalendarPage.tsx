@@ -262,6 +262,8 @@ export default function CalendarPage() {
   }
 
   // Room change flow
+  const [roomChangeSaving, setRoomChangeSaving] = useState(false);
+  const [roomChangeError,  setRoomChangeError]  = useState('');
   const [roomChangeModal, setRoomChangeModal] = useState<{
     step: 'room' | 'reason';
     res: Reservation;
@@ -301,83 +303,96 @@ export default function CalendarPage() {
 
   async function handleRoomChange() {
     if (!roomChangeModal || !roomChangeModal.newRoomId || !roomChangeModal.reason) return;
+    if (roomChangeSaving) return;   // prevent double-submit
+    setRoomChangeSaving(true);
+    setRoomChangeError('');
+
     const { res, newRoomId, reason, description, newPrice, moveDate } = roomChangeModal;
+    const parsedPrice   = parseFloat(newPrice);
+    const newPriceNight = (!isNaN(parsedPrice) && parsedPrice > 0) ? parsedPrice : (res.price_per_night ?? 0);
+    const r             = res as any;
+    const originalCheckOut = res.check_out;   // capture before update
 
-    const parsedPrice    = parseFloat(newPrice);
-    const newPriceNight  = (!isNaN(parsedPrice) && parsedPrice > 0) ? parsedPrice : (res.price_per_night ?? 0);
-    const r              = res as any;
+    try {
+      // ── 1. Shorten original reservation to moveDate ────────────────────────
+      const { error: e1 } = await supabase.from('reservations')
+        .update({ check_out: moveDate, updated_at: new Date().toISOString() })
+        .eq('id', res.id);
+      if (e1) throw new Error('Error al acortar reserva: ' + e1.message);
 
-    // ── 1. Shorten original reservation to moveDate ──────────────────────────
-    await supabase.from('reservations')
-      .update({ check_out: moveDate, updated_at: new Date().toISOString() })
-      .eq('id', res.id);
+      // ── 2. New reservation for new room (moveDate → original check_out) ────
+      const changeNotes = JSON.stringify({
+        __room_change: true,
+        from_room:     res.room_id,
+        from_checkin:  res.check_in,
+        from_checkout: moveDate,
+        from_price:    res.price_per_night ?? 0,
+        parent_id:     res.id,
+      });
+      const { error: e2 } = await supabase.from('reservations').insert({
+        room_id:              newRoomId,
+        guest_name:           res.guest_name,
+        num_guests:           res.num_guests,
+        check_in:             moveDate,
+        check_out:            originalCheckOut,
+        status:               'ocupado',
+        price_per_night:      newPriceNight,
+        notes:                changeNotes,
+        additional_guests:    r.additional_guests     ?? null,
+        guest_document:       r.guest_document        ?? null,
+        guest_phone:          r.guest_phone           ?? null,
+        guest_gender:         r.guest_gender          ?? null,
+        guest_birthdate:      r.guest_birthdate       ?? null,
+        guest_marital_status: r.guest_marital_status  ?? null,
+        guest_country:        r.guest_country         ?? null,
+        guest_profession:     r.guest_profession      ?? null,
+        guest_purpose:        r.guest_purpose         ?? null,
+        guest_origin:         r.guest_origin          ?? null,
+        guest_next_dest:      r.guest_next_dest       ?? null,
+        guest_transport:      r.guest_transport       ?? null,
+        wants_invoice:        res.wants_invoice,
+        siaat_number:         r.siaat_number          ?? null,
+        has_pet:              res.has_pet,
+        is_empresa:           res.is_empresa,
+        created_by:           profile?.id             ?? null,
+      });
+      if (e2) throw new Error('Error al crear reserva en nueva hab.: ' + e2.message);
 
-    // ── 2. Create new reservation for new room (moveDate → original check_out) ──
-    const changeNotes = JSON.stringify({
-      __room_change: true,
-      from_room:     res.room_id,
-      from_checkin:  res.check_in,
-      from_checkout: moveDate,
-      from_price:    res.price_per_night ?? 0,
-      parent_id:     res.id,
-    });
-    await supabase.from('reservations').insert({
-      room_id:              newRoomId,
-      guest_name:           res.guest_name,
-      num_guests:           res.num_guests,
-      check_in:             moveDate,
-      check_out:            res.check_out,
-      status:               'ocupado',
-      price_per_night:      newPriceNight,
-      notes:                changeNotes,
-      additional_guests:    r.additional_guests     ?? null,
-      guest_document:       r.guest_document        ?? null,
-      guest_phone:          r.guest_phone           ?? null,
-      guest_gender:         r.guest_gender          ?? null,
-      guest_birthdate:      r.guest_birthdate       ?? null,
-      guest_marital_status: r.guest_marital_status  ?? null,
-      guest_country:        r.guest_country         ?? null,
-      guest_profession:     r.guest_profession      ?? null,
-      guest_purpose:        r.guest_purpose         ?? null,
-      guest_origin:         r.guest_origin          ?? null,
-      guest_next_dest:      r.guest_next_dest       ?? null,
-      guest_transport:      r.guest_transport       ?? null,
-      guest_email:          r.guest_email           ?? null,
-      wants_invoice:        res.wants_invoice,
-      siaat_number:         r.siaat_number          ?? null,
-      has_pet:              res.has_pet,
-      is_empresa:           res.is_empresa,
-      created_by:           profile?.id             ?? null,
-    });
-
-    // ── 3. Habilitación card on original room (moveDate → original check_out) ──
-    await supabase.from('reservations').insert({
-      room_id:         res.room_id,
-      guest_name:      '🏠 Habilitación',
-      num_guests:      0,
-      check_in:        moveDate,
-      check_out:       res.check_out,
-      status:          'habilitacion',
-      price_per_night: 0,
-    });
-
-    // ── 4. If damaged: also mantenimiento card ────────────────────────────────
-    if (reason === 'damaged') {
-      await supabase.from('reservations').insert({
+      // ── 3. Habilitación card on original room (1 day only) ────────────────
+      const moveDateNext = toDateStr(new Date(new Date(moveDate + 'T00:00:00').getTime() + 86400000));
+      const { error: e3 } = await supabase.from('reservations').insert({
         room_id:         res.room_id,
-        guest_name:      `⚠️ ${description.trim() || 'Daño reportado'}`,
+        guest_name:      '🏠 Habilitación',
         num_guests:      0,
         check_in:        moveDate,
-        check_out:       res.check_out,
-        status:          'mantenimiento',
+        check_out:       moveDateNext,
+        status:          'habilitacion',
         price_per_night: 0,
       });
-    }
+      if (e3) throw new Error('Error al crear habilitación: ' + e3.message);
 
-    logActivity(profile?.id, profile?.name, 'Cambio de habitación', 'reservation', res.id,
-      `${res.room_id} → ${newRoomId} desde ${moveDate} (${reason})`);
-    setRoomChangeModal(null);
-    fetchData();
+      // ── 4. Mantenimiento card if damaged ────────────────────────────────────
+      if (reason === 'damaged') {
+        await supabase.from('reservations').insert({
+          room_id:         res.room_id,
+          guest_name:      `⚠️ ${description.trim() || 'Daño reportado'}`,
+          num_guests:      0,
+          check_in:        moveDate,
+          check_out:       originalCheckOut,
+          status:          'mantenimiento',
+          price_per_night: 0,
+        });
+      }
+
+      logActivity(profile?.id, profile?.name, 'Cambio de habitación', 'reservation', res.id,
+        `${res.room_id} → ${newRoomId} desde ${moveDate} (${reason})`);
+      setRoomChangeModal(null);
+      await fetchData();
+    } catch (err: any) {
+      setRoomChangeError(err.message ?? 'Error desconocido');
+    } finally {
+      setRoomChangeSaving(false);
+    }
   }
 
   // Calendar hover highlight
@@ -1708,9 +1723,10 @@ export default function CalendarPage() {
                             className={`relative w-full h-full group ${selectMode && selectedType && selectedType !== res.status ? 'opacity-30' : ''}`}
                             onMouseEnter={e => {
                               setHoveredCell({ roomId: room.id, day: d });
-                              if (!isNota && (res as any).notes) {
+                              const rawNotes = (res as any).notes ?? '';
+                              if (!isNota && rawNotes && !rawNotes.includes('__room_change')) {
                                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                setNoteTooltip({ notes: (res as any).notes, x: rect.right + 8, y: rect.top });
+                                setNoteTooltip({ notes: rawNotes, x: rect.right + 8, y: rect.top });
                               }
                             }}
                             onMouseLeave={() => { setHoveredCell(null); setNoteTooltip(null); }}
@@ -1809,7 +1825,7 @@ export default function CalendarPage() {
                           </button>
 
                           {/* ── Note indicator (Excel-style corner triangle) ── */}
-                          {!isNota && (res as any).notes && (
+                          {!isNota && (res as any).notes && !((res as any).notes ?? '').includes('__room_change') && (
                             <div
                               className="absolute top-0 right-0 w-0 h-0 pointer-events-none z-10"
                               style={{ borderTop: '9px solid #facc15', borderLeft: '9px solid transparent' }}
@@ -3990,17 +4006,24 @@ export default function CalendarPage() {
                 </div>
 
                 <div className="flex justify-between gap-3 border-t border-gray-100 pt-4">
-                  <button onClick={() => setRoomChangeModal(m => m ? { ...m, step: 'room' } : m)}
+                  <button onClick={() => { setRoomChangeError(''); setRoomChangeModal(m => m ? { ...m, step: 'room' } : m); }}
                     className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
                     ← Atrás
                   </button>
                   <button
-                    disabled={!roomChangeModal.reason || (roomChangeModal.reason === 'damaged' && !roomChangeModal.description.trim())}
+                    disabled={roomChangeSaving || !roomChangeModal.reason || (roomChangeModal.reason === 'damaged' && !roomChangeModal.description.trim())}
                     onClick={handleRoomChange}
-                    className="px-5 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-400 text-white rounded-lg disabled:opacity-40">
-                    ✓ Confirmar cambio
+                    className="px-5 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-400 text-white rounded-lg disabled:opacity-40 flex items-center gap-2">
+                    {roomChangeSaving
+                      ? <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> Guardando...</>
+                      : '✓ Confirmar cambio'}
                   </button>
                 </div>
+                {roomChangeError && (
+                  <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mt-2">
+                    ⚠️ {roomChangeError}
+                  </p>
+                )}
               </div>
             )}
           </div>
