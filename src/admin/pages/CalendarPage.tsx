@@ -191,6 +191,8 @@ export default function CalendarPage() {
     checkoutNightPrices: [] as number[],
     // vitrina items paid in this session (for Anular)
     checkoutPaidVitrina: [] as PendingVitrinaItem[],
+    // room change: previous room info (null if single room stay)
+    prevRoomInfo: null as { room: string; checkin: string; checkout: string; price: number; nights: number; paid: number } | null,
   });
 
   // Late checkout popup (from card menu)
@@ -264,6 +266,7 @@ export default function CalendarPage() {
     step: 'room' | 'reason';
     res: Reservation;
     newRoomId: string;
+    moveDate: string;          // first night in new room
     reason: 'damaged' | 'upgrade' | 'other' | '';
     description: string;
     newPrice: string;
@@ -271,67 +274,108 @@ export default function CalendarPage() {
     loading: boolean;
   } | null>(null);
 
-  async function openRoomChange(res: Reservation) {
-    setMenuOpenId(null);
-    setRoomChangeModal({ step: 'room', res, newRoomId: '', reason: '', description: '', newPrice: '', availableRooms: [], loading: true });
-    // Fetch conflicting room_ids for the reservation period
+  async function loadRoomsForMove(res: Reservation, fromDate: string) {
+    setRoomChangeModal(prev => prev ? { ...prev, loading: true, newRoomId: '' } : null);
+    // Only rooms free from fromDate → res.check_out are valid
     const { data: conflicts } = await supabase
       .from('reservations')
       .select('room_id')
       .in('status', ['ocupado', 'reserva', 'mantenimiento', 'habilitacion', 'limpieza'])
       .neq('id', res.id)
       .lt('check_in', res.check_out)
-      .gt('check_out', res.check_in);
+      .gt('check_out', fromDate);
     const blockedIds = new Set((conflicts ?? []).map((r: any) => r.room_id));
-    blockedIds.add(res.room_id); // exclude current room
+    blockedIds.add(res.room_id);
     const available = rooms.filter(r => !blockedIds.has(r.id));
     setRoomChangeModal(prev => prev ? { ...prev, availableRooms: available, loading: false } : null);
   }
 
+  async function openRoomChange(res: Reservation) {
+    setMenuOpenId(null);
+    const today = toDateStr(new Date());
+    // moveDate defaults to today, clamped to within the stay
+    const moveDate = today < res.check_in ? res.check_in : today >= res.check_out ? res.check_in : today;
+    setRoomChangeModal({ step: 'room', res, newRoomId: '', moveDate, reason: '', description: '', newPrice: '', availableRooms: [], loading: true });
+    await loadRoomsForMove(res, moveDate);
+  }
+
   async function handleRoomChange() {
     if (!roomChangeModal || !roomChangeModal.newRoomId || !roomChangeModal.reason) return;
-    const { res, newRoomId, reason, description, newPrice } = roomChangeModal;
+    const { res, newRoomId, reason, description, newPrice, moveDate } = roomChangeModal;
 
-    // Today = day of room change; tomorrow = day cleaning crew enters
-    const todayDate = new Date();
-    const today     = toDateStr(todayDate);
-    const tomorrowDate = new Date(todayDate); tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-    const tomorrow  = toDateStr(tomorrowDate);
-    const dayAfter  = toDateStr(new Date(tomorrowDate.getTime() + 86400000));
+    const parsedPrice    = parseFloat(newPrice);
+    const newPriceNight  = (!isNaN(parsedPrice) && parsedPrice > 0) ? parsedPrice : (res.price_per_night ?? 0);
+    const r              = res as any;
 
-    // Move reservation to new room (optionally update price)
-    const updatePayload: any = { room_id: newRoomId, updated_at: new Date().toISOString() };
-    const parsedPrice = parseFloat(newPrice);
-    if (!isNaN(parsedPrice) && parsedPrice > 0) updatePayload.price_per_night = parsedPrice;
-    await supabase.from('reservations').update(updatePayload).eq('id', res.id);
+    // ── 1. Shorten original reservation to moveDate ──────────────────────────
+    await supabase.from('reservations')
+      .update({ check_out: moveDate, updated_at: new Date().toISOString() })
+      .eq('id', res.id);
 
+    // ── 2. Create new reservation for new room (moveDate → original check_out) ──
+    const changeNotes = JSON.stringify({
+      __room_change: true,
+      from_room:     res.room_id,
+      from_checkin:  res.check_in,
+      from_checkout: moveDate,
+      from_price:    res.price_per_night ?? 0,
+      parent_id:     res.id,
+    });
+    await supabase.from('reservations').insert({
+      room_id:              newRoomId,
+      guest_name:           res.guest_name,
+      num_guests:           res.num_guests,
+      check_in:             moveDate,
+      check_out:            res.check_out,
+      status:               'ocupado',
+      price_per_night:      newPriceNight,
+      notes:                changeNotes,
+      additional_guests:    r.additional_guests     ?? null,
+      guest_document:       r.guest_document        ?? null,
+      guest_phone:          r.guest_phone           ?? null,
+      guest_gender:         r.guest_gender          ?? null,
+      guest_birthdate:      r.guest_birthdate       ?? null,
+      guest_marital_status: r.guest_marital_status  ?? null,
+      guest_country:        r.guest_country         ?? null,
+      guest_profession:     r.guest_profession      ?? null,
+      guest_purpose:        r.guest_purpose         ?? null,
+      guest_origin:         r.guest_origin          ?? null,
+      guest_next_dest:      r.guest_next_dest       ?? null,
+      guest_transport:      r.guest_transport       ?? null,
+      guest_email:          r.guest_email           ?? null,
+      wants_invoice:        res.wants_invoice,
+      siaat_number:         r.siaat_number          ?? null,
+      has_pet:              res.has_pet,
+      is_empresa:           res.is_empresa,
+      created_by:           profile?.id             ?? null,
+    });
+
+    // ── 3. Habilitación card on original room (moveDate → original check_out) ──
+    await supabase.from('reservations').insert({
+      room_id:         res.room_id,
+      guest_name:      '🏠 Habilitación',
+      num_guests:      0,
+      check_in:        moveDate,
+      check_out:       res.check_out,
+      status:          'habilitacion',
+      price_per_night: 0,
+    });
+
+    // ── 4. If damaged: also mantenimiento card ────────────────────────────────
     if (reason === 'damaged') {
-      // Mantenimiento card on old room: starts today, ends at original checkout
-      const summary = description.trim() || 'Daño reportado';
       await supabase.from('reservations').insert({
         room_id:         res.room_id,
-        guest_name:      `⚠️ ${summary}`,
+        guest_name:      `⚠️ ${description.trim() || 'Daño reportado'}`,
         num_guests:      0,
-        check_in:        today,
+        check_in:        moveDate,
         check_out:       res.check_out,
         status:          'mantenimiento',
         price_per_night: 0,
       });
-    } else if (reason === 'upgrade') {
-      // Limpieza card starts TOMORROW (day after room change), lasts 1 day
-      await supabase.from('reservations').insert({
-        room_id:         res.room_id,
-        guest_name:      '🧹 Limpieza suave',
-        num_guests:      0,
-        check_in:        tomorrow,
-        check_out:       dayAfter,
-        status:          'limpieza',
-        price_per_night: 0,
-      });
     }
 
-    logActivity(profile?.id, profile?.name, 'Reserva editada', 'reservation', res.id,
-      `Cambio de habitación: ${res.room_id} → ${newRoomId} (${reason === 'damaged' ? 'Hab. dañada' : reason === 'upgrade' ? 'Mejor hab.' : 'Otro'})`);
+    logActivity(profile?.id, profile?.name, 'Cambio de habitación', 'reservation', res.id,
+      `${res.room_id} → ${newRoomId} desde ${moveDate} (${reason})`);
     setRoomChangeModal(null);
     fetchData();
   }
@@ -398,7 +442,9 @@ export default function CalendarPage() {
     if (!row) return;
     setIsPaying(true);
 
-    const today    = new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+    const _now     = new Date();
+    const today    = _now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+    const timeStr  = _now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
     const ciDate   = new Date(row.res.check_in  + 'T00:00:00');
     const coDate   = new Date(row.res.check_out + 'T00:00:00');
     const nights   = Math.max(1, Math.round((coDate.getTime() - ciDate.getTime()) / 86400000));
@@ -417,7 +463,7 @@ export default function CalendarPage() {
       ].filter(Boolean) as { caja: string; amount: number }[];
       for (const ins of splitInserts) {
         await supabase.from('transactions').insert({
-          date: today, type: 'ingreso', category: 'H01-HOSPEDAJE',
+          date: today, time: timeStr, type: 'ingreso', category: 'H01-HOSPEDAJE',
           room_id: row.res.room_id, reservation_id: row.res.id,
           amount: ins.amount, description: desc, caja: ins.caja,
           responsible_id: profile?.id ?? null,
@@ -432,7 +478,7 @@ export default function CalendarPage() {
       const amount = parseFloat(pagoForm.amount);
       if (!amount || amount <= 0 || !pagoForm.caja) return;
       await supabase.from('transactions').insert({
-        date: today, type: 'ingreso', category: 'H01-HOSPEDAJE',
+        date: today, time: timeStr, type: 'ingreso', category: 'H01-HOSPEDAJE',
         room_id: row.res.room_id, reservation_id: row.res.id,
         amount, description: desc, caja: pagoForm.caja,
         responsible_id: profile?.id ?? null,
@@ -823,10 +869,12 @@ export default function CalendarPage() {
     // Register adelanto transaction if provided
     const adelantoAmt = parseFloat(form.adelanto || '0');
     if (adelantoAmt > 0) {
-      const todayLocal = new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+      const _aNow     = new Date();
+      const adelantoDate = _aNow.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+      const adelantoTime = _aNow.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
       await supabase.from('transactions').insert({
-        date:           form.check_in || todayLocal,
-        time:           null,
+        date:           adelantoDate,
+        time:           adelantoTime,
         description:    `Adelanto pagado — ${resolvedName}`,
         amount:         adelantoAmt,
         type:           'ingreso',
@@ -1018,8 +1066,37 @@ export default function CalendarPage() {
     const nightPrices: number[] = (savedNightPrices && savedNightPrices.length === nights)
       ? savedNightPrices
       : Array(nights).fill(res.price_per_night ?? 0);
-    const hospTotal   = nightPrices.reduce((s, p) => s + p, 0);
-    const hospPending = Math.max(0, hospTotal - alreadyPaid);
+
+    // Detect room change split (notes contains __room_change JSON)
+    let prevRoomInfo: { room: string; checkin: string; checkout: string; price: number; nights: number; paid: number } | null = null;
+    try {
+      const notesStr = (res as any).notes ?? '';
+      if (notesStr.includes('__room_change')) {
+        const parsed = JSON.parse(notesStr);
+        if (parsed.__room_change && parsed.parent_id) {
+          const prevNights = Math.max(1, Math.round(
+            (new Date(parsed.from_checkout + 'T00:00:00').getTime() - new Date(parsed.from_checkin + 'T00:00:00').getTime()) / 86400000
+          ));
+          const { data: parentTxs } = await supabase
+            .from('transactions').select('amount')
+            .eq('reservation_id', parsed.parent_id).eq('type', 'ingreso').eq('category', 'H01-HOSPEDAJE');
+          const parentPaid = (parentTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+          prevRoomInfo = {
+            room:     parsed.from_room,
+            checkin:  parsed.from_checkin,
+            checkout: parsed.from_checkout,
+            price:    parsed.from_price ?? 0,
+            nights:   prevNights,
+            paid:     parentPaid,
+          };
+        }
+      }
+    } catch (_) { /* ignore malformed JSON */ }
+
+    const prevPaid    = prevRoomInfo?.paid ?? 0;
+    const prevTotal   = prevRoomInfo ? prevRoomInfo.nights * prevRoomInfo.price : 0;
+    const hospTotal   = nightPrices.reduce((s, p) => s + p, 0) + prevTotal;
+    const hospPending = Math.max(0, hospTotal - alreadyPaid - prevPaid);
 
     // Snapshot original DB values so Cancel can revert them
     checkoutOriginalRef.current = {
@@ -1056,6 +1133,7 @@ export default function CalendarPage() {
       checkoutMascotaPayCaja: 'CAJA MAYOR',
       checkoutNightPrices: nightPrices,
       checkoutPaidVitrina: [],
+      prevRoomInfo,
     });
   }
 
@@ -2989,15 +3067,18 @@ export default function CalendarPage() {
               {/* ── Pagos por sección ── */}
               {(() => {
                 const r = checkoutModal.res!;
+                const prev = checkoutModal.prevRoomInfo;
                 const nights = Math.max(1, Math.round(
                   (new Date(r.check_out + 'T00:00:00').getTime() - new Date(r.check_in + 'T00:00:00').getTime()) / 86400000
                 ));
                 const nightPrices = checkoutModal.checkoutNightPrices.length === nights
                   ? checkoutModal.checkoutNightPrices
                   : Array(nights).fill(r.price_per_night ?? 0);
-                const hospTotal   = nightPrices.reduce((s, p) => s + p, 0);
-                const hospPaid    = checkoutModal.checkoutPaid;
-                const hospPending = Math.max(0, hospTotal - hospPaid);
+                const currentTotal = nightPrices.reduce((s, p) => s + p, 0);
+                const prevTotal    = prev ? prev.nights * prev.price : 0;
+                const hospTotal    = currentTotal + prevTotal;
+                const hospPaid     = checkoutModal.checkoutPaid + (prev?.paid ?? 0);
+                const hospPending  = Math.max(0, hospTotal - hospPaid);
                 const vitItems    = pendingVitrina[r.id] ?? [];
                 const hasLate     = !!(r as any).late_checkout;
 
@@ -3008,8 +3089,36 @@ export default function CalendarPage() {
                     <div className="bg-gray-50 rounded-xl overflow-hidden border border-gray-200">
                       <div className="px-4 py-2 bg-gray-100 text-xs font-bold uppercase tracking-wider text-gray-500">🏨 Hospedaje</div>
                       <div className="px-4 py-3 space-y-1 text-sm">
+
+                        {/* Previous room section (room change) */}
+                        {prev && (
+                          <div className="bg-white border border-gray-200 rounded-lg px-3 py-2 mb-2 space-y-0.5">
+                            <div className="flex justify-between text-xs font-bold text-gray-700">
+                              <span>🏠 {prev.room} <span className="font-normal text-gray-400">({prev.checkin} → {prev.checkout})</span></span>
+                              <span>{prev.nights} noche{prev.nights !== 1 ? 's' : ''}</span>
+                            </div>
+                            <div className="flex justify-between text-xs text-gray-500">
+                              <span>Bs. {prev.price.toFixed(2)}/noche</span>
+                              <span className="font-semibold text-gray-700">Bs. {prevTotal.toFixed(2)}</span>
+                            </div>
+                            {prev.paid > 0 && (
+                              <div className="flex justify-between text-xs text-green-600">
+                                <span>✓ Ya pagado</span>
+                                <span>Bs. {prev.paid.toFixed(2)}</span>
+                              </div>
+                            )}
+                            {prev.paid < prevTotal && (
+                              <div className="flex justify-between text-xs text-red-500">
+                                <span>Pendiente</span>
+                                <span>Bs. {(prevTotal - prev.paid).toFixed(2)}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Current room */}
                         <div className="flex justify-between text-gray-600">
-                          <span>📅 {r.check_in} → {r.check_out}</span>
+                          <span>{prev ? `🔄 ${r.room_id} ` : '📅 '}{r.check_in} → {r.check_out}</span>
                           <span className="font-semibold">{nights} noche{nights !== 1 ? 's' : ''}</span>
                         </div>
                         {nightPrices.length > 0 && <>
@@ -3030,8 +3139,8 @@ export default function CalendarPage() {
                                       onChange={e => {
                                         const newPrices = [...checkoutModal.checkoutNightPrices];
                                         newPrices[i] = parseFloat(e.target.value) || 0;
-                                        const newTotal = newPrices.reduce((s, p) => s + p, 0);
-                                        const newPending = Math.max(0, newTotal - checkoutModal.checkoutPaid);
+                                        const newTotal = newPrices.reduce((s, p) => s + p, 0) + (checkoutModal.prevRoomInfo ? checkoutModal.prevRoomInfo.nights * checkoutModal.prevRoomInfo.price : 0);
+                                        const newPending = Math.max(0, newTotal - checkoutModal.checkoutPaid - (checkoutModal.prevRoomInfo?.paid ?? 0));
                                         setCheckoutModal(m => ({
                                           ...m,
                                           checkoutNightPrices: newPrices,
@@ -3743,38 +3852,65 @@ export default function CalendarPage() {
             </div>
 
             {roomChangeModal.step === 'room' ? (
-              /* ── Step 1: pick new room ── */
+              /* ── Step 1: pick move date + new room ── */
               <div className="px-6 py-5 space-y-4">
+                {/* Move date picker */}
+                <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 space-y-2">
+                  <p className="text-xs font-bold text-blue-700 uppercase tracking-wider">¿Desde cuándo cambia de habitación?</p>
+                  <p className="text-[11px] text-blue-600">
+                    Estancia: <span className="font-semibold">{roomChangeModal.res.check_in} → {roomChangeModal.res.check_out}</span>
+                  </p>
+                  <DatePicker
+                    value={roomChangeModal.moveDate}
+                    accentClass="border-blue-400 ring-blue-100"
+                    useFixed
+                    onChange={async v => {
+                      if (!v) return;
+                      setRoomChangeModal(m => m ? { ...m, moveDate: v, newRoomId: '' } : m);
+                      await loadRoomsForMove(roomChangeModal.res, v);
+                    }}
+                  />
+                  {(() => {
+                    const ciMs  = new Date(roomChangeModal.res.check_in  + 'T00:00:00').getTime();
+                    const coMs  = new Date(roomChangeModal.res.check_out + 'T00:00:00').getTime();
+                    const mvMs  = new Date(roomChangeModal.moveDate       + 'T00:00:00').getTime();
+                    const nightsOrig = Math.max(0, Math.round((mvMs - ciMs) / 86400000));
+                    const nightsNew  = Math.max(0, Math.round((coMs - mvMs) / 86400000));
+                    return (
+                      <div className="flex gap-4 text-xs pt-1">
+                        <span className="text-gray-600">🏠 <span className="font-semibold">{roomChangeModal.res.room_id}</span>: {nightsOrig} noche{nightsOrig !== 1 ? 's' : ''}</span>
+                        <span className="text-blue-600">🔄 Nueva hab.: {nightsNew} noche{nightsNew !== 1 ? 's' : ''}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Available rooms */}
                 {roomChangeModal.loading ? (
                   <div className="flex items-center justify-center h-24">
                     <div className="w-6 h-6 border-4 border-blue-400 border-t-transparent rounded-full animate-spin" />
                   </div>
                 ) : roomChangeModal.availableRooms.length === 0 ? (
                   <p className="text-sm text-gray-500 text-center py-4">
-                    No hay habitaciones disponibles para esas fechas.
+                    No hay habitaciones disponibles desde esa fecha.
                   </p>
                 ) : (
-                  <>
-                    <p className="text-sm text-gray-500">
-                      Noches: <span className="font-semibold text-gray-800">{roomChangeModal.res.check_in} → {roomChangeModal.res.check_out}</span>
-                    </p>
-                    <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
-                      {roomChangeModal.availableRooms.map(r => (
-                        <button
-                          key={r.id}
-                          onClick={() => setRoomChangeModal(m => m ? { ...m, newRoomId: r.id } : m)}
-                          className={`text-left px-3 py-2.5 rounded-xl border-2 transition-all ${
-                            roomChangeModal.newRoomId === r.id
-                              ? 'border-blue-500 bg-blue-50'
-                              : 'border-gray-200 hover:border-gray-300'
-                          }`}
-                        >
-                          <p className="font-bold text-gray-900 text-sm">{r.id}</p>
-                          <p className="text-[11px] text-gray-500 truncate">{r.type}</p>
-                        </button>
-                      ))}
-                    </div>
-                  </>
+                  <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto">
+                    {roomChangeModal.availableRooms.map(r => (
+                      <button
+                        key={r.id}
+                        onClick={() => setRoomChangeModal(m => m ? { ...m, newRoomId: r.id } : m)}
+                        className={`text-left px-3 py-2.5 rounded-xl border-2 transition-all ${
+                          roomChangeModal.newRoomId === r.id
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <p className="font-bold text-gray-900 text-sm">{r.id}</p>
+                        <p className="text-[11px] text-gray-500 truncate">{r.type}</p>
+                      </button>
+                    ))}
+                  </div>
                 )}
                 <div className="flex justify-end gap-3 border-t border-gray-100 pt-4">
                   <button onClick={() => setRoomChangeModal(null)}

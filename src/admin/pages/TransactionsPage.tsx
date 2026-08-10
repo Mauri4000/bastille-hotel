@@ -608,31 +608,39 @@ export default function TransactionsPage() {
                           </td>
                           {/* Actions */}
                           <td className="px-2 py-2.5">
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                            <div className="flex items-center gap-1">
                               {!isShiftRef(t) && <button
                                 onClick={() => openEdit(t)}
-                                className="p-1.5 rounded-lg text-gray-300 hover:text-blue-500 hover:bg-blue-50 transition-all"
+                                className="p-1.5 rounded-lg text-gray-300 hover:text-blue-500 hover:bg-blue-50 transition-all opacity-0 group-hover:opacity-100"
                                 title="Editar"
                               >
                                 <Pencil size={13} />
                               </button>}
-                              <button
-                                onClick={() => setConfirmDialog({
-                                  open: true,
-                                  title: 'Eliminar movimiento',
-                                  body: `¿Eliminar "${t.description || t.category}" de Bs. ${fmt(t.amount)}? Esta acción no se puede deshacer.`,
-                                  onConfirm: async () => {
-                                    await supabase.from('transactions').delete().eq('id', t.id);
-                                    logActivity(profile?.id, profile?.name, t.type === 'ingreso' ? 'Ingreso eliminado' : 'Egreso eliminado', 'transaction', t.id, `${t.category} — Bs. ${t.amount} (${t.caja})`);
-                                    setConfirmDialog(d => ({ ...d, open: false }));
-                                    fetchData();
-                                  },
-                                })}
-                                className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
-                                title="Eliminar"
-                              >
-                                <Trash2 size={13} />
-                              </button>
+                              {/* Receptionists can delete Caja Mayor/Chica; admins can delete anything except shift refs */}
+                              {!isShiftRef(t) && (isAdmin || t.caja === 'CAJA MAYOR' || t.caja === 'CAJA CHICA') && (
+                                <button
+                                  onClick={() => setConfirmDialog({
+                                    open: true,
+                                    title: 'Eliminar movimiento',
+                                    body: `¿Eliminar "${t.description || t.category}" de Bs. ${fmt(t.amount)}? Esta acción no se puede deshacer.`,
+                                    onConfirm: async () => {
+                                      const { error: delErr } = await supabase.from('transactions').delete().eq('id', t.id);
+                                      if (delErr) {
+                                        setConfirmDialog(d => ({ ...d, open: false }));
+                                        alert('Error al eliminar: ' + delErr.message);
+                                        return;
+                                      }
+                                      logActivity(profile?.id, profile?.name, t.type === 'ingreso' ? 'Ingreso eliminado' : 'Egreso eliminado', 'transaction', t.id, `${t.category} — Bs. ${t.amount} (${t.caja})`);
+                                      setConfirmDialog(d => ({ ...d, open: false }));
+                                      fetchData();
+                                    },
+                                  })}
+                                  className="p-1.5 rounded-lg text-gray-200 hover:text-red-500 hover:bg-red-50 transition-all"
+                                  title="Eliminar"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
