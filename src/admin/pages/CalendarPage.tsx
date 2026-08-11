@@ -166,6 +166,12 @@ export default function CalendarPage() {
     is_invoice: false, siaat_number: '', invoice_number: '', is_blacklist: false,
     // hospedaje already paid (fetched on open)
     checkoutPaid:       0,
+    checkoutPaidList:   [] as { id: string; amount: number; date: string; description: string | null }[],
+    // inline adelanto form
+    checkoutAdelantoOpen: false,
+    checkoutAdelantoAmt:  '',
+    checkoutAdelantoDate: '',
+    checkoutAdelantoCaja: 'CAJA MAYOR' as string,
     // hospedaje payment form
     checkoutHospPayAmt: '',
     checkoutHospPayCaja:'CAJA MAYOR' as string,
@@ -213,6 +219,11 @@ export default function CalendarPage() {
     res: Reservation; extra_price: string; caja: string;
   } | null>(null);
   const [pendingMascotaPrice, setPendingMascotaPrice] = useState<Record<string, string>>({});
+
+  // Adelanto popup (from card menu)
+  const [adelantoModal, setAdelantoModal] = useState<{
+    res: Reservation; amount: string; date: string; time: string; caja: string;
+  } | null>(null);
   // Snapshot of DB values when checkout modal opens (used to revert on Cancel)
   const checkoutOriginalRef = useRef<{ departure_time: string; is_blacklist: boolean; wants_invoice: boolean; siaat_number: string; invoice_number: string } | null>(null);
 
@@ -1048,9 +1059,11 @@ export default function CalendarPage() {
 
     // Fetch hospedaje already paid for this reservation
     const { data: paidTxs } = await supabase
-      .from('transactions').select('amount')
-      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H01-HOSPEDAJE');
-    const alreadyPaid = (paidTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+      .from('transactions').select('id, amount, date, description')
+      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H01-HOSPEDAJE')
+      .order('date', { ascending: true });
+    const paidList = (paidTxs ?? []) as { id: string; amount: number; date: string; description: string | null }[];
+    const alreadyPaid = paidList.reduce((s, t) => s + t.amount, 0);
 
     // Fetch late checkout transactions for this room (by room_id + category)
     const { data: lateTxs } = await supabase
@@ -1130,6 +1143,11 @@ export default function CalendarPage() {
       invoice_number: invoice,
       is_blacklist:   (res as any).is_blacklist ?? false,
       checkoutPaid:        alreadyPaid,
+      checkoutPaidList:    paidList,
+      checkoutAdelantoOpen: false,
+      checkoutAdelantoAmt:  '',
+      checkoutAdelantoDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' }),
+      checkoutAdelantoCaja: 'CAJA MAYOR',
       checkoutHospPayAmt:  hospPending > 0 ? hospPending.toFixed(2) : '',
       checkoutHospPayCaja: 'CAJA MAYOR',
       checkoutHospSplit:   false,
@@ -1268,18 +1286,20 @@ export default function CalendarPage() {
       const parts = inserts.map(i => `${i.caja === 'CUENTA BNB' ? 'QR' : i.caja === 'TARJETA' ? 'Tarjeta' : 'Efectivo'}: Bs. ${i.amount.toFixed(2)}`).join(', ');
       logActivity(profile?.id, profile?.name, 'Pago hospedaje', 'transaction', res.id,
         `${res.room_id} — ${res.guest_name} · ${parts}`);
-      setCheckoutModal(m => ({ ...m, checkoutPaid: m.checkoutPaid + total, checkoutHospSplit: false, checkoutHospAmt_cash: '', checkoutHospAmt_qr: '', checkoutHospAmt_card: '' }));
+      const newEntries = inserts.map(i => ({ id: `tmp-${Date.now()}-${i.caja}`, amount: i.amount, date: today, description: desc }));
+      setCheckoutModal(m => ({ ...m, checkoutPaid: m.checkoutPaid + total, checkoutPaidList: [...m.checkoutPaidList, ...newEntries], checkoutHospSplit: false, checkoutHospAmt_cash: '', checkoutHospAmt_qr: '', checkoutHospAmt_card: '' }));
     } else {
       const amt = parseFloat(checkoutModal.checkoutHospPayAmt) || 0;
       if (amt <= 0) return;
-      await supabase.from('transactions').insert({
+      const { data: ins } = await supabase.from('transactions').insert({
         date: today, time: timeStr, type: 'ingreso', category: 'H01-HOSPEDAJE',
         room_id: res.room_id, reservation_id: res.id, amount: amt,
         description: desc, caja: checkoutModal.checkoutHospPayCaja, responsible_id: profile?.id ?? null,
-      });
+      }).select('id').single();
       logActivity(profile?.id, profile?.name, 'Pago hospedaje', 'transaction', res.id,
         `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutHospPayCaja})`);
-      setCheckoutModal(m => ({ ...m, checkoutPaid: m.checkoutPaid + amt, checkoutHospPayAmt: '' }));
+      const newEntry = { id: (ins as any)?.id ?? `tmp-${Date.now()}`, amount: amt, date: today, description: desc };
+      setCheckoutModal(m => ({ ...m, checkoutPaid: m.checkoutPaid + amt, checkoutPaidList: [...m.checkoutPaidList, newEntry], checkoutHospPayAmt: '' }));
     }
   }
 
@@ -1332,7 +1352,11 @@ export default function CalendarPage() {
     await supabase.from('transactions').delete().eq('id', tx.id);
     logActivity(profile?.id, profile?.name, 'Pago anulado (hospedaje)', 'transaction', res.id,
       `${res.room_id} — ${res.guest_name} · Bs. ${tx.amount.toFixed(2)}`);
-    setCheckoutModal(m => ({ ...m, checkoutPaid: Math.max(0, m.checkoutPaid - tx.amount) }));
+    setCheckoutModal(m => ({
+      ...m,
+      checkoutPaid: Math.max(0, m.checkoutPaid - tx.amount),
+      checkoutPaidList: m.checkoutPaidList.filter(t => t.id !== tx.id),
+    }));
   }
 
   async function checkoutAnularLate() {
@@ -3173,13 +3197,106 @@ export default function CalendarPage() {
                           <div className="flex justify-between font-semibold text-gray-800 border-t border-gray-200 pt-1">
                             <span>Total</span><span>Bs. {hospTotal.toFixed(2)}</span>
                           </div>
-                          {hospPaid > 0 && (
-                            <div className="flex justify-between items-center text-green-700 text-xs">
-                              <span>✓ Ya pagado — Bs. {hospPaid.toFixed(2)}</span>
-                              <button onClick={checkoutAnularHosp}
-                                className="text-[10px] text-red-400 hover:text-red-600 underline ml-2">
-                                Anular último
-                              </button>
+                          {/* Payment list */}
+                          {checkoutModal.checkoutPaidList.length > 0 && (
+                            <div className="space-y-1 border border-green-100 rounded-xl bg-green-50 px-3 py-2">
+                              <div className="flex justify-between items-center mb-1">
+                                <span className="text-xs font-semibold text-green-800">Pagos registrados</span>
+                                <button onClick={checkoutAnularHosp}
+                                  className="text-[10px] text-red-400 hover:text-red-600 underline">
+                                  Anular último
+                                </button>
+                              </div>
+                              {checkoutModal.checkoutPaidList.map((p, i) => (
+                                <div key={p.id ?? i} className="flex justify-between text-xs text-green-700">
+                                  <span className="truncate max-w-[60%]">{p.date} · {p.description ?? 'Pago'}</span>
+                                  <span className="font-semibold">Bs. {p.amount.toFixed(2)}</span>
+                                </div>
+                              ))}
+                              <div className="flex justify-between text-xs font-bold text-green-800 border-t border-green-200 pt-1 mt-1">
+                                <span>✓ Total pagado</span>
+                                <span>Bs. {hospPaid.toFixed(2)}</span>
+                              </div>
+                            </div>
+                          )}
+                          {/* Inline adelanto button / form */}
+                          {!checkoutModal.checkoutAdelantoOpen ? (
+                            <button
+                              onClick={() => setCheckoutModal(m => ({ ...m, checkoutAdelantoOpen: true }))}
+                              className="w-full text-xs text-green-700 border border-dashed border-green-300 rounded-lg py-1.5 hover:bg-green-50 transition-colors">
+                              + Registrar adelanto con fecha
+                            </button>
+                          ) : (
+                            <div className="border border-green-200 rounded-xl bg-green-50 p-3 space-y-2">
+                              <p className="text-xs font-semibold text-green-800">Adelanto</p>
+                              <div className="flex gap-2 items-center">
+                                <input type="number" min={0} step={0.5}
+                                  value={checkoutModal.checkoutAdelantoAmt}
+                                  onChange={e => setCheckoutModal(m => ({ ...m, checkoutAdelantoAmt: e.target.value }))}
+                                  placeholder="Monto Bs."
+                                  className="w-28 border border-green-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
+                                <div className="flex-1">
+                                  <DatePicker
+                                    value={checkoutModal.checkoutAdelantoDate}
+                                    onChange={d => setCheckoutModal(m => ({ ...m, checkoutAdelantoDate: d }))}
+                                    useFixed
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex gap-1">
+                                {(['CAJA MAYOR','CUENTA BNB','TARJETA','CAJA CHICA'] as const).map(c => (
+                                  <button key={c} type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutAdelantoCaja: c }))}
+                                    className={`flex-1 text-[10px] py-1 rounded-lg font-semibold border transition-colors ${checkoutModal.checkoutAdelantoCaja === c ? 'bg-green-600 text-white border-green-600' : 'text-gray-500 border-gray-200 hover:bg-gray-100'}`}>
+                                    {c === 'CAJA MAYOR' ? 'Efectivo' : c === 'CUENTA BNB' ? 'QR' : c === 'TARJETA' ? 'Tarjeta' : 'Ch.Chica'}
+                                  </button>
+                                ))}
+                              </div>
+                              <div className="flex gap-2">
+                                <button onClick={() => setCheckoutModal(m => ({ ...m, checkoutAdelantoOpen: false, checkoutAdelantoAmt: '' }))}
+                                  className="flex-1 text-xs py-1.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50">
+                                  Cancelar
+                                </button>
+                                <button
+                                  disabled={!checkoutModal.checkoutAdelantoAmt || parseFloat(checkoutModal.checkoutAdelantoAmt) <= 0}
+                                  onClick={async () => {
+                                    const res = checkoutModal.res!;
+                                    const amt = parseFloat(checkoutModal.checkoutAdelantoAmt);
+                                    if (!amt || amt <= 0) return;
+                                    const now = new Date();
+                                    const timeStr = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+                                    const desc = `Adelanto — ${res.guest_name}`;
+                                    const { data: ins } = await supabase.from('transactions').insert({
+                                      date:           checkoutModal.checkoutAdelantoDate,
+                                      time:           timeStr,
+                                      description:    desc,
+                                      amount:         amt,
+                                      type:           'ingreso',
+                                      category:       'H01-HOSPEDAJE',
+                                      caja:           checkoutModal.checkoutAdelantoCaja,
+                                      room_id:        res.room_id,
+                                      reservation_id: res.id,
+                                      responsible_id: profile?.id ?? null,
+                                    }).select('id').single();
+                                    logActivity(profile?.id, profile?.name, 'Adelanto registrado', 'reservation', res.id,
+                                      `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutAdelantoCaja})`);
+                                    const newEntry = { id: (ins as any)?.id ?? `tmp-${Date.now()}`, amount: amt, date: checkoutModal.checkoutAdelantoDate, description: desc };
+                                    const newPaid = checkoutModal.checkoutPaid + amt;
+                                    const hospTotalNow = checkoutModal.checkoutNightPrices.reduce((s, p) => s + p, 0) + (checkoutModal.prevRoomInfo ? checkoutModal.prevRoomInfo.nights * checkoutModal.prevRoomInfo.price : 0);
+                                    const newPending = Math.max(0, hospTotalNow - newPaid - (checkoutModal.prevRoomInfo?.paid ?? 0));
+                                    setCheckoutModal(m => ({
+                                      ...m,
+                                      checkoutPaid:     newPaid,
+                                      checkoutPaidList: [...m.checkoutPaidList, newEntry],
+                                      checkoutAdelantoOpen: false,
+                                      checkoutAdelantoAmt:  '',
+                                      checkoutHospPayAmt: newPending > 0 ? newPending.toFixed(2) : '',
+                                    }));
+                                  }}
+                                  className="flex-1 text-xs py-1.5 bg-green-600 hover:bg-green-500 disabled:opacity-40 text-white rounded-lg font-semibold">
+                                  ✓ Registrar
+                                </button>
+                              </div>
                             </div>
                           )}
                           {hospPending > 0 ? (
@@ -3591,6 +3708,15 @@ export default function CalendarPage() {
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-orange-600 hover:bg-orange-50">
                 ⬆ Check out
               </button>
+              <button onClick={() => {
+                const now = new Date();
+                const d = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+                const t = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+                setAdelantoModal({ res: cardMenu.res, amount: '', date: d, time: t, caja: 'CAJA MAYOR' });
+                setCardMenu(null);
+              }} className="w-full text-left px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-50">
+                💵 Adelanto
+              </button>
               <button onClick={() => { setEarlyCheckinModal({ res: cardMenu.res, time: '', extra_price: '', caja: 'CAJA MAYOR' }); setCardMenu(null); }}
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-orange-600 hover:bg-orange-50">
                 🌅 Early Check-in
@@ -3612,6 +3738,17 @@ export default function CalendarPage() {
                 🔄 Cambiar habitación
               </button>
             </>)}
+            {cardMenu.res.status === 'reserva' && (
+              <button onClick={() => {
+                const now = new Date();
+                const d = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+                const t = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+                setAdelantoModal({ res: cardMenu.res, amount: '', date: d, time: t, caja: 'CAJA MAYOR' });
+                setCardMenu(null);
+              }} className="w-full text-left px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-50">
+                💵 Adelanto
+              </button>
+            )}
             {cardMenu.res.status === 'limpieza' && (
               <button onClick={async () => {
                 await supabase.from('reservations').delete().eq('id', cardMenu.res.id);
@@ -4432,6 +4569,95 @@ export default function CalendarPage() {
                 }}
                 className="px-5 py-2 text-sm font-semibold bg-teal-600 hover:bg-teal-500 text-white rounded-lg">
                 ✓ Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Adelanto modal ── */}
+      {adelantoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-green-50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-900">💵 Adelanto</h3>
+                <p className="text-xs text-green-700 font-semibold mt-0.5">
+                  {adelantoModal.res.room_id} — {adelantoModal.res.guest_name}
+                </p>
+              </div>
+              <button onClick={() => setAdelantoModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              {/* Monto */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Monto (Bs.)</label>
+                <input
+                  type="number" min={0} step={0.5}
+                  value={adelantoModal.amount}
+                  onChange={e => setAdelantoModal(m => m ? { ...m, amount: e.target.value } : m)}
+                  placeholder="0.00"
+                  className="w-full border border-green-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                  autoFocus
+                />
+              </div>
+              {/* Fecha */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Fecha del pago</label>
+                <DatePicker
+                  value={adelantoModal.date}
+                  onChange={d => setAdelantoModal(m => m ? { ...m, date: d } : m)}
+                  useFixed
+                />
+              </div>
+              {/* Caja */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Caja</label>
+                <CustomSelect
+                  value={adelantoModal.caja}
+                  onChange={v => setAdelantoModal(m => m ? { ...m, caja: v } : m)}
+                  options={[
+                    { value: 'CAJA MAYOR', label: 'Efectivo' },
+                    { value: 'CUENTA BNB', label: 'QR' },
+                    { value: 'TARJETA',    label: 'Tarjeta' },
+                    { value: 'CAJA CHICA', label: 'Caja Chica' },
+                  ]}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setAdelantoModal(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const amt = parseFloat(adelantoModal.amount || '0');
+                  if (!amt || amt <= 0) return;
+                  const r = adelantoModal.res;
+                  const now = new Date();
+                  const timeStr = adelantoModal.time || now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+                  await supabase.from('transactions').insert({
+                    date:           adelantoModal.date,
+                    time:           timeStr,
+                    description:    `Adelanto — ${r.guest_name}`,
+                    amount:         amt,
+                    type:           'ingreso',
+                    category:       'H01-HOSPEDAJE',
+                    caja:           adelantoModal.caja,
+                    room_id:        r.room_id,
+                    reservation_id: r.id,
+                    responsible_id: profile?.id ?? null,
+                  });
+                  logActivity(profile?.id, profile?.name, 'Adelanto registrado', 'reservation', r.id,
+                    `${r.room_id} — ${r.guest_name} · Bs. ${amt.toFixed(2)} (${adelantoModal.caja})`);
+                  setAdelantoModal(null);
+                }}
+                disabled={!adelantoModal.amount || parseFloat(adelantoModal.amount) <= 0}
+                className="px-5 py-2 text-sm font-semibold bg-green-600 hover:bg-green-500 disabled:opacity-40 text-white rounded-lg">
+                ✓ Registrar adelanto
               </button>
             </div>
           </div>
