@@ -2286,12 +2286,18 @@ export default function CalendarPage() {
                         </div>
                       </div>
 
-                      {/* N° noches + precio */}
-                      <div className="grid grid-cols-2 gap-3">
+                      {/* N° noches + N° huéspedes + precio */}
+                      <div className="grid grid-cols-3 gap-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">N° noches <span className="text-red-400">*</span></label>
                           <input type="number" min={1} max={60} value={form.num_nights}
                             onChange={e => setForm(f => ({ ...f, num_nights: parseInt(e.target.value) || 1 }))}
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">N° huéspedes</label>
+                          <input type="number" min={1} max={20} value={form.num_guests}
+                            onChange={e => setForm(f => ({ ...f, num_guests: parseInt(e.target.value) || 1 }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                         </div>
                         <div>
@@ -2956,6 +2962,14 @@ export default function CalendarPage() {
                       <input type="text" placeholder="País" value={ag.country}
                         onChange={e => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, country: e.target.value } : g))}
                         className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
+                      <div className="grid grid-cols-2 gap-2">
+                        <input type="text" placeholder="Profesión" value={ag.profession}
+                          onChange={e => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, profession: e.target.value } : g))}
+                          className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
+                        <input type="text" list="bastille-purpose-opts" placeholder="Motivo de viaje" value={ag.purpose}
+                          onChange={e => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, purpose: e.target.value } : g))}
+                          className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400" />
+                      </div>
                       <div className="grid grid-cols-3 gap-2">
                         <input type="text" placeholder="Procedencia" value={ag.origin}
                           onChange={e => setConfirmAdditionalGuests(p => p.map((g, i) => i === idx ? { ...g, origin: e.target.value } : g))}
