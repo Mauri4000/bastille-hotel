@@ -73,6 +73,48 @@ const GRAY = '#666666';
 // Column widths matching Python CW array (in points)
 const CW = [4.0, 0.7, 0.65, 0.72, 1.8, 1.8, 1.7, 1.4, 0.7, 1.1, 1.15, 0.55].map(v => v * CM);
 
+// ── Parte Mensual — nationality columns ─────────────────────────────────────
+const NAT_LABELS = [
+  'Bolivia','Argentina','Brasil','Colombia','Chile','Ecuador',
+  'Paraguay','Perú','Uruguay','Venezuela','México','Otros Amer.',
+  'Canadá','EE.UU','Alemania','España','Francia','Inglaterra',
+  'Italia','Suiza','Holanda','Otros Europ.','Japón','Israel',
+  'Otros Asia','Oceanía','África',
+];
+const N_NATS = NAT_LABELS.length; // 27
+
+function mapNatIdx(nat: string): number {
+  if (!nat) return 11; // default: Otros Amer.
+  const n = nat.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  if (/boliv/.test(n)) return 0;
+  if (/argentin/.test(n)) return 1;
+  if (/brasil|brazil/.test(n)) return 2;
+  if (/colomb/.test(n)) return 3;
+  if (/chile/.test(n)) return 4;
+  if (/ecuador/.test(n)) return 5;
+  if (/paragua/.test(n)) return 6;
+  if (/peru/.test(n)) return 7;
+  if (/urugua/.test(n)) return 8;
+  if (/venezuel/.test(n)) return 9;
+  if (/mexic|mejic/.test(n)) return 10;
+  if (/canad/.test(n)) return 12;
+  if (/estado.*uni|eeuu|usa|united.*state|norteameri/.test(n)) return 13;
+  if (/aleman|german/.test(n)) return 14;
+  if (/espa/.test(n)) return 15;
+  if (/franc/.test(n)) return 16;
+  if (/ingla|england|british|reino.*unido/.test(n)) return 17;
+  if (/ital/.test(n)) return 18;
+  if (/suiz|swiss/.test(n)) return 19;
+  if (/holand|neerland|dutch|netherlands/.test(n)) return 20;
+  if (/japon|japan/.test(n)) return 22;
+  if (/israel/.test(n)) return 23;
+  if (/oceani|australi|nueva.*zelan|zealand/.test(n)) return 25;
+  if (/afric/.test(n)) return 26;
+  if (/europ|austria|belgic|dinamar|finlan|greci|hungar|irland|norueg|polon|portug|ruman|rusia|serbi|sueci|turqu|croaci|eslov|chec/.test(n)) return 21;
+  if (/asia|chin|corean|india|pakistan|vietn|filipin|tailand|iran|irak|arabi|afghan|bangla|myanmar|mongol|nepal|sri/.test(n)) return 24;
+  return 11; // Otros Amer. as fallback
+}
+
 export default function ReportesPage() {
   const [fromDate,  setFromDate]  = useState(mondayStr());
   const [toDate,    setToDate]    = useState(todayStr());
@@ -86,6 +128,14 @@ export default function ReportesPage() {
   const [xlsLoad,   setXlsLoad]   = useState(false);
   const [error,     setError]     = useState<string | null>(null);
   const [sendMsg,   setSendMsg]   = useState<string | null>(null);
+
+  // Parte Mensual
+  const [mensualMonth, setMensualMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [mensualLoad, setMensualLoad]   = useState(false);
+  const [mensualError, setMensualError] = useState<string | null>(null);
 
   async function handleGenerar() {
     setLoading(true); setError(null); setRows(null); setRawRes([]);
@@ -202,6 +252,614 @@ export default function ReportesPage() {
       XLSX.writeFile(wb, `PARTE_DIARIO_${fromDate}_${toDate}.xlsx`);
     } catch (e: any) { setError(e.message ?? 'Error Excel'); }
     finally { setXlsLoad(false); }
+  }
+
+  // ── Parte Mensual PDF ────────────────────────────────────────────────────────
+  async function handleGenerarMensual() {
+    setMensualLoad(true); setMensualError(null);
+    try {
+      const [yearS, monthS] = mensualMonth.split('-');
+      const year  = parseInt(yearS);
+      const month = parseInt(monthS);
+      const firstDay     = `${yearS}-${monthS}-01`;
+      const daysInMonth  = new Date(year, month, 0).getDate();
+      const lastDay      = `${yearS}-${monthS}-${String(daysInMonth).padStart(2, '0')}`;
+
+      const { data, error: err } = await supabase
+        .from('reservations')
+        .select('check_in, check_out, guest_country, additional_guests')
+        .in('status', ['ocupado', 'limpieza'])
+        .lte('check_in', lastDay)
+        .gt('check_out', firstDay);
+      if (err) throw err;
+
+      // dayStats[1..31]: I and P arrays of length N_NATS
+      type DS = { I: number[]; P: number[] };
+      const dayStats: DS[] = Array.from({ length: 32 }, () => ({
+        I: Array(N_NATS).fill(0),
+        P: Array(N_NATS).fill(0),
+      }));
+
+      for (const res of (data ?? [])) {
+        const ci = res.check_in as string;
+        const co = res.check_out as string;
+        const nats: string[] = [res.guest_country ?? ''];
+        for (const ag of (res.additional_guests ?? []) as any[]) {
+          if (ag.role === 'babies') continue;
+          nats.push(ag.nationality ?? ag.guest_nationality ?? '');
+        }
+        for (const nat of nats) {
+          const idx = mapNatIdx(nat);
+          for (let d = 1; d <= daysInMonth; d++) {
+            const dd = `${yearS}-${monthS}-${String(d).padStart(2, '0')}`;
+            if (ci === dd) { dayStats[d].I[idx]++; }
+            else if (ci < dd && co > dd) { dayStats[d].P[idx]++; }
+          }
+        }
+      }
+
+      const pm   = await loadPdfMake();
+      const base = window.location.origin;
+      const logoIzq = await imgToBase64(`${base}/logo-bastille.png`).catch(() => '');
+      const logoDer = await imgToBase64(`${base}/logo-gobierno.png`).catch(() => '');
+
+      // Column widths (points): 1 day + 27*2 nat + 2 total = 57 cols
+      const DAY_W = 22;
+      const COL_W = 13.5; // each I or P sub-column
+      const TOT_W = 15;   // each total I or P sub-column
+      const tableWidths: (number|string)[] = [
+        DAY_W,
+        ...Array.from({ length: N_NATS }, () => [COL_W, COL_W]).flat(),
+        TOT_W, TOT_W,
+      ];
+
+      // SVG: nationality label, vertical, spanning pair width
+      function natSvg(label: string, pairW: number): any {
+        const h = 52;
+        const x = (pairW / 2).toFixed(1);
+        return {
+          svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${pairW.toFixed(1)}" height="${h}">` +
+               `<text transform="translate(${x},${h - 2}) rotate(-90)" text-anchor="start" ` +
+               `font-size="6" fill="#444" font-family="Helvetica">${label}</text></svg>`,
+          width: pairW, height: h, alignment: 'center',
+        };
+      }
+
+      // Header row 1: nationality spans
+      const headerRow1: any[] = [
+        { text: 'DÍA', rowSpan: 2, alignment: 'center', fontSize: 7, bold: true,
+          fillColor: '#e0e0e0', margin: [0, 0, 0, 0] },
+      ];
+      for (let i = 0; i < N_NATS; i++) {
+        headerRow1.push({ ...natSvg(NAT_LABELS[i], COL_W * 2), colSpan: 2, fillColor: '#e0e0e0' });
+        headerRow1.push({});
+      }
+      headerRow1.push({ ...natSvg('TOTAL', TOT_W * 2), colSpan: 2, fillColor: '#c8c8c8' });
+      headerRow1.push({});
+
+      // Header row 2: I / P sub-labels
+      const headerRow2: any[] = [{}]; // placeholder for DÍA rowSpan
+      for (let i = 0; i <= N_NATS; i++) { // 27 nats + 1 total = 28 pairs
+        const isTotal = i === N_NATS;
+        const bg = isTotal ? '#d0d0d0' : (i % 2 === 0 ? '#eeeeee' : '#e8e8e8');
+        headerRow2.push({ text: 'I', fontSize: 6, alignment: 'center', bold: true, fillColor: bg });
+        headerRow2.push({ text: 'P', fontSize: 6, alignment: 'center', fillColor: bg });
+      }
+
+      // Day data rows
+      const dataRows: any[][] = [];
+      for (let d = 1; d <= 31; d++) {
+        if (d > daysInMonth) {
+          const gray = { text: '', fillColor: '#f5f5f5' };
+          dataRows.push([
+            { text: String(d), alignment: 'center', fontSize: 7, fillColor: '#f0f0f0' },
+            ...Array(N_NATS * 2 + 2).fill(gray),
+          ]);
+          continue;
+        }
+        const ds = dayStats[d];
+        const tI  = ds.I.reduce((a, b) => a + b, 0);
+        const tP  = ds.P.reduce((a, b) => a + b, 0);
+        const row: any[] = [
+          { text: String(d), alignment: 'center', fontSize: 7, bold: true },
+        ];
+        for (let n = 0; n < N_NATS; n++) {
+          const bg = n % 2 === 0 ? '#ffffff' : '#fafafa';
+          row.push({ text: ds.I[n] || '', alignment: 'center', fontSize: 7, fillColor: bg });
+          row.push({ text: ds.P[n] || '', alignment: 'center', fontSize: 7, fillColor: bg });
+        }
+        row.push({ text: tI || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e8e8e8' });
+        row.push({ text: tP || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e8e8e8' });
+        dataRows.push(row);
+      }
+
+      // Totales row
+      const totI = Array(N_NATS).fill(0);
+      const totP = Array(N_NATS).fill(0);
+      for (let d = 1; d <= daysInMonth; d++) {
+        for (let n = 0; n < N_NATS; n++) {
+          totI[n] += dayStats[d].I[n];
+          totP[n] += dayStats[d].P[n];
+        }
+      }
+      const grandI = totI.reduce((a, b) => a + b, 0);
+      const grandP = totP.reduce((a, b) => a + b, 0);
+      const totalesRow: any[] = [
+        { text: 'TOTAL', alignment: 'center', fontSize: 7, bold: true, fillColor: '#d8d8d8' },
+      ];
+      for (let n = 0; n < N_NATS; n++) {
+        totalesRow.push({ text: totI[n] || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' });
+        totalesRow.push({ text: totP[n] || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' });
+      }
+      totalesRow.push({ text: grandI || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#c8c8c8' });
+      totalesRow.push({ text: grandP || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#c8c8c8' });
+
+      // Summary table (bottom right)
+      function summaryRow(label: string, type: 0|1|2): any[] {
+        let sI = 0, sP = 0;
+        for (let d = 1; d <= daysInMonth; d++) {
+          const ds = dayStats[d];
+          if (type === 0) { sI += ds.I[0]; sP += ds.P[0]; }             // Nacionales = Bolivia
+          else if (type === 1) {                                          // Extranjeros
+            sI += ds.I.slice(1).reduce((a: number, b: number) => a + b, 0);
+            sP += ds.P.slice(1).reduce((a: number, b: number) => a + b, 0);
+          } else { sI += ds.I.reduce((a, b) => a + b, 0); sP += ds.P.reduce((a, b) => a + b, 0); }
+        }
+        const bold = type === 2;
+        const bg   = bold ? '#e0e0e0' : '#ffffff';
+        const cell = (v: number) => ({ text: v || '', alignment: 'center', fontSize: 7, bold, fillColor: bg });
+        return [
+          { text: label, fontSize: 7, bold, fillColor: bg },
+          cell(sI), cell(sP), cell(sI + sP),
+        ];
+      }
+
+      const monthName = MONTHS_ES[month];
+
+      const docDef: any = {
+        pageSize: 'A4',
+        pageOrientation: 'landscape',
+        pageMargins: [12, 28, 12, 20],
+        content: [
+          // ── Header ────────────────────────────────────────────────────────
+          {
+            columns: [
+              logoIzq
+                ? { image: logoIzq, fit: [50, 42], width: 55 }
+                : { text: 'Gobierno\nAutónomo\nde Chuquisaca', fontSize: 7, color: GRAY, width: 55 },
+              {
+                stack: [
+                  { text: 'VICEMINISTERIO DE TURISMO Y VIAJES', fontSize: 9, bold: true, color: '#333', alignment: 'center' },
+                  { text: 'FORMULARIO N° 6 — PARTE MENSUAL DE TURISMO', fontSize: 8, color: '#555', alignment: 'center' },
+                  {
+                    columns: [
+                      { text: [{ text: 'Establecimiento: ', bold: true }, 'HOTEL BASTILLE'], fontSize: 7, width: '*' },
+                      { text: [{ text: 'Ciudad: ', bold: true }, 'SUCRE'], fontSize: 7, width: 80 },
+                      { text: [{ text: 'Categoría: ', bold: true }, '****'], fontSize: 7, width: 70 },
+                      { text: [{ text: 'Dirección: ', bold: true }, 'Av. Arce 247'], fontSize: 7, width: '*' },
+                    ],
+                    columnGap: 6,
+                    margin: [0, 4, 0, 0],
+                  },
+                  {
+                    columns: [
+                      { text: [{ text: 'Mes: ', bold: true }, monthName.toUpperCase()], fontSize: 7, width: 100 },
+                      { text: [{ text: 'Año: ', bold: true }, String(year)], fontSize: 7, width: 70 },
+                      { text: [{ text: 'N° Personal Permanente: ', bold: true }, '3  ', { text: 'Eventual: ', bold: true }, '3  ', { text: 'Total: ', bold: true }, '6'], fontSize: 7, width: '*' },
+                      { text: [{ text: 'N° Hab.: ', bold: true }, '21  ', { text: 'Plazas: ', bold: true }, '34'], fontSize: 7, width: 100 },
+                    ],
+                    columnGap: 6,
+                    margin: [0, 2, 0, 0],
+                  },
+                ],
+                width: '*',
+                margin: [6, 0, 6, 0],
+              },
+              logoDer
+                ? { image: logoDer, fit: [50, 42], width: 55 }
+                : { text: 'Secretaría de\nCulturas\ny Turismo', fontSize: 7, color: GRAY, alignment: 'right', width: 55 },
+            ],
+            columnGap: 4,
+            margin: [0, 0, 0, 6],
+          },
+          // ── Main table ────────────────────────────────────────────────────
+          {
+            table: {
+              headerRows: 2,
+              widths: tableWidths,
+              body: [
+                headerRow1,
+                headerRow2,
+                ...dataRows,
+                totalesRow,
+              ],
+            },
+            layout: {
+              hLineWidth: (i: number, node: any) => {
+                if (i === 0 || i === 2 || i === node.table.body.length) return 0.5;
+                return 0.2;
+              },
+              vLineWidth: (i: number, node: any) => (i === 0 || i === node.table.widths.length) ? 0.5 : 0.2,
+              hLineColor: () => '#888888',
+              vLineColor: () => '#888888',
+              paddingLeft:   () => 1,
+              paddingRight:  () => 1,
+              paddingTop:    () => 1,
+              paddingBottom: () => 1,
+            },
+            margin: [0, 0, 0, 6],
+          },
+          // ── Legend + Summary ──────────────────────────────────────────────
+          {
+            columns: [
+              {
+                width: '*',
+                text: 'I = Ingreso (Entradas del día)   |   P = Permanentes (Pernoctación de días anteriores)',
+                fontSize: 7, color: '#666', margin: [0, 4, 0, 0],
+              },
+              {
+                width: 'auto',
+                table: {
+                  widths: [70, 35, 40, 35],
+                  body: [
+                    [
+                      { text: '', border: [false, false, false, true] },
+                      { text: 'INGRESO', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' },
+                      { text: 'PERMANENTES', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' },
+                      { text: 'TOTAL', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' },
+                    ],
+                    summaryRow('NACIONALES',   0),
+                    summaryRow('EXTRANJEROS',  1),
+                    summaryRow('TOTAL',        2),
+                  ],
+                },
+                layout: {
+                  hLineWidth: () => 0.4, vLineWidth: () => 0.4,
+                  hLineColor: () => '#888', vLineColor: () => '#888',
+                  paddingLeft: () => 3, paddingRight: () => 3,
+                  paddingTop: () => 2, paddingBottom: () => 2,
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      pm.createPdf(docDef).download(`PARTE_MENSUAL_${yearS}_${String(month).padStart(2,'0')}.pdf`);
+    } catch (e: any) {
+      setMensualError(e.message ?? 'Error generando PDF');
+    } finally {
+      setMensualLoad(false);
+    }
+  }
+
+  // ── Reporte Familiar PDF ─────────────────────────────────────────────────────
+  const [familiarMonth, setFamiliarMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [familiarLoad,  setFamiliarLoad]  = useState(false);
+  const [familiarError, setFamiliarError] = useState<string | null>(null);
+
+  async function handleGenerarFamiliar() {
+    setFamiliarLoad(true); setFamiliarError(null);
+    try {
+      const [yearS, monthS] = familiarMonth.split('-');
+      const year  = parseInt(yearS);
+      const month = parseInt(monthS);
+      const firstDay    = `${yearS}-${monthS}-01`;
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const lastDay     = `${yearS}-${monthS}-${String(daysInMonth).padStart(2,'0')}`;
+      const monthLabel  = `${MONTHS_ES[month]} ${year}`;
+
+      // ── Fetch data ───────────────────────────────────────────────────────────
+      const [txRes, resRes, limpRes, empRes] = await Promise.all([
+        supabase.from('transactions').select('type,amount,caja,category,description')
+          .gte('date', firstDay).lte('date', lastDay),
+        supabase.from('reservations').select('has_pet,guest_country,num_guests,additional_guests,status,guest_name')
+          .in('status',['ocupado','limpieza']).lte('check_in', lastDay).gt('check_out', firstDay),
+        supabase.from('limpiezas').select('cleaner,task_type')
+          .gte('date', firstDay).lte('date', lastDay),
+        supabase.from('reservations').select('guest_name,wants_invoice,is_empresa,siaat_number,price_per_night,num_nights')
+          .eq('wants_invoice', true).lte('check_in', lastDay).gt('check_out', firstDay),
+      ]);
+      // Exclude INICIO/FINAL DE CAJA shift refs (they inflate totals)
+      const allTxs = (txRes.data ?? []) as any[];
+      const txs    = allTxs.filter((t:any) => t.description !== 'INICIO DE CAJA' && t.description !== 'FINAL DE CAJA');
+      const ress   = (resRes.data  ?? []) as any[];
+      const limps  = (limpRes.data ?? []) as any[];
+      const emps   = (empRes.data  ?? []) as any[];
+
+      // ── Compute stats ────────────────────────────────────────────────────────
+      const ingresos = txs.filter((t:any) => t.type === 'ingreso');
+      // Retiros Doña Sonia = money she collected → treat as special positive row, exclude from expense totals
+      const egresos  = txs.filter((t:any) => t.type === 'egreso' && t.category !== 'RETIROS DOÑA SONIA');
+      const soniaTx  = txs.filter((t:any) => t.category === 'RETIROS DOÑA SONIA');
+      const soniaTotal = soniaTx.reduce((s:number,t:any) => s+t.amount, 0);
+
+      const totalInc = ingresos.reduce((s: number, t: any) => s + t.amount, 0);
+      const totalEgr = egresos.reduce((s: number, t: any)  => s + t.amount, 0);
+      const net      = totalInc - totalEgr;
+
+      // Income by caja
+      const incByCaja: Record<string,number> = {};
+      for (const t of ingresos) incByCaja[t.caja] = (incByCaja[t.caja]||0) + t.amount;
+
+      // Expense by category (top 12, excluding Doña Sonia)
+      const egrByCat: Record<string,number> = {};
+      for (const t of egresos) egrByCat[t.category||'OTROS'] = (egrByCat[t.category||'OTROS']||0) + t.amount;
+      const egrCatSorted = Object.entries(egrByCat).sort((a,b) => b[1]-a[1]);
+
+      // Sueldos & Servicios
+      const sueldos   = egresos.filter((t:any) => t.category === 'B05-SUELDOS Y SALARIOS').reduce((s:number,t:any) => s+t.amount, 0);
+      const servicios = egresos.filter((t:any) => t.category === 'B03-SERVICIOS BÁSICOS').reduce((s:number,t:any) => s+t.amount, 0);
+      const vitrina   = ingresos.filter((t:any) => t.category === 'H03-VENTA DE VITRINAS').reduce((s:number,t:any) => s+t.amount, 0);
+
+      // Empresas / facturas
+      const totalFacturado = emps.reduce((s:number,r:any) => s + (r.price_per_night||0)*(r.num_nights||1), 0);
+      const empresas = emps.filter((r:any) => r.is_empresa);
+
+      // Income by category
+      const incByCat: Record<string,number> = {};
+      for (const t of ingresos) incByCat[t.category||'OTROS'] = (incByCat[t.category||'OTROS']||0) + t.amount;
+      const incCatSorted = Object.entries(incByCat).sort((a,b) => b[1]-a[1]);
+
+      // Guests
+      let totalGuests = 0, foreignGuests = 0, pets = 0;
+      for (const r of ress) {
+        const isBolivian = (r.guest_country||'').toLowerCase().includes('boliv');
+        totalGuests++;
+        if (!isBolivian) foreignGuests++;
+        if (r.has_pet) pets++;
+        for (const ag of (r.additional_guests||[]) as any[]) {
+          if (ag.role === 'babies') continue;
+          totalGuests++;
+          if (!(ag.nationality||ag.guest_nationality||'').toLowerCase().includes('boliv')) foreignGuests++;
+        }
+      }
+
+      // Limpiezas by cleaner
+      const limpByCleaner: Record<string,number> = {};
+      for (const l of limps) limpByCleaner[l.cleaner||'?'] = (limpByCleaner[l.cleaner||'?']||0) + 1;
+      const limpSorted = Object.entries(limpByCleaner).sort((a,b) => b[1]-a[1]);
+
+      // ── SVG chart helpers ────────────────────────────────────────────────────
+      const fmtN = (n: number) => n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+
+      function hBar(entries: [string,number][], maxVal: number, barColor: string, h: number): string {
+        const rowH = 22, pad = 4, labelW = 160, barMaxW = 280, valW = 80;
+        const W = labelW + barMaxW + valW + pad*3;
+        const H = entries.length * rowH + pad*2;
+        let rows = '';
+        entries.forEach(([label, val], i) => {
+          const y = pad + i * rowH;
+          const bw = maxVal > 0 ? (val / maxVal) * barMaxW : 0;
+          const truncLabel = label.length > 24 ? label.slice(0,22)+'…' : label;
+          rows += `<rect x="${labelW+pad}" y="${y+3}" width="${bw.toFixed(1)}" height="${rowH-8}" fill="${barColor}" rx="3"/>`;
+          rows += `<text x="${labelW}" y="${y+rowH/2+4}" text-anchor="end" font-size="9" fill="#555" font-family="Helvetica">${truncLabel}</text>`;
+          rows += `<text x="${labelW+pad+bw+4}" y="${y+rowH/2+4}" font-size="9" fill="#333" font-family="Helvetica">Bs. ${fmtN(val)}</text>`;
+        });
+        return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${Math.max(H,h)}">${rows}</svg>`;
+      }
+
+      function pieChart(slices: {label:string;val:number;color:string}[], size=120): string {
+        const total = slices.reduce((s,x) => s+x.val, 0);
+        if (!total) return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"></svg>`;
+        const cx=size/2, cy=size/2, r=size/2-4;
+        let paths=''; let angle=-Math.PI/2;
+        for (const s of slices) {
+          const sweep = (s.val/total)*Math.PI*2;
+          const x1=cx+r*Math.cos(angle), y1=cy+r*Math.sin(angle);
+          const x2=cx+r*Math.cos(angle+sweep), y2=cy+r*Math.sin(angle+sweep);
+          const large = sweep > Math.PI ? 1 : 0;
+          paths += `<path d="M${cx},${cy} L${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 ${large},1 ${x2.toFixed(1)},${y2.toFixed(1)} Z" fill="${s.color}"/>`;
+          angle += sweep;
+        }
+        return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">${paths}</svg>`;
+      }
+
+      // ── pdfmake doc ──────────────────────────────────────────────────────────
+      const pm = await loadPdfMake();
+
+      const titleStyle  = { fontSize: 13, bold: true, color: '#1a1a1a', margin: [0,0,0,2] as any };
+      const sectionHdr  = { fontSize: 10, bold: true, color: '#444', margin: [0,10,0,4] as any, decoration: 'underline' as any };
+      const small       = { fontSize: 8, color: '#666' };
+      const COLORS_CAJA = { 'CAJA MAYOR':'#22c55e','CAJA CHICA':'#f59e0b','CUENTA BNB':'#6366f1','TARJETA':'#06b6d4' };
+      const CAT_COLORS  = ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#6366f1','#a855f7','#ec4899','#14b8a6','#84cc16'];
+
+      const cajaSlices = Object.entries(incByCaja).map(([k,v]) => ({
+        label: k, val: v, color: (COLORS_CAJA as any)[k]||'#999',
+      }));
+
+      // Helper: category breakdown table
+      function catDetail(cat: string): any {
+        const rows = egresos.filter((t:any) => (t.category||'OTROS') === cat);
+        if (!rows.length) return null;
+        const total = rows.reduce((s:number,t:any) => s+t.amount, 0);
+        return {
+          table: {
+            widths: ['*', 'auto'],
+            body: [
+              [{ text: cat, fontSize:8, bold:true, color:'#dc2626', colSpan:2 }, {}],
+              ...rows.map((t:any) => ([
+                { text: t.description||'—', fontSize:7.5, color:'#555' },
+                { text: `Bs. ${fmtN(t.amount)}`, fontSize:7.5, color:'#333', alignment:'right' },
+              ])),
+              [{ text:'SUBTOTAL', fontSize:8, bold:true }, { text:`Bs. ${fmtN(total)}`, fontSize:8, bold:true, color:'#dc2626', alignment:'right' }],
+            ],
+          },
+          layout: { hLineWidth:(i:number,n:any)=>i===0||i===1||i===n.table.body.length?0.5:0.2, vLineWidth:()=>0, hLineColor:()=>'#ddd', paddingLeft:()=>2, paddingRight:()=>2, paddingTop:()=>2, paddingBottom:()=>2 },
+          margin:[0,4,0,8],
+        };
+      }
+
+      const limpPieSlices = limpSorted.map(([name,cnt],i) => ({
+        label:name, val:cnt,
+        color:['#8b5cf6','#ec4899','#06b6d4','#22c55e','#f59e0b','#ef4444'][i%6],
+      }));
+
+      const content: any[] = [
+        // ── Header ──────────────────────────────────────────────────────────────
+        { text: '🏨 HOTEL BASTILLE — REPORTE FAMILIAR', fontSize:15, bold:true, color:'#1a1a1a', margin:[0,0,0,2] },
+        { text: `📅 ${monthLabel.toUpperCase()}`, fontSize:10, color:'#666', margin:[0,0,0,12] },
+
+        // ── 1. Resumen financiero ────────────────────────────────────────────────
+        { text: '📊 RESUMEN FINANCIERO', ...sectionHdr },
+        {
+          columns: [
+            {
+              width: '*',
+              table: {
+                widths: ['*','auto'],
+                body: [
+                  [{ text:'✅ INGRESOS TOTALES', fontSize:9, bold:true, color:'#16a34a' },{ text:`Bs. ${fmtN(totalInc)}`, fontSize:9, bold:true, color:'#16a34a', alignment:'right' }],
+                  [{ text:'❌ EGRESOS TOTALES',  fontSize:9, bold:true, color:'#dc2626' },{ text:`Bs. ${fmtN(totalEgr)}`, fontSize:9, bold:true, color:'#dc2626', alignment:'right' }],
+                  ...(soniaTotal>0?[[{ text:'💚 Recaudado Doña Sonia', fontSize:9, bold:true, color:'#16a34a' },{ text:`+ Bs. ${fmtN(soniaTotal)}`, fontSize:9, bold:true, color:'#16a34a', alignment:'right' }]]:[]),
+                  [{ text:'💰 BALANCE NETO', fontSize:11, bold:true },{ text:`Bs. ${fmtN(net)}`, fontSize:11, bold:true, color:net>=0?'#1d4ed8':'#dc2626', alignment:'right' }],
+                  [{ text:'👷 Sueldos',           ...small },{ text:`Bs. ${fmtN(sueldos)}`,   ...small, alignment:'right' }],
+                  [{ text:'⚡ Servicios básicos',  ...small },{ text:`Bs. ${fmtN(servicios)}`, ...small, alignment:'right' }],
+                  [{ text:'🛍️ Ventas vitrina',    ...small },{ text:`Bs. ${fmtN(vitrina)}`,   ...small, alignment:'right' }],
+                  [{ text:'🧾 Facturado',          ...small },{ text:`Bs. ${fmtN(totalFacturado)}`, ...small, alignment:'right' }],
+                ],
+              },
+              layout:'lightHorizontalLines',
+            },
+            {
+              width:130,
+              stack:[
+                { text:'💵 Ingresos por caja', fontSize:8, color:'#555', alignment:'center', margin:[0,0,0,4] },
+                cajaSlices.length ? { svg:pieChart(cajaSlices,110), width:110, alignment:'center' } : { text:'Sin datos', fontSize:8, color:'#aaa', alignment:'center' },
+                ...cajaSlices.map(s=>({ text:`■ ${s.label.replace('CAJA MAYOR','Efectivo').replace('CAJA CHICA','Caja Chica').replace('CUENTA BNB','QR')}: Bs. ${fmtN(s.val)}`, fontSize:7, color:s.color, margin:[0,1,0,0] })),
+              ],
+            },
+          ],
+          columnGap:16, margin:[0,0,0,8],
+        },
+
+        // ── 2. Ingresos por categoría ────────────────────────────────────────────
+        { text: '💚 INGRESOS POR CATEGORÍA', ...sectionHdr },
+        incCatSorted.length
+          ? { svg:hBar(incCatSorted.slice(0,10), incCatSorted[0]?.[1]||1, '#22c55e', 60), margin:[0,0,0,10] }
+          : { text:'Sin ingresos.', fontSize:9, color:'#aaa', margin:[0,0,0,8] },
+
+        // ── 3. Egresos por categoría + desglose ──────────────────────────────────
+        { text: '💸 EGRESOS POR CATEGORÍA', ...sectionHdr },
+        egrCatSorted.length
+          ? { svg:hBar(egrCatSorted.slice(0,14), egrCatSorted[0]?.[1]||1, '#ef4444', 60), margin:[0,0,0,6] }
+          : { text:'Sin egresos.', fontSize:9, color:'#aaa', margin:[0,0,0,8] },
+        { text:'📋 Detalle por categoría:', fontSize:9, bold:true, color:'#444', margin:[0,4,0,4] },
+        ...egrCatSorted.map(([cat]) => catDetail(cat)).filter(Boolean),
+
+        // ── 4. Huéspedes ─────────────────────────────────────────────────────────
+        { text: '🧳 HUÉSPEDES DEL MES', ...sectionHdr },
+        {
+          table:{
+            widths:['*','*','*','*'],
+            body:[[
+              { text:`${totalGuests}\n🧑 Huéspedes`,          fontSize:12,bold:true,alignment:'center',margin:[0,6,0,6] },
+              { text:`${totalGuests-foreignGuests}\n🇧🇴 Nacionales`,fontSize:12,bold:true,color:'#2563eb',alignment:'center',margin:[0,6,0,6] },
+              { text:`${foreignGuests}\n✈️ Extranjeros`,       fontSize:12,bold:true,color:'#7c3aed',alignment:'center',margin:[0,6,0,6] },
+              { text:`${pets}\n🐾 Mascotas`,                  fontSize:12,bold:true,color:'#d97706',alignment:'center',margin:[0,6,0,6] },
+            ]],
+          },
+          layout:{ hLineWidth:()=>0.4,vLineWidth:()=>0.4,hLineColor:()=>'#ddd',vLineColor:()=>'#ddd' },
+          margin:[0,0,0,10],
+        },
+
+        // ── 5. Empresas y Facturas ───────────────────────────────────────────────
+        { text: '🧾 FACTURAS Y EMPRESAS', ...sectionHdr },
+        {
+          table:{
+            widths:['*','auto','auto'],
+            body:[
+              [{ text:'Cliente', fontSize:8,bold:true },{ text:'SIAAT', fontSize:8,bold:true,alignment:'center' },{ text:'Monto', fontSize:8,bold:true,alignment:'right' }],
+              ...(emps.length ? emps.map((r:any)=>([
+                { text:(r.is_empresa?'🏢 ':'👤 ')+(r.guest_name||'—'), fontSize:8 },
+                { text:r.siaat_number||'—', fontSize:8, alignment:'center', color:'#666' },
+                { text:`Bs. ${fmtN((r.price_per_night||0)*(r.num_nights||1))}`, fontSize:8, alignment:'right' },
+              ])) : [[{ text:'Sin facturas este mes.', fontSize:8, color:'#aaa', colSpan:3 },{},{}]]),
+              emps.length ? [
+                { text:`TOTAL (${emps.length} factura${emps.length!==1?'s':''})`, fontSize:8, bold:true },
+                {},
+                { text:`Bs. ${fmtN(totalFacturado)}`, fontSize:8, bold:true, color:'#1d4ed8', alignment:'right' },
+              ] : null,
+            ].filter(Boolean) as any[],
+          },
+          layout:'lightHorizontalLines',
+          margin:[0,0,0,10],
+        },
+
+        // ── 6. Limpiezas ─────────────────────────────────────────────────────────
+        { text: '🧹 LIMPIEZAS POR PERSONA', ...sectionHdr },
+        {
+          columns:[
+            limpSorted.length
+              ? { svg:hBar(limpSorted, limpSorted[0]?.[1]||1,'#8b5cf6',40), width:'*' }
+              : { text:'Sin limpiezas.', fontSize:9, color:'#aaa', width:'*' },
+            limpPieSlices.length
+              ? { stack:[
+                  { svg:pieChart(limpPieSlices,100), width:100, alignment:'center' },
+                  ...limpPieSlices.map(s=>({ text:`■ ${s.label}: ${s.val}`, fontSize:7, color:s.color, margin:[0,1,0,0], alignment:'center' })),
+                ], width:120 }
+              : { text:'', width:120 },
+          ],
+          columnGap:12, margin:[0,0,0,6],
+        },
+        limpSorted.length ? {
+          table:{
+            widths:['*','auto','auto'],
+            body:[
+              [{ text:'👩 Persona',fontSize:8,bold:true },{ text:'Limpiezas',fontSize:8,bold:true,alignment:'center' },{ text:'%',fontSize:8,bold:true,alignment:'center' }],
+              ...limpSorted.map(([name,cnt])=>([
+                { text:name, fontSize:8 },
+                { text:String(cnt), fontSize:8, alignment:'center' },
+                { text:`${((cnt/limps.length)*100).toFixed(0)}%`, fontSize:8, alignment:'center' },
+              ])),
+              [{ text:'TOTAL',fontSize:8,bold:true },{ text:String(limps.length),fontSize:8,bold:true,alignment:'center' },{ text:'100%',fontSize:8,bold:true,alignment:'center' }],
+            ],
+          },
+          layout:'lightHorizontalLines',
+          margin:[0,0,0,10],
+        } : {},
+
+        // ── 7. Sueldos & Servicios básicos ──────────────────────────────────────
+        { text: '⚡ SUELDOS Y SERVICIOS BÁSICOS', ...sectionHdr },
+        {
+          table:{
+            widths:['*','auto'],
+            body:[
+              [{ text:'👷 B05 — Sueldos y Salarios',fontSize:9,bold:true },{ text:`Bs. ${fmtN(sueldos)}`,fontSize:9,bold:true,color:'#dc2626',alignment:'right' }],
+              ...egresos.filter((t:any)=>t.category==='B05-SUELDOS Y SALARIOS').map((t:any)=>([
+                { text:`  · ${t.description||'—'}`, fontSize:8, color:'#666' },
+                { text:`Bs. ${fmtN(t.amount)}`, fontSize:8, color:'#666', alignment:'right' },
+              ])),
+              [{ text:'⚡ B03 — Servicios Básicos',fontSize:9,bold:true },{ text:`Bs. ${fmtN(servicios)}`,fontSize:9,bold:true,color:'#dc2626',alignment:'right' }],
+              ...egresos.filter((t:any)=>t.category==='B03-SERVICIOS BÁSICOS').map((t:any)=>([
+                { text:`  · ${t.description||'—'}`, fontSize:8, color:'#666' },
+                { text:`Bs. ${fmtN(t.amount)}`, fontSize:8, color:'#666', alignment:'right' },
+              ])),
+            ],
+          },
+          layout:'lightHorizontalLines',
+          margin:[0,0,0,4],
+        },
+
+        { text:`✍️ Generado: ${new Date().toLocaleDateString('es-BO',{timeZone:'America/La_Paz',day:'2-digit',month:'long',year:'numeric'})}`, fontSize:7, color:'#999', margin:[0,14,0,0], alignment:'right' },
+      ];
+
+      const docDef: any = {
+        pageSize: 'A4',
+        pageMargins: [40, 40, 40, 40],
+        content,
+        defaultStyle: { font: 'Roboto' },
+      };
+
+      pm.createPdf(docDef).download(`REPORTE_FAMILIAR_${yearS}_${String(month).padStart(2,'0')}.pdf`);
+    } catch (e: any) {
+      setFamiliarError(e.message ?? 'Error generando PDF');
+    } finally {
+      setFamiliarLoad(false);
+    }
   }
 
   // ── PDF con pdfmake (descarga directa sin diálogo) ──────────────────────────
@@ -622,15 +1280,81 @@ export default function ReportesPage() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm opacity-60">
-        <div className="flex items-center gap-3 px-6 py-4">
-          <div className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center">
-            <FileText size={18} className="text-gray-400" />
+      {/* ── Parte Mensual ─────────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100">
+          <div className="w-9 h-9 rounded-lg bg-green-50 flex items-center justify-center">
+            <FileText size={18} className="text-green-600" />
           </div>
           <div>
-            <h2 className="font-semibold text-gray-500">Parte Mensual</h2>
-            <p className="text-xs text-gray-400">Próximamente</p>
+            <h2 className="font-semibold text-gray-900">Parte Mensual</h2>
+            <p className="text-xs text-gray-400">Formulario N° 6 — Viceministerio de Turismo</p>
           </div>
+        </div>
+        <div className="px-6 py-4 flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Mes y Año</label>
+            <input
+              type="month"
+              value={mensualMonth}
+              onChange={e => setMensualMonth(e.target.value)}
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+            />
+          </div>
+          <button
+            onClick={handleGenerarMensual}
+            disabled={mensualLoad}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 disabled:opacity-50 transition-colors"
+          >
+            {mensualLoad
+              ? <RefreshCw size={14} className="animate-spin" />
+              : <Download size={14} />}
+            {mensualLoad ? 'Generando…' : 'Descargar PDF'}
+          </button>
+          {mensualError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm">
+              <AlertCircle size={14} /> {mensualError}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Reporte Familiar ─────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100">
+          <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
+            <FileText size={18} className="text-amber-600" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Reporte Familiar</h2>
+            <p className="text-xs text-gray-400">Estadísticas del mes — ingresos, egresos, huéspedes, limpiezas</p>
+          </div>
+        </div>
+        <div className="px-6 py-4 flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Mes y Año</label>
+            <input
+              type="month"
+              value={familiarMonth}
+              onChange={e => setFamiliarMonth(e.target.value)}
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+            />
+          </div>
+          <button
+            onClick={handleGenerarFamiliar}
+            disabled={familiarLoad}
+            className="flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-semibold hover:bg-amber-600 disabled:opacity-50 transition-colors"
+          >
+            {familiarLoad
+              ? <RefreshCw size={14} className="animate-spin" />
+              : <Download size={14} />}
+            {familiarLoad ? 'Generando…' : 'Descargar PDF'}
+          </button>
+          {familiarError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm">
+              <AlertCircle size={14} /> {familiarError}
+            </div>
+          )}
         </div>
       </div>
     </div>

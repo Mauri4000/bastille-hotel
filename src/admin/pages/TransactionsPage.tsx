@@ -201,6 +201,13 @@ export default function TransactionsPage() {
   const totalExpense = filteredCash.filter(t => t.type === 'egreso').reduce((s, t) => s + t.amount, 0);
   const balance      = totalIncome - totalExpense;
 
+  // Per-caja monthly balances (using already-loaded month transactions, no all-time fetch needed)
+  const monthBalances = CAJAS.reduce((acc, caja) => {
+    const cajaTxs = transactions.filter(t => t.caja === caja && !isShiftRef(t));
+    acc[caja] = cajaTxs.reduce((s, t) => s + (t.type === 'ingreso' ? t.amount : -t.amount), 0);
+    return acc;
+  }, {} as Record<CajaType, number>);
+
   const categories = form.type === 'ingreso' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
 
   // ── open modal (new) ──
@@ -405,7 +412,7 @@ export default function TransactionsPage() {
       {activeTab === 'all' && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {CAJAS.map(caja => {
-            const bal = balances[caja];
+            const bal = monthBalances[caja];
             const isPos = bal >= 0;
             const emoji = caja === 'CAJA MAYOR' ? '💵' : caja === 'CAJA CHICA' ? '🪙' : caja === 'CUENTA BNB' ? '📱' : '💳';
             return (
@@ -417,18 +424,18 @@ export default function TransactionsPage() {
                 <p className={`text-xl font-bold ${isPos ? 'text-gray-900' : 'text-red-500'}`}>
                   {fmtAmount(bal)}
                 </p>
-                <p className="text-[11px] text-gray-400 mt-1">Saldo acumulado</p>
+                <p className="text-[11px] text-gray-400 mt-1">Balance del mes</p>
               </div>
             );
           })}
         </div>
       )}
 
-      {/* Big balance card — only on Caja Mayor / Caja Chica / BNB tabs */}
-      {activeTab !== 'all' && (
+      {/* Big balance card — sticky so it stays visible while scrolling */}
+      <div className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur-sm -mx-4 md:-mx-6 px-4 md:px-6 py-2">
         <div className="flex justify-center">
-          <div className="bg-white rounded-2xl px-12 py-8 border border-gray-100 shadow-sm text-center w-full max-w-md">
-            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-4">
+          <div className="bg-white rounded-2xl px-12 py-5 border border-gray-100 shadow-sm text-center w-full max-w-md">
+            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">
               {activeTab === 'bnb' ? `BNB Mauri · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_eg' ? `Egresos BNB · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_personal' ? `Personal BNB · ${MONTH_NAMES[month]} ${year}` : `Balance ${MONTH_NAMES[month]} ${year}`}
             </p>
             <p className={`text-5xl font-bold tracking-tight ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
@@ -436,7 +443,7 @@ export default function TransactionsPage() {
             </p>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 bg-white rounded-xl p-4 border border-gray-100 shadow-sm">

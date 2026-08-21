@@ -39,6 +39,7 @@ export const EXPENSE_CATEGORIES = [
   'RETIROS DOÑA SONIA',
   'DEUDAS MAURI',
   'ESCUELA ESPAÑOL',
+  'ROOFTOP',
 ] as const;
 
 export const STATUS_CONFIG: Record<
