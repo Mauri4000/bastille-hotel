@@ -52,6 +52,36 @@ export default function TransactionsPage() {
     if (isAdmin) setActiveTab(t => t === 'mayor' ? 'all' : t);
   }, [isAdmin]);
 
+  // ── Manual "sticky" header (title/tabs/balance) via IntersectionObserver + fixed positioning.
+  // CSS position:sticky was fighting with the admin layout's scroll container, so this pins the
+  // block with JS instead: a 0-height sentinel just above it tells us when it has scrolled to the
+  // top of the page, at which point we switch it to position:fixed with a matching spacer below.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const stickyRef   = useRef<HTMLDivElement>(null);
+  const [isStuck, setIsStuck] = useState(false);
+  const [stickyRect, setStickyRect] = useState<{ left: number; width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const io = new IntersectionObserver(([entry]) => setIsStuck(!entry.isIntersecting), { threshold: 0 });
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    function measure() {
+      if (!stickyRef.current) return;
+      const r = stickyRef.current.getBoundingClientRect();
+      setStickyRect({ left: r.left, width: r.width, height: r.height });
+    }
+    measure();
+    window.addEventListener('resize', measure);
+    const ro = new ResizeObserver(measure);
+    if (stickyRef.current) ro.observe(stickyRef.current);
+    return () => { window.removeEventListener('resize', measure); ro.disconnect(); };
+  }, [activeTab, isAdmin]);
+
   // Scroll to today's row whenever tab or data changes
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
   useEffect(() => {
@@ -333,81 +363,38 @@ export default function TransactionsPage() {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Ingresos & Egresos</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{MONTH_NAMES[month]} {year}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={prevMonth} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-100">‹</button>
-          <span className="text-sm font-semibold text-gray-700 w-36 text-center">{MONTH_NAMES[month]} {year}</span>
-          <button onClick={nextMonth} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-100">›</button>
-          <button
-            onClick={openNew}
-            className="flex items-center gap-2 ml-2 bg-amber-400 hover:bg-amber-300 text-gray-900 font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
-          >
-            <Plus size={16} />
-            Nuevo
-          </button>
-        </div>
-      </div>
+      {/* Sentinel: 0-height marker; when it scrolls above the viewport, the header block "sticks" */}
+      <div ref={sentinelRef} />
+      {/* Spacer to preserve layout height while the header block is position:fixed */}
+      {isStuck && stickyRect && <div style={{ height: stickyRect.height }} />}
 
-      {/* ── Spreadsheet-style tabs ── */}
-      <div className="flex items-center border-b-2 border-gray-200">
-        {([
-          ...(isAdmin ? [{ id: 'all' as Tab, emoji: '📊', label: `${MONTH_NAMES[month]} ${year}` }] : []),
-          { id: 'mayor' as Tab, emoji: '💵', label: 'Caja Mayor' },
-          { id: 'chica' as Tab, emoji: '🪙', label: 'Caja Chica' },
-          { id: 'bnb_eg' as Tab, emoji: '💳', label: 'Egresos BNB' },
-          ...(isAdmin ? [
-            { id: 'bnb' as Tab, emoji: '🏦', label: 'BNB Mauri' },
-            { id: 'bnb_personal' as Tab, emoji: '👥', label: 'Personal BNB' },
-          ] : []),
-        ]).map(({ id, emoji, label }) => (
-          <button
-            key={id}
-            onClick={() => { setActiveTab(id); setFilterCaja('all'); }}
-            className={`flex items-center gap-1.5 px-5 py-2.5 text-sm font-semibold border-b-2 -mb-0.5 transition-colors ${
-              activeTab === id
-                ? 'border-amber-400 text-gray-900'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            {emoji} {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Summary cards — only on "Todos" tab */}
-      {activeTab === 'all' && (
-        <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
-            <div className="flex items-center gap-2 mb-2">
-              <TrendingUp size={16} className="text-green-500" />
-              <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Ingresos</span>
-            </div>
-            <p className="text-2xl font-bold text-green-600">{fmtAmount(totalIncome)}</p>
+      {/* ── Header block: title/nav, tabs, balance — pinned via JS once scrolled to top ── */}
+      <div
+        ref={stickyRef}
+        style={isStuck && stickyRect ? { position: 'fixed', top: 0, left: stickyRect.left, width: stickyRect.width, zIndex: 30 } : undefined}
+        className="bg-gray-50 pb-3 space-y-3"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Ingresos & Egresos</h1>
+            <p className="text-sm text-gray-500 mt-0.5">{MONTH_NAMES[month]} {year}</p>
           </div>
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
-            <div className="flex items-center gap-2 mb-2">
-              <TrendingDown size={16} className="text-red-500" />
-              <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Egresos</span>
-            </div>
-            <p className="text-2xl font-bold text-red-500">{fmtAmount(totalExpense)}</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
-            <div className="flex items-center gap-2 mb-2">
-              <DollarSign size={16} className="text-amber-500" />
-              <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Balance</span>
-            </div>
-            <p className={`text-2xl font-bold ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
-              {fmtAmount(balance)}
-            </p>
+          <div className="flex items-center gap-2">
+            <button onClick={prevMonth} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-100">‹</button>
+            <span className="text-sm font-semibold text-gray-700 w-36 text-center">{MONTH_NAMES[month]} {year}</span>
+            <button onClick={nextMonth} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-100">›</button>
+            <button
+              onClick={openNew}
+              className="flex items-center gap-2 ml-2 bg-amber-400 hover:bg-amber-300 text-gray-900 font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
+            >
+              <Plus size={16} />
+              Nuevo
+            </button>
           </div>
         </div>
-      )}
 
+<<<<<<< HEAD
       {/* All-time caja balances — only on "Todos" tab */}
       {activeTab === 'all' && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -443,6 +430,99 @@ export default function TransactionsPage() {
             </p>
           </div>
         </div>
+=======
+        {/* ── Spreadsheet-style tabs ── */}
+        <div className="flex items-center border-b-2 border-gray-200">
+          {([
+            ...(isAdmin ? [{ id: 'all' as Tab, emoji: '📊', label: `${MONTH_NAMES[month]} ${year}` }] : []),
+            { id: 'mayor' as Tab, emoji: '💵', label: 'Caja Mayor' },
+            { id: 'chica' as Tab, emoji: '🪙', label: 'Caja Chica' },
+            { id: 'bnb_eg' as Tab, emoji: '💳', label: 'Egresos BNB' },
+            ...(isAdmin ? [
+              { id: 'bnb' as Tab, emoji: '🏦', label: 'BNB Mauri' },
+              { id: 'bnb_personal' as Tab, emoji: '👥', label: 'Personal BNB' },
+            ] : []),
+          ]).map(({ id, emoji, label }) => (
+            <button
+              key={id}
+              onClick={() => { setActiveTab(id); setFilterCaja('all'); }}
+              className={`flex items-center gap-1.5 px-5 py-2.5 text-sm font-semibold border-b-2 -mb-0.5 transition-colors ${
+                activeTab === id
+                  ? 'border-amber-400 text-gray-900'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              {emoji} {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Summary cards — only on "Todos" tab */}
+        {activeTab === 'all' && (
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <TrendingUp size={16} className="text-green-500" />
+                <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Ingresos</span>
+              </div>
+              <p className="text-2xl font-bold text-green-600">{fmtAmount(totalIncome)}</p>
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <TrendingDown size={16} className="text-red-500" />
+                <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Egresos</span>
+              </div>
+              <p className="text-2xl font-bold text-red-500">{fmtAmount(totalExpense)}</p>
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <DollarSign size={16} className="text-amber-500" />
+                <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">Balance</span>
+              </div>
+              <p className={`text-2xl font-bold ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
+                {fmtAmount(balance)}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* All-time caja balances — only on "Todos" tab */}
+        {activeTab === 'all' && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {CAJAS.map(caja => {
+              const bal = balances[caja];
+              const isPos = bal >= 0;
+              const emoji = caja === 'CAJA MAYOR' ? '💵' : caja === 'CAJA CHICA' ? '🪙' : caja === 'CUENTA BNB' ? '📱' : '💳';
+              return (
+                <div key={caja} className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-base">{emoji}</span>
+                    <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">{CAJA_LABEL[caja]}</span>
+                  </div>
+                  <p className={`text-xl font-bold ${isPos ? 'text-gray-900' : 'text-red-500'}`}>
+                    {fmtAmount(bal)}
+                  </p>
+                  <p className="text-[11px] text-gray-400 mt-1">Saldo acumulado</p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Balance card — only on Caja Mayor / Caja Chica / BNB tabs */}
+        {activeTab !== 'all' && (
+          <div className="flex justify-center">
+            <div className="bg-white rounded-xl px-6 py-3 border border-gray-100 shadow-sm text-center w-full max-w-xs">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400 mb-1">
+                {activeTab === 'bnb' ? `BNB Mauri · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_eg' ? `Egresos BNB · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_personal' ? `Personal BNB · ${MONTH_NAMES[month]} ${year}` : `Balance ${MONTH_NAMES[month]} ${year}`}
+              </p>
+              <p className={`text-2xl font-bold tracking-tight ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
+                {balance < 0 && '−'}Bs. {fmt(Math.abs(balance))}
+              </p>
+            </div>
+          </div>
+        )}
+>>>>>>> 78b5be7c20324ff74dec7d290fc2358493f0de8b
       </div>
 
       {/* Filters */}
