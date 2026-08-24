@@ -394,44 +394,7 @@ export default function TransactionsPage() {
           </div>
         </div>
 
-<<<<<<< HEAD
-      {/* All-time caja balances — only on "Todos" tab */}
-      {activeTab === 'all' && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {CAJAS.map(caja => {
-            const bal = monthBalances[caja];
-            const isPos = bal >= 0;
-            const emoji = caja === 'CAJA MAYOR' ? '💵' : caja === 'CAJA CHICA' ? '🪙' : caja === 'CUENTA BNB' ? '📱' : '💳';
-            return (
-              <div key={caja} className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-base">{emoji}</span>
-                  <span className="text-xs font-semibold uppercase text-gray-500 tracking-wider">{CAJA_LABEL[caja]}</span>
-                </div>
-                <p className={`text-xl font-bold ${isPos ? 'text-gray-900' : 'text-red-500'}`}>
-                  {fmtAmount(bal)}
-                </p>
-                <p className="text-[11px] text-gray-400 mt-1">Balance del mes</p>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Big balance card — sticky so it stays visible while scrolling */}
-      <div className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur-sm -mx-4 md:-mx-6 px-4 md:px-6 py-2">
-        <div className="flex justify-center">
-          <div className="bg-white rounded-2xl px-12 py-5 border border-gray-100 shadow-sm text-center w-full max-w-md">
-            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">
-              {activeTab === 'bnb' ? `BNB Mauri · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_eg' ? `Egresos BNB · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_personal' ? `Personal BNB · ${MONTH_NAMES[month]} ${year}` : `Balance ${MONTH_NAMES[month]} ${year}`}
-            </p>
-            <p className={`text-5xl font-bold tracking-tight ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
-              {balance < 0 && '−'}Bs. {fmt(Math.abs(balance))}
-            </p>
-          </div>
-        </div>
-=======
-        {/* ── Spreadsheet-style tabs ── */}
+        {/* ── Tabs ── */}
         <div className="flex items-center border-b-2 border-gray-200">
           {([
             ...(isAdmin ? [{ id: 'all' as Tab, emoji: '📊', label: `${MONTH_NAMES[month]} ${year}` }] : []),
@@ -486,11 +449,11 @@ export default function TransactionsPage() {
           </div>
         )}
 
-        {/* All-time caja balances — only on "Todos" tab */}
+        {/* Per-caja monthly balances — only on "Todos" tab */}
         {activeTab === 'all' && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {CAJAS.map(caja => {
-              const bal = balances[caja];
+              const bal = monthBalances[caja];
               const isPos = bal >= 0;
               const emoji = caja === 'CAJA MAYOR' ? '💵' : caja === 'CAJA CHICA' ? '🪙' : caja === 'CUENTA BNB' ? '📱' : '💳';
               return (
@@ -502,27 +465,24 @@ export default function TransactionsPage() {
                   <p className={`text-xl font-bold ${isPos ? 'text-gray-900' : 'text-red-500'}`}>
                     {fmtAmount(bal)}
                   </p>
-                  <p className="text-[11px] text-gray-400 mt-1">Saldo acumulado</p>
+                  <p className="text-[11px] text-gray-400 mt-1">Balance del mes</p>
                 </div>
               );
             })}
           </div>
         )}
 
-        {/* Balance card — only on Caja Mayor / Caja Chica / BNB tabs */}
-        {activeTab !== 'all' && (
-          <div className="flex justify-center">
-            <div className="bg-white rounded-xl px-6 py-3 border border-gray-100 shadow-sm text-center w-full max-w-xs">
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400 mb-1">
-                {activeTab === 'bnb' ? `BNB Mauri · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_eg' ? `Egresos BNB · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_personal' ? `Personal BNB · ${MONTH_NAMES[month]} ${year}` : `Balance ${MONTH_NAMES[month]} ${year}`}
-              </p>
-              <p className={`text-2xl font-bold tracking-tight ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
-                {balance < 0 && '−'}Bs. {fmt(Math.abs(balance))}
-              </p>
-            </div>
+        {/* Balance card — all tabs */}
+        <div className="flex justify-center">
+          <div className="bg-white rounded-2xl px-12 py-5 border border-gray-100 shadow-sm text-center w-full max-w-md">
+            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">
+              {activeTab === 'bnb' ? `BNB Mauri · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_eg' ? `Egresos BNB · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_personal' ? `Personal BNB · ${MONTH_NAMES[month]} ${year}` : `Balance ${MONTH_NAMES[month]} ${year}`}
+            </p>
+            <p className={`text-5xl font-bold tracking-tight ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
+              {balance < 0 && '−'}Bs. {fmt(Math.abs(balance))}
+            </p>
           </div>
-        )}
->>>>>>> 78b5be7c20324ff74dec7d290fc2358493f0de8b
+        </div>
       </div>
 
       {/* Filters */}
