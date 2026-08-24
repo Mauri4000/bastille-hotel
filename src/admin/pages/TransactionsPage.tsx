@@ -40,7 +40,7 @@ export default function TransactionsPage() {
   const [month, setMonth] = useState(today.getMonth());
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [balances,     setBalances]     = useState<Record<CajaType, number>>({ 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0, 'TARJETA': 0 });
+  const [,             setBalances]      = useState<Record<CajaType, number>>({ 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0, 'TARJETA': 0 });
   const [loading,      setLoading]      = useState(true);
   // room_id → siaat_number map (from reservations that have wants_invoice + siaat)
   const [siaatMap, setSiaatMap] = useState<Record<string, string>>({});

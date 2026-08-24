@@ -597,7 +597,7 @@ export default function ReportesPage() {
 
       // Empresas / facturas
       const totalFacturado = emps.reduce((s:number,r:any) => s + (r.price_per_night||0)*(r.num_nights||1), 0);
-      const empresas = emps.filter((r:any) => r.is_empresa);
+      const empresas = emps.filter((r:any) => r.is_empresa); void empresas;
 
       // Income by category
       const incByCat: Record<string,number> = {};
@@ -661,11 +661,11 @@ export default function ReportesPage() {
       // ── pdfmake doc ──────────────────────────────────────────────────────────
       const pm = await loadPdfMake();
 
-      const titleStyle  = { fontSize: 13, bold: true, color: '#1a1a1a', margin: [0,0,0,2] as any };
+      void { fontSize: 13, bold: true, color: '#1a1a1a', margin: [0,0,0,2] as any }; // titleStyle unused
       const sectionHdr  = { fontSize: 10, bold: true, color: '#444', margin: [0,10,0,4] as any, decoration: 'underline' as any };
       const small       = { fontSize: 8, color: '#666' };
       const COLORS_CAJA = { 'CAJA MAYOR':'#22c55e','CAJA CHICA':'#f59e0b','CUENTA BNB':'#6366f1','TARJETA':'#06b6d4' };
-      const CAT_COLORS  = ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#6366f1','#a855f7','#ec4899','#14b8a6','#84cc16'];
+      const CAT_COLORS: string[]  = ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#6366f1','#a855f7','#ec4899','#14b8a6','#84cc16']; void CAT_COLORS;
 
       const cajaSlices = Object.entries(incByCaja).map(([k,v]) => ({
         label: k, val: v, color: (COLORS_CAJA as any)[k]||'#999',
