@@ -3604,25 +3604,45 @@ export default function CalendarPage() {
                       <div className="bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
                         <div className="px-4 py-2 bg-amber-100 text-xs font-bold uppercase tracking-wider text-amber-700">🛒 Vitrina</div>
                         <div className="px-4 py-3 space-y-2">
-                          {vitItems.map(item => (
-                            <div key={item.productId} className="flex items-center justify-between gap-2">
-                              <div className="flex-1 text-sm text-gray-700 min-w-0">
-                                <span>{item.productName}{item.qty > 1 ? ` x${item.qty}` : ''}</span>
-                                <span className="text-xs text-gray-400 ml-1">({item.caja === 'CUENTA BNB' ? 'QR' : item.caja === 'TARJETA' ? 'Tarjeta' : 'Efectivo'})</span>
+                          {vitItems.map(item => {
+                            const vitCaja = item.caja || 'CAJA MAYOR';
+                            return (
+                            <div key={item.productId} className="space-y-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="flex-1 text-sm text-gray-700 min-w-0">{item.productName}{item.qty > 1 ? ` x${item.qty}` : ''}</span>
+                                <span className="text-sm font-semibold text-amber-700 flex-shrink-0">Bs. {item.total.toFixed(2)}</span>
+                                <button onClick={() => checkoutPayVitrinaItem(item)}
+                                  className="px-2 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-400 text-white rounded-lg flex-shrink-0">
+                                  💳 Pagar
+                                </button>
+                                <button
+                                  onClick={() => setPendingVitrina(prev => ({ ...prev, [r.id]: (prev[r.id] ?? []).filter(i => i.productId !== item.productId) }))}
+                                  className="text-gray-300 hover:text-red-500 flex-shrink-0 transition-colors"
+                                  title="Eliminar">
+                                  <Trash2 size={14} />
+                                </button>
                               </div>
-                              <span className="text-sm font-semibold text-amber-700 flex-shrink-0">Bs. {item.total.toFixed(2)}</span>
-                              <button onClick={() => checkoutPayVitrinaItem(item)}
-                                className="px-2 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-400 text-white rounded-lg flex-shrink-0">
-                                💳 Pagar
-                              </button>
-                              <button
-                                onClick={() => setPendingVitrina(prev => ({ ...prev, [r.id]: (prev[r.id] ?? []).filter(i => i.productId !== item.productId) }))}
-                                className="text-gray-300 hover:text-red-500 flex-shrink-0 transition-colors"
-                                title="Eliminar">
-                                <Trash2 size={14} />
-                              </button>
+                              <div className="flex gap-1">
+                                {(['CAJA MAYOR', 'CUENTA BNB', 'TARJETA'] as const).map(c => (
+                                  <button key={c}
+                                    onClick={() => setPendingVitrina(prev => ({
+                                      ...prev,
+                                      [r.id]: (prev[r.id] ?? []).map(i => i.productId === item.productId ? { ...i, caja: c } : i)
+                                    }))}
+                                    className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-colors ${
+                                      vitCaja === c
+                                        ? c === 'CAJA MAYOR' ? 'bg-green-500 text-white'
+                                          : c === 'CUENTA BNB' ? 'bg-blue-500 text-white'
+                                          : 'bg-purple-500 text-white'
+                                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                                    }`}>
+                                    {c === 'CAJA MAYOR' ? 'Efectivo' : c === 'CUENTA BNB' ? 'QR' : 'Tarjeta'}
+                                  </button>
+                                ))}
+                              </div>
                             </div>
-                          ))}
+                            );
+                          })}
                           <div className="flex justify-between font-bold text-amber-700 border-t border-amber-200 pt-1 text-sm">
                             <span>Total vitrina</span>
                             <span>Bs. {vitItems.reduce((s, i) => s + i.total, 0).toFixed(2)}</span>
