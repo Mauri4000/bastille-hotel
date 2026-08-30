@@ -283,6 +283,8 @@ export default function ReportesPage() {
         .from('reservations')
         .select('check_in, check_out, guest_country, additional_guests')
         .in('status', ['ocupado', 'limpieza'])
+        .eq('wants_invoice', true)
+        .neq('room_id', 'SALON')
         .lte('check_in', lastDay)
         .gt('check_out', firstDay);
       if (err) throw err;
