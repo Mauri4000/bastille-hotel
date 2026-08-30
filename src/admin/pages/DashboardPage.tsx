@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { CalendarDays, Wallet, BedDouble, TrendingUp, TrendingDown, PawPrint, Building2, Globe } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -69,7 +70,13 @@ function StatCard({ icon: Icon, iconBg, iconColor, label, value, sub }: {
 // ── Main ─────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { profile } = useAuth();
+  const navigate = useNavigate();
   const isAdmin = profile?.role === 'admin';
+
+  // Marketing users go straight to their page
+  useEffect(() => {
+    if (profile?.role === 'marketing') navigate('/admin/marketing', { replace: true });
+  }, [profile?.role]);
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
   const firstDay = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-01`;

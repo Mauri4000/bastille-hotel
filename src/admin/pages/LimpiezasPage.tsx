@@ -89,6 +89,15 @@ export default function LimpiezasPage() {
 
   useEffect(() => { fetchData(true); }, [fetchData]);
 
+  // Real-time sync
+  useEffect(() => {
+    const channel = supabase
+      .channel('limpiezas-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_tasks' }, () => { fetchData(false); })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchData]);
+
   function getCell(rowKey: string, day: number): CleaningRecord | null {
     return taskMapRef.current[`${toDateStr(year, month, day)}|${rowKey}`] ?? null;
   }

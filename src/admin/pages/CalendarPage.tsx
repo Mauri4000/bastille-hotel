@@ -612,6 +612,16 @@ export default function CalendarPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // ── Real-time sync: refresh when any user changes reservations or transactions ──
+  useEffect(() => {
+    const channel = supabase
+      .channel('calendar-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, () => { fetchData(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' },  () => { fetchData(); })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchData]);
+
   // Load past empresa names for autocomplete
   useEffect(() => {
     supabase.from('reservations').select('empresa_name').eq('is_empresa', true).not('empresa_name', 'is', null)
@@ -1564,9 +1574,9 @@ export default function CalendarPage() {
     window.addEventListener('resize', h);
     return () => window.removeEventListener('resize', h);
   }, []);
-  const CELL_W    = isMobile ? 56 : 116;
-  const ROOM_W    = isMobile ? 72 : 130;
-  const CELL_H    = isMobile ? 'h-12' : 'h-16';
+  const CELL_W    = isMobile ? 30 : 116;
+  const ROOM_W    = isMobile ? 48 : 130;
+  const CELL_H    = isMobile ? 'h-8' : 'h-16';
 
   return (
     <div className="flex flex-col h-full gap-2 md:gap-4">
@@ -1760,7 +1770,7 @@ export default function CalendarPage() {
                               if (selectMode) { toggleCellSelect(res); return; }
                               setCardMenu({ res, x: e.clientX, y: e.clientY });
                             }}
-                            className={`w-full h-full rounded-lg px-2 py-1 text-left transition-all ${cfg?.bg ?? 'bg-gray-400'} ${cfg?.text ?? 'text-white'} ${
+                            className={`w-full h-full rounded-sm md:rounded-lg ${isMobile ? 'px-0.5 py-0.5' : 'px-2 py-1'} text-left transition-all ${cfg?.bg ?? 'bg-gray-400'} ${cfg?.text ?? 'text-white'} ${
                               selectMode
                                 ? selectedIds.has(res.id)
                                   ? 'ring-2 ring-white ring-offset-1 ring-offset-transparent brightness-110'
@@ -1770,7 +1780,18 @@ export default function CalendarPage() {
                                 : 'hover:opacity-80 cursor-pointer'
                             }`}
                           >
-                            {isNota ? (
+                            {isMobile ? (
+                              /* ── Mobile: minimal — just guest count on check-in ── */
+                              isCheckIn && !isNota && res.status !== 'mantenimiento' && res.status !== 'habilitacion' ? (
+                                <span className="text-[9px] font-bold leading-none opacity-90">{res.num_guests}p</span>
+                              ) : isNota ? (
+                                <span className="text-[9px]">📝</span>
+                              ) : res.status === 'mantenimiento' ? (
+                                <span className="text-[9px]">🔧</span>
+                              ) : res.status === 'habilitacion' ? (
+                                <span className="text-[9px]">🧹</span>
+                              ) : null
+                            ) : isNota ? (
                               <div className="text-[10px] font-bold leading-tight break-words">
                                 📝 {(res as any).notes || 'Nota'}
                               </div>

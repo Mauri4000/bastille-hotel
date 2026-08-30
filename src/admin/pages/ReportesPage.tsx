@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FileText, Download, RefreshCw, AlertCircle, Send } from 'lucide-react';
 import DatePicker from '../components/DatePicker';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 
 const API = 'http://localhost:5001';
 
@@ -48,12 +49,22 @@ async function loadPdfMake() {
   return (window as any).pdfMake;
 }
 async function imgToBase64(url: string): Promise<string> {
-  const res = await fetch(url);
-  const blob = await res.blob();
-  return new Promise(resolve => {
-    const r = new FileReader();
-    r.onloadend = () => resolve(r.result as string);
-    r.readAsDataURL(blob);
+  // Use canvas so ANY format the browser supports (WebP, JPEG, PNG, etc.)
+  // is converted to a valid PNG that pdfmake always accepts.
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width  = img.naturalWidth  || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        canvas.getContext('2d')!.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (e) { reject(e); }
+    };
+    img.onerror = reject;
+    img.src = url;
   });
 }
 
@@ -116,6 +127,8 @@ function mapNatIdx(nat: string): number {
 }
 
 export default function ReportesPage() {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const [fromDate,  setFromDate]  = useState(mondayStr());
   const [toDate,    setToDate]    = useState(todayStr());
   const [rows,      setRows]      = useState<GuestRow[] | null>(null);
@@ -148,6 +161,7 @@ export default function ReportesPage() {
           guest_profession, guest_purpose, guest_origin, guest_next_dest, guest_transport,
           additional_guests`)
         .eq('status','ocupado').eq('wants_invoice',true)
+        .neq('room_id', 'SALON')
         .lte('check_in', toDate).gte('check_out', fromDate)
         .order('check_in', { ascending: true });
       if (err) throw err;
@@ -283,10 +297,13 @@ export default function ReportesPage() {
       for (const res of (data ?? [])) {
         const ci = res.check_in as string;
         const co = res.check_out as string;
-        const nats: string[] = [res.guest_country ?? ''];
+        const mainNat = res.guest_country ?? '';
+        const nats: string[] = [mainNat];
         for (const ag of (res.additional_guests ?? []) as any[]) {
           if (ag.role === 'babies') continue;
-          nats.push(ag.nationality ?? ag.guest_nationality ?? '');
+          // Inherit main guest's nationality when additional guest has none
+          const agNat = ag.nationality ?? ag.guest_nationality ?? '';
+          nats.push(agNat || mainNat);
         }
         for (const nat of nats) {
           const idx = mapNatIdx(nat);
@@ -300,224 +317,344 @@ export default function ReportesPage() {
 
       const pm   = await loadPdfMake();
       const base = window.location.origin;
-      const logoIzq = await imgToBase64(`${base}/logo-bastille.png`).catch(() => '');
-      const logoDer = await imgToBase64(`${base}/logo-gobierno.png`).catch(() => '');
+      const logoIzq = await imgToBase64(`${base}/escudo-bolivia.png`).catch(() => '');
+      const logoDer = await imgToBase64(`${base}/escudo-chuquisaca.jpg`).catch(() =>
+                      imgToBase64(`${base}/escudo-chuquisaca.png`).catch(() => ''));
 
-      // Column widths (points): 1 day + 27*2 nat + 2 total = 57 cols
-      const DAY_W = 22;
-      const COL_W = 13.5; // each I or P sub-column
-      const TOT_W = 15;   // each total I or P sub-column
+      // Column widths: 1 day + 27*2 nat cols + 1 total (no I/P split)
+      const DAY_W = 18;
+      const COL_W = 11;
+      const TOT_W = 16;
       const tableWidths: (number|string)[] = [
         DAY_W,
         ...Array.from({ length: N_NATS }, () => [COL_W, COL_W]).flat(),
-        TOT_W, TOT_W,
+        TOT_W,
       ];
 
-      // SVG: nationality label, vertical, spanning pair width
-      function natSvg(label: string, pairW: number): any {
-        const h = 52;
-        const x = (pairW / 2).toFixed(1);
-        return {
-          svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${pairW.toFixed(1)}" height="${h}">` +
-               `<text transform="translate(${x},${h - 2}) rotate(-90)" text-anchor="start" ` +
-               `font-size="6" fill="#444" font-family="Helvetica">${label}</text></svg>`,
-          width: pairW, height: h, alignment: 'center',
-        };
-      }
-
-      // Header row 1: nationality spans
+      // Header row 1: "Nacio" + nationality names horizontal (colSpan 2 each)
       const headerRow1: any[] = [
-        { text: 'DÍA', rowSpan: 2, alignment: 'center', fontSize: 7, bold: true,
-          fillColor: '#e0e0e0', margin: [0, 0, 0, 0] },
+        { text: 'Nacio', fontSize: 5.5, bold: true, alignment: 'center', fillColor: '#d8d8d8' },
       ];
       for (let i = 0; i < N_NATS; i++) {
-        headerRow1.push({ ...natSvg(NAT_LABELS[i], COL_W * 2), colSpan: 2, fillColor: '#e0e0e0' });
+        headerRow1.push({
+          text: NAT_LABELS[i], fontSize: 5, bold: true, alignment: 'center',
+          colSpan: 2, fillColor: '#e8e8e8', margin: [0, 1, 0, 1],
+        });
         headerRow1.push({});
       }
-      headerRow1.push({ ...natSvg('TOTAL', TOT_W * 2), colSpan: 2, fillColor: '#c8c8c8' });
-      headerRow1.push({});
+      headerRow1.push({ text: 'Total', fontSize: 5.5, bold: true, alignment: 'center', fillColor: '#b0b0b0' });
 
-      // Header row 2: I / P sub-labels
-      const headerRow2: any[] = [{}]; // placeholder for DÍA rowSpan
-      for (let i = 0; i <= N_NATS; i++) { // 27 nats + 1 total = 28 pairs
-        const isTotal = i === N_NATS;
-        const bg = isTotal ? '#d0d0d0' : (i % 2 === 0 ? '#eeeeee' : '#e8e8e8');
+      // Header row 2: "Dias" + I/P per nationality
+      const headerRow2: any[] = [
+        { text: 'Dias', fontSize: 5.5, bold: true, alignment: 'center', fillColor: '#d8d8d8' },
+      ];
+      for (let i = 0; i < N_NATS; i++) {
+        const bg = i % 2 === 0 ? '#eeeeee' : '#e4e4e4';
         headerRow2.push({ text: 'I', fontSize: 6, alignment: 'center', bold: true, fillColor: bg });
         headerRow2.push({ text: 'P', fontSize: 6, alignment: 'center', fillColor: bg });
       }
+      headerRow2.push({ text: 'I+P', fontSize: 5, bold: true, alignment: 'center', fillColor: '#b0b0b0' });
+
+      // Totals accumulation
+      const totI = Array(N_NATS).fill(0);
+      const totP = Array(N_NATS).fill(0);
 
       // Day data rows
       const dataRows: any[][] = [];
       for (let d = 1; d <= 31; d++) {
         if (d > daysInMonth) {
-          const gray = { text: '', fillColor: '#f5f5f5' };
           dataRows.push([
-            { text: String(d), alignment: 'center', fontSize: 7, fillColor: '#f0f0f0' },
-            ...Array(N_NATS * 2 + 2).fill(gray),
+            { text: String(d), alignment: 'center', fontSize: 6, fillColor: '#f0f0f0', color: '#bbb' },
+            ...Array(N_NATS * 2 + 1).fill({ text: '', fillColor: '#f8f8f8' }),
           ]);
           continue;
         }
         const ds = dayStats[d];
-        const tI  = ds.I.reduce((a, b) => a + b, 0);
-        const tP  = ds.P.reduce((a, b) => a + b, 0);
-        const row: any[] = [
-          { text: String(d), alignment: 'center', fontSize: 7, bold: true },
-        ];
+        const tI = ds.I.reduce((a, b) => a + b, 0);
+        const tP = ds.P.reduce((a, b) => a + b, 0);
+        const dayTotal = tI + tP;
+        const row: any[] = [{ text: String(d), alignment: 'center', fontSize: 7, bold: true }];
         for (let n = 0; n < N_NATS; n++) {
-          const bg = n % 2 === 0 ? '#ffffff' : '#fafafa';
+          const bg = n % 2 === 0 ? '#ffffff' : '#f8f8f8';
           row.push({ text: ds.I[n] || '', alignment: 'center', fontSize: 7, fillColor: bg });
           row.push({ text: ds.P[n] || '', alignment: 'center', fontSize: 7, fillColor: bg });
+          totI[n] += ds.I[n]; totP[n] += ds.P[n];
         }
-        row.push({ text: tI || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e8e8e8' });
-        row.push({ text: tP || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e8e8e8' });
+        // Total col: bold, no right border
+        row.push({ text: dayTotal || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#f0f0f0' });
         dataRows.push(row);
       }
 
-      // Totales row
-      const totI = Array(N_NATS).fill(0);
-      const totP = Array(N_NATS).fill(0);
-      for (let d = 1; d <= daysInMonth; d++) {
-        for (let n = 0; n < N_NATS; n++) {
-          totI[n] += dayStats[d].I[n];
-          totP[n] += dayStats[d].P[n];
-        }
-      }
       const grandI = totI.reduce((a, b) => a + b, 0);
       const grandP = totP.reduce((a, b) => a + b, 0);
+
+      // Totales row
       const totalesRow: any[] = [
-        { text: 'TOTAL', alignment: 'center', fontSize: 7, bold: true, fillColor: '#d8d8d8' },
+        { text: 'Totales', alignment: 'center', fontSize: 6, bold: true, fillColor: '#d8d8d8' },
       ];
       for (let n = 0; n < N_NATS; n++) {
-        totalesRow.push({ text: totI[n] || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' });
-        totalesRow.push({ text: totP[n] || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' });
+        totalesRow.push({ text: totI[n] || '', alignment: 'center', fontSize: 6, bold: true, fillColor: '#e4e4e4' });
+        totalesRow.push({ text: totP[n] || '', alignment: 'center', fontSize: 6, bold: true, fillColor: '#e4e4e4' });
       }
-      totalesRow.push({ text: grandI || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#c8c8c8' });
-      totalesRow.push({ text: grandP || '', alignment: 'center', fontSize: 7, bold: true, fillColor: '#c8c8c8' });
+      totalesRow.push({ text: grandI + grandP || '', alignment: 'center', fontSize: 6, bold: true, fillColor: '#c0c0c0' });
 
-      // Summary table (bottom right)
-      function summaryRow(label: string, type: 0|1|2): any[] {
+      // Summary helper
+      function summaryVals(type: 0|1|2) {
         let sI = 0, sP = 0;
         for (let d = 1; d <= daysInMonth; d++) {
           const ds = dayStats[d];
-          if (type === 0) { sI += ds.I[0]; sP += ds.P[0]; }             // Nacionales = Bolivia
-          else if (type === 1) {                                          // Extranjeros
+          if (type === 0) { sI += ds.I[0]; sP += ds.P[0]; }
+          else if (type === 1) {
             sI += ds.I.slice(1).reduce((a: number, b: number) => a + b, 0);
             sP += ds.P.slice(1).reduce((a: number, b: number) => a + b, 0);
-          } else { sI += ds.I.reduce((a, b) => a + b, 0); sP += ds.P.reduce((a, b) => a + b, 0); }
+          } else {
+            sI += ds.I.reduce((a, b) => a + b, 0);
+            sP += ds.P.reduce((a, b) => a + b, 0);
+          }
         }
-        const bold = type === 2;
-        const bg   = bold ? '#e0e0e0' : '#ffffff';
-        const cell = (v: number) => ({ text: v || '', alignment: 'center', fontSize: 7, bold, fillColor: bg });
-        return [
-          { text: label, fontSize: 7, bold, fillColor: bg },
-          cell(sI), cell(sP), cell(sI + sP),
-        ];
+        return { sI, sP, tot: sI + sP };
       }
-
+      const [nals, extr, total] = [summaryVals(0), summaryVals(1), summaryVals(2)];
       const monthName = MONTHS_ES[month];
+
+      const c7 = (t: any, opts: any = {}) => ({ text: t, fontSize: 7, ...opts });
+      const c7b = (t: any, opts: any = {}) => ({ text: t, fontSize: 7, bold: true, ...opts });
 
       const docDef: any = {
         pageSize: 'A4',
         pageOrientation: 'landscape',
-        pageMargins: [12, 28, 12, 20],
+        pageMargins: [8, 6, 8, 6],
         content: [
-          // ── Header ────────────────────────────────────────────────────────
+          // ── TOP HEADER ────────────────────────────────────────────────────
           {
-            columns: [
-              logoIzq
-                ? { image: logoIzq, fit: [50, 42], width: 55 }
-                : { text: 'Gobierno\nAutónomo\nde Chuquisaca', fontSize: 7, color: GRAY, width: 55 },
-              {
-                stack: [
-                  { text: 'VICEMINISTERIO DE TURISMO Y VIAJES', fontSize: 9, bold: true, color: '#333', alignment: 'center' },
-                  { text: 'FORMULARIO N° 6 — PARTE MENSUAL DE TURISMO', fontSize: 8, color: '#555', alignment: 'center' },
-                  {
-                    columns: [
-                      { text: [{ text: 'Establecimiento: ', bold: true }, 'HOTEL BASTILLE'], fontSize: 7, width: '*' },
-                      { text: [{ text: 'Ciudad: ', bold: true }, 'SUCRE'], fontSize: 7, width: 80 },
-                      { text: [{ text: 'Categoría: ', bold: true }, '****'], fontSize: 7, width: 70 },
-                      { text: [{ text: 'Dirección: ', bold: true }, 'Av. Arce 247'], fontSize: 7, width: '*' },
-                    ],
-                    columnGap: 6,
-                    margin: [0, 4, 0, 0],
-                  },
-                  {
-                    columns: [
-                      { text: [{ text: 'Mes: ', bold: true }, monthName.toUpperCase()], fontSize: 7, width: 100 },
-                      { text: [{ text: 'Año: ', bold: true }, String(year)], fontSize: 7, width: 70 },
-                      { text: [{ text: 'N° Personal Permanente: ', bold: true }, '3  ', { text: 'Eventual: ', bold: true }, '3  ', { text: 'Total: ', bold: true }, '6'], fontSize: 7, width: '*' },
-                      { text: [{ text: 'N° Hab.: ', bold: true }, '21  ', { text: 'Plazas: ', bold: true }, '34'], fontSize: 7, width: 100 },
-                    ],
-                    columnGap: 6,
-                    margin: [0, 2, 0, 0],
-                  },
-                ],
-                width: '*',
-                margin: [6, 0, 6, 0],
-              },
-              logoDer
-                ? { image: logoDer, fit: [50, 42], width: 55 }
-                : { text: 'Secretaría de\nCulturas\ny Turismo', fontSize: 7, color: GRAY, alignment: 'right', width: 55 },
-            ],
-            columnGap: 4,
-            margin: [0, 0, 0, 6],
+            table: {
+              widths: [58, '*', 95],
+              body: [[
+                // Left: logo + viceministerio
+                {
+                  stack: [
+                    logoIzq ? { image: logoIzq, fit: [38, 32], alignment: 'center' } : { text: '' },
+                    c7b('VICEMINISTERIO\nDE TURISMO', { alignment: 'center', margin: [0, 2, 0, 0], lineHeight: 1.1 }),
+                  ],
+                  border: [true, true, true, true],
+                  margin: [2, 4, 2, 2],
+                },
+                // Center: big title
+                {
+                  stack: [
+                    c7b('ESTADISTICAS HOTELERAS', { fontSize: 13, alignment: 'center', margin: [0, 4, 0, 0] }),
+                    {
+                      columns: [
+                        { text: '', width: '*' },
+                        c7b('PARTE MENSUAL', { width: 'auto', margin: [0, 2, 30, 0] }),
+                        c7b('FORM. N° 6', { width: 'auto', margin: [0, 2, 0, 0] }),
+                      ],
+                    },
+                  ],
+                  border: [true, true, true, true],
+                },
+                // Right: gobierno text + logo
+                {
+                  stack: [
+                    c7b('GOBIERNO AUTÓNOMO DE CHUQUISACA', { alignment: 'center' }),
+                    c7('DIRECCIÓN DE TURISMO', { alignment: 'center' }),
+                    logoDer ? { image: logoDer, fit: [36, 30], alignment: 'center', margin: [0, 2, 0, 0] } : { text: '' },
+                  ],
+                  border: [true, true, true, true],
+                  margin: [2, 2, 2, 2],
+                },
+              ]],
+            },
+            layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => '#555', vLineColor: () => '#555', paddingTop: () => 2, paddingBottom: () => 2, paddingLeft: () => 3, paddingRight: () => 3 },
+            margin: [0, 0, 0, 0],
           },
-          // ── Main table ────────────────────────────────────────────────────
+          // ── INFO SECTION (A / B / rooms) ──────────────────────────────────
+          {
+            table: {
+              widths: [10, 120, 5, 80, 100, 60, 50, '*'],
+              body: [[
+                // A label
+                { text: 'A', fontSize: 8, bold: true, rowSpan: 3, alignment: 'center', margin: [0, 10, 0, 0] },
+                // A data
+                {
+                  stack: [
+                    { columns: [c7b('Mes  '), c7(monthName.toUpperCase()), c7b('   Año  '), c7(String(year))], margin: [0, 0, 0, 1] },
+                    { columns: [c7b('Ciudad o Localid.  '), c7('SUCRE')], margin: [0, 0, 0, 1] },
+                    { columns: [c7b('Establecimiento  '), c7('HOTEL BASTILLE')], margin: [0, 0, 0, 1] },
+                  ],
+                  rowSpan: 3,
+                },
+                // B label
+                { text: 'B', fontSize: 8, bold: true, rowSpan: 3, alignment: 'center', margin: [0, 10, 0, 0] },
+                // B data
+                {
+                  stack: [
+                    { columns: [c7('Empleados Permanentes  '), c7b('3')], margin: [0, 0, 0, 1] },
+                    { columns: [c7('Empleados Eventuales  '), c7b('3')], margin: [0, 0, 0, 1] },
+                    { columns: [c7('Total Número Empleados  '), c7b('6')], margin: [0, 0, 0, 1] },
+                  ],
+                  rowSpan: 3,
+                },
+                // Hab types
+                {
+                  stack: [
+                    c7('Hab. Matrimonial', { margin: [0, 0, 0, 1] }),
+                    c7('Hab. Simples', { margin: [0, 0, 0, 1] }),
+                    c7('Hab. Dobles', { margin: [0, 0, 0, 1] }),
+                  ],
+                  rowSpan: 3,
+                },
+                // Hab counts
+                {
+                  stack: [
+                    c7b('', { margin: [0, 0, 0, 1] }),
+                    c7b('', { margin: [0, 0, 0, 1] }),
+                    c7b('', { margin: [0, 0, 0, 1] }),
+                  ],
+                  rowSpan: 3,
+                },
+                // Totals
+                {
+                  stack: [
+                    { columns: [c7b('Total N° Hab.  '), c7b('21')], margin: [0, 0, 0, 1] },
+                    { columns: [c7b('Total N° Plazas.  '), c7b('34')], margin: [0, 0, 0, 1] },
+                  ],
+                  rowSpan: 3,
+                },
+                // FRR
+                { text: 'FRR 03', fontSize: 8, bold: true, alignment: 'center', rowSpan: 3, margin: [0, 10, 0, 0] },
+              ], [
+                {}, {}, {}, {}, {}, {}, {}, {},
+              ], [
+                { text: '', border: [true, false, false, true] },
+                {
+                  stack: [
+                    { columns: [c7b('Categoría  '), c7('****')], margin: [0, 0, 0, 1] },
+                    { columns: [c7b('Dirección  '), c7('A. Arce 247')], margin: [0, 0, 0, 1] },
+                  ],
+                },
+                { text: '', border: [true, false, false, true] },
+                { text: '', border: [false, false, true, true] },
+                { text: '', border: [true, false, false, true] },
+                { text: '', border: [true, false, false, true] },
+                { text: '', border: [true, false, false, true] },
+                { text: '', border: [true, false, false, true] },
+              ]],
+            },
+            layout: {
+              hLineWidth: () => 0.4, vLineWidth: () => 0.4,
+              hLineColor: () => '#666', vLineColor: () => '#666',
+              paddingTop: () => 2, paddingBottom: () => 2,
+              paddingLeft: () => 3, paddingRight: () => 3,
+            },
+            margin: [0, 0, 0, 0],
+          },
+          // ── MAIN TABLE ────────────────────────────────────────────────────
           {
             table: {
               headerRows: 2,
               widths: tableWidths,
-              body: [
-                headerRow1,
-                headerRow2,
-                ...dataRows,
-                totalesRow,
-              ],
+              body: [headerRow1, headerRow2, ...dataRows, totalesRow],
             },
             layout: {
-              hLineWidth: (i: number, node: any) => {
-                if (i === 0 || i === 2 || i === node.table.body.length) return 0.5;
+              hLineWidth: (i: number, node: any) => (i === 0 || i === 2 || i === node.table.body.length) ? 0.6 : 0.2,
+              vLineWidth: (i: number, node: any) => {
+                if (i === 0) return 0.6;
+                if (i === node.table.widths.length) return 0; // no right border on TOTAL col
                 return 0.2;
               },
-              vLineWidth: (i: number, node: any) => (i === 0 || i === node.table.widths.length) ? 0.5 : 0.2,
-              hLineColor: () => '#888888',
-              vLineColor: () => '#888888',
-              paddingLeft:   () => 1,
-              paddingRight:  () => 1,
-              paddingTop:    () => 1,
-              paddingBottom: () => 1,
+              hLineColor: () => '#777',
+              vLineColor: () => '#999',
+              paddingLeft: () => 1, paddingRight: () => 1,
+              paddingTop: () => 1, paddingBottom: () => 1,
             },
-            margin: [0, 0, 0, 6],
+            margin: [0, 0, 0, 4],
           },
-          // ── Legend + Summary ──────────────────────────────────────────────
+          // ── FOOTER ────────────────────────────────────────────────────────
           {
             columns: [
+              // Referencia
+              {
+                width: 120,
+                stack: [
+                  c7b('Referencia:'),
+                  c7('I: Ingreso (Entradas)'),
+                  c7('P: Permanentes (Pernoctación)'),
+                ],
+                margin: [0, 2, 0, 0],
+              },
+              // Nota
               {
                 width: '*',
-                text: 'I = Ingreso (Entradas del día)   |   P = Permanentes (Pernoctación de días anteriores)',
-                fontSize: 7, color: '#666', margin: [0, 4, 0, 0],
+                stack: [
+                  { text: 'Nota: Este Formulario debe ser entregado a la\nrepresentación regional de la secretaria Nacional\nde Turismo antes del día 8 del mes siguiente.', fontSize: 6, color: '#444' },
+                ],
+                margin: [4, 2, 4, 0],
               },
+              // Sello
+              {
+                width: 80,
+                stack: [
+                  c7('Sello del Establecimiento', { alignment: 'center' }),
+                  { text: '\n\n', fontSize: 14 },
+                ],
+                margin: [0, 2, 0, 0],
+              },
+              // Persona responsable
+              {
+                width: 85,
+                stack: [
+                  c7('Persona responsable', { alignment: 'center' }),
+                  c7('Nombre', { alignment: 'center', color: '#888' }),
+                  c7b('Guido Dávalos', { alignment: 'center' }),
+                ],
+                margin: [0, 2, 0, 0],
+              },
+              // Fecha
+              {
+                width: 80,
+                stack: [
+                  c7b('FECHA DE RECEPCION Y SELLO', { alignment: 'center', fontSize: 6 }),
+                ],
+                margin: [0, 2, 4, 0],
+              },
+              // Summary table
               {
                 width: 'auto',
                 table: {
-                  widths: [70, 35, 40, 35],
+                  widths: [42, 22, 22, 28],
                   body: [
                     [
-                      { text: '', border: [false, false, false, true] },
-                      { text: 'INGRESO', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' },
-                      { text: 'PERMANENTES', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' },
-                      { text: 'TOTAL', alignment: 'center', fontSize: 7, bold: true, fillColor: '#e0e0e0' },
+                      c7b('Resumen', { fillColor: '#e0e0e0' }),
+                      c7b('Nals', { alignment: 'center', fillColor: '#e0e0e0' }),
+                      c7b('Extr', { alignment: 'center', fillColor: '#e0e0e0' }),
+                      c7b('Total', { alignment: 'center', fillColor: '#e0e0e0' }),
                     ],
-                    summaryRow('NACIONALES',   0),
-                    summaryRow('EXTRANJEROS',  1),
-                    summaryRow('TOTAL',        2),
+                    [
+                      c7('Ingreso'),
+                      { text: nals.sI || '', fontSize: 7, alignment: 'center' },
+                      { text: extr.sI || '', fontSize: 7, alignment: 'center' },
+                      { text: total.sI || '', fontSize: 7, alignment: 'center' },
+                    ],
+                    [
+                      c7('Permanen.'),
+                      { text: nals.sP || '', fontSize: 7, alignment: 'center' },
+                      { text: extr.sP || '', fontSize: 7, alignment: 'center' },
+                      { text: total.sP || '', fontSize: 7, alignment: 'center' },
+                    ],
+                    [
+                      c7b('Total', { fillColor: '#e8e8e8' }),
+                      { text: nals.tot || '', fontSize: 7, bold: true, alignment: 'center', fillColor: '#e8e8e8' },
+                      { text: extr.tot || '', fontSize: 7, bold: true, alignment: 'center', fillColor: '#e8e8e8' },
+                      { text: total.tot || '', fontSize: 7, bold: true, alignment: 'center', fillColor: '#e8e8e8' },
+                    ],
                   ],
                 },
                 layout: {
                   hLineWidth: () => 0.4, vLineWidth: () => 0.4,
                   hLineColor: () => '#888', vLineColor: () => '#888',
-                  paddingLeft: () => 3, paddingRight: () => 3,
-                  paddingTop: () => 2, paddingBottom: () => 2,
+                  paddingLeft: () => 2, paddingRight: () => 2,
+                  paddingTop: () => 1, paddingBottom: () => 1,
                 },
               },
             ],
@@ -553,7 +690,7 @@ export default function ReportesPage() {
       const monthLabel  = `${MONTHS_ES[month]} ${year}`;
 
       // ── Fetch data ───────────────────────────────────────────────────────────
-      const [txRes, resRes, limpRes, empRes] = await Promise.all([
+      const [txRes, resRes, limpRes, empRes, mktRes] = await Promise.all([
         supabase.from('transactions').select('type,amount,caja,category,description')
           .gte('date', firstDay).lte('date', lastDay),
         supabase.from('reservations').select('has_pet,guest_country,num_guests,additional_guests,status,guest_name')
@@ -562,6 +699,8 @@ export default function ReportesPage() {
           .gte('date', firstDay).lte('date', lastDay),
         supabase.from('reservations').select('guest_name,wants_invoice,is_empresa,siaat_number,price_per_night,num_nights')
           .eq('wants_invoice', true).lte('check_in', lastDay).gt('check_out', firstDay),
+        supabase.from('marketing_posts').select('date,account_name,networks,likes,comments,views,category,notes')
+          .gte('date', firstDay).lte('date', lastDay).order('date', { ascending: true }),
       ]);
       // Exclude INICIO/FINAL DE CAJA shift refs (they inflate totals)
       const allTxs = (txRes.data ?? []) as any[];
@@ -569,6 +708,7 @@ export default function ReportesPage() {
       const ress   = (resRes.data  ?? []) as any[];
       const limps  = (limpRes.data ?? []) as any[];
       const emps   = (empRes.data  ?? []) as any[];
+      const mkts   = (mktRes.data  ?? []) as any[];
 
       // ── Compute stats ────────────────────────────────────────────────────────
       const ingresos = txs.filter((t:any) => t.type === 'ingreso');
@@ -843,6 +983,76 @@ export default function ReportesPage() {
           layout:'lightHorizontalLines',
           margin:[0,0,0,4],
         },
+
+        // ── 8. Marketing ────────────────────────────────────────────────────────
+        ...(mkts.length > 0 ? (() => {
+          const mktLikes    = mkts.reduce((s:number,p:any) => s + (p.likes||0), 0);
+          const mktComments = mkts.reduce((s:number,p:any) => s + (p.comments||0), 0);
+          const mktViews    = mkts.reduce((s:number,p:any) => s + (p.views||0), 0);
+          // By network
+          const byNet: Record<string,number> = {};
+          for (const p of mkts) for (const n of (p.networks||[])) byNet[n] = (byNet[n]||0)+1;
+          // By category
+          const byCat: Record<string,number> = {};
+          for (const p of mkts) byCat[p.category||'Otros'] = (byCat[p.category||'Otros']||0)+1;
+          return [
+            { text: '📱 MARKETING — REDES SOCIALES', ...sectionHdr },
+            {
+              columns: [
+                { text: `📸 Publicaciones: ${mkts.length}`, fontSize:9, bold:true },
+                { text: `❤️ Likes: ${mktLikes.toLocaleString()}`, fontSize:9 },
+                { text: `💬 Comentarios: ${mktComments.toLocaleString()}`, fontSize:9 },
+                { text: `👁 Vistas: ${mktViews.toLocaleString()}`, fontSize:9 },
+              ],
+              margin: [0,0,0,6],
+            },
+            {
+              columns: [
+                {
+                  width: '50%',
+                  stack: [
+                    { text: 'Por red social:', fontSize:8, bold:true, color:'#555', margin:[0,0,0,2] },
+                    ...Object.entries(byNet).map(([net,cnt]) => ({ text: `• ${net}: ${cnt}`, fontSize:8, color:'#666' })),
+                  ],
+                },
+                {
+                  width: '50%',
+                  stack: [
+                    { text: 'Por categoría:', fontSize:8, bold:true, color:'#555', margin:[0,0,0,2] },
+                    ...Object.entries(byCat).map(([cat,cnt]) => ({ text: `• ${cat}: ${cnt}`, fontSize:8, color:'#666' })),
+                  ],
+                },
+              ],
+              margin: [0,0,0,6],
+            },
+            {
+              table: {
+                widths: [50, 80, 80, 40, 40, 50],
+                headerRows: 1,
+                body: [
+                  [
+                    { text:'Fecha',    fontSize:8, bold:true, fillColor:'#f9fafb' },
+                    { text:'Cuenta',   fontSize:8, bold:true, fillColor:'#f9fafb' },
+                    { text:'Redes',    fontSize:8, bold:true, fillColor:'#f9fafb' },
+                    { text:'Likes',    fontSize:8, bold:true, fillColor:'#f9fafb', alignment:'right' },
+                    { text:'Com.',     fontSize:8, bold:true, fillColor:'#f9fafb', alignment:'right' },
+                    { text:'Vistas',   fontSize:8, bold:true, fillColor:'#f9fafb', alignment:'right' },
+                  ],
+                  ...mkts.map((p:any) => ([
+                    { text: p.date?.slice(5) ?? '', fontSize:7, color:'#555' },
+                    { text: `@${p.account_name||''}`, fontSize:7, color:'#555' },
+                    { text: (p.networks||[]).join(', '), fontSize:7, color:'#555' },
+                    { text: (p.likes||0).toLocaleString(), fontSize:7, color:'#555', alignment:'right' },
+                    { text: (p.comments||0).toLocaleString(), fontSize:7, color:'#555', alignment:'right' },
+                    { text: (p.views||0).toLocaleString(), fontSize:7, color:'#555', alignment:'right' },
+                  ])),
+                ],
+              },
+              layout: 'lightHorizontalLines',
+              margin: [0,0,0,4],
+            },
+          ];
+        })() : [{ text: '📱 MARKETING — Sin publicaciones registradas este mes', ...sectionHdr }]),
 
         { text:`✍️ Generado: ${new Date().toLocaleDateString('es-BO',{timeZone:'America/La_Paz',day:'2-digit',month:'long',year:'numeric'})}`, fontSize:7, color:'#999', margin:[0,14,0,0], alignment:'right' },
       ];
@@ -1319,8 +1529,8 @@ export default function ReportesPage() {
         </div>
       </div>
 
-      {/* ── Reporte Familiar ─────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+      {/* ── Reporte Familiar — admin only ────────────────────────────────────── */}
+      {isAdmin && <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100">
           <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
             <FileText size={18} className="text-amber-600" />
@@ -1356,7 +1566,7 @@ export default function ReportesPage() {
             </div>
           )}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

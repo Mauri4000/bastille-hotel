@@ -1,23 +1,31 @@
 import { useState } from 'react';
+import type React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, CalendarDays, ArrowLeftRight,
-  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles,
+  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles, TrendingUp,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-const navItems = [
-  { to: '/admin',             icon: LayoutDashboard, label: 'Dashboard',       exact: true },
-  { to: '/admin/calendar',    icon: CalendarDays,    label: 'Calendario' },
-  { to: '/admin/limpiezas',   icon: Sparkles,        label: 'Limpiezas' },
-  { to: '/admin/transactions',icon: ArrowLeftRight,  label: 'Ingresos / Egresos' },
-  { to: '/admin/guests',      icon: BookUser,        label: 'Base de Huéspedes' },
-  { to: '/admin/vitrina',     icon: ShoppingBag,     label: 'Stock Hotel' },
-  { to: '/admin/shift',       icon: ClipboardList,   label: 'Cambio de Turno' },
-  { to: '/admin/billetes',   icon: ClipboardList,   label: 'Billetes' },
-  { to: '/admin/reportes',    icon: BarChart2,       label: 'Reportes' },
-  { to: '/admin/historial',    icon: History,         label: 'Historial', adminOnly: true },
+type NavItem = {
+  to: string; icon: React.ElementType; label: string;
+  exact?: boolean; adminOnly?: boolean; roles?: string[];
+};
+
+const navItems: NavItem[] = [
+  { to: '/admin',              icon: LayoutDashboard, label: 'Dashboard',          exact: true },
+  { to: '/admin/calendar',     icon: CalendarDays,    label: 'Calendario' },
+  { to: '/admin/limpiezas',    icon: Sparkles,        label: 'Limpiezas' },
+  { to: '/admin/transactions', icon: ArrowLeftRight,  label: 'Ingresos / Egresos' },
+  { to: '/admin/guests',       icon: BookUser,        label: 'Base de Huéspedes' },
+  { to: '/admin/vitrina',      icon: ShoppingBag,     label: 'Stock Hotel' },
+  { to: '/admin/shift',        icon: ClipboardList,   label: 'Cambio de Turno' },
+  { to: '/admin/billetes',     icon: ClipboardList,   label: 'Billetes' },
+  { to: '/admin/reportes',     icon: BarChart2,       label: 'Reportes' },
+  { to: '/admin/historial',    icon: History,         label: 'Historial',          adminOnly: true },
   { to: '/admin/spanish',      icon: GraduationCap,   label: 'Spanish School' },
+  // Marketing: visible only to admin and marketing role
+  { to: '/admin/marketing',    icon: TrendingUp,      label: 'Marketing',          roles: ['admin', 'marketing'] },
 ];
 
 const adminItems = [
@@ -56,7 +64,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
-        {navItems.filter(item => !('adminOnly' in item) || profile?.role === 'admin').map(({ to, icon: Icon, label, exact }) => (
+        {navItems.filter(item => {
+          const role = profile?.role ?? '';
+          if (item.adminOnly && role !== 'admin') return false;
+          if (item.roles) return item.roles.includes(role);
+          // Default: hide from marketing-only accounts
+          return role !== 'marketing';
+        }).map(({ to, icon: Icon, label, exact }) => (
           <NavLink
             key={to}
             to={to}

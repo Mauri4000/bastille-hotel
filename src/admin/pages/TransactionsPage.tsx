@@ -162,6 +162,15 @@ export default function TransactionsPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Real-time sync
+  useEffect(() => {
+    const channel = supabase
+      .channel('transactions-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => { fetchData(); })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchData]);
+
   // Fetch occupied/reserved rooms when HOSPEDAJE is selected
   useEffect(() => {
     if (form.category !== 'H01-HOSPEDAJE') { setOccupiedRooms([]); setSelectedRoomId(''); return; }
@@ -375,27 +384,24 @@ export default function TransactionsPage() {
         className="bg-gray-50 pb-3 space-y-3"
       >
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Ingresos & Egresos</h1>
-            <p className="text-sm text-gray-500 mt-0.5">{MONTH_NAMES[month]} {year}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={prevMonth} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-100">‹</button>
-            <span className="text-sm font-semibold text-gray-700 w-36 text-center">{MONTH_NAMES[month]} {year}</span>
-            <button onClick={nextMonth} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-100">›</button>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-base sm:text-xl font-bold text-gray-900 shrink-0">Ingresos & Egresos</h1>
+          <div className="flex items-center gap-1 sm:gap-2">
+            <button onClick={prevMonth} className="p-1.5 sm:p-2 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600">‹</button>
+            <span className="text-xs sm:text-sm font-semibold text-gray-700 w-24 sm:w-36 text-center">{MONTH_NAMES[month]} {year}</span>
+            <button onClick={nextMonth} className="p-1.5 sm:p-2 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600">›</button>
             <button
               onClick={openNew}
-              className="flex items-center gap-2 ml-2 bg-amber-400 hover:bg-amber-300 text-gray-900 font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
+              className="flex items-center gap-1 ml-1 sm:ml-2 bg-amber-400 hover:bg-amber-300 text-gray-900 font-semibold px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition-colors"
             >
-              <Plus size={16} />
-              Nuevo
+              <Plus size={14} />
+              <span className="hidden sm:inline">Nuevo</span>
             </button>
           </div>
         </div>
 
         {/* ── Tabs ── */}
-        <div className="flex items-center border-b-2 border-gray-200">
+        <div className="flex items-center border-b-2 border-gray-200 overflow-x-auto scrollbar-none">
           {([
             ...(isAdmin ? [{ id: 'all' as Tab, emoji: '📊', label: `${MONTH_NAMES[month]} ${year}` }] : []),
             { id: 'mayor' as Tab, emoji: '💵', label: 'Caja Mayor' },
@@ -409,7 +415,7 @@ export default function TransactionsPage() {
             <button
               key={id}
               onClick={() => { setActiveTab(id); setFilterCaja('all'); }}
-              className={`flex items-center gap-1.5 px-5 py-2.5 text-sm font-semibold border-b-2 -mb-0.5 transition-colors ${
+              className={`flex items-center gap-1 sm:gap-1.5 px-3 sm:px-5 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold border-b-2 -mb-0.5 transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === id
                   ? 'border-amber-400 text-gray-900'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -474,11 +480,11 @@ export default function TransactionsPage() {
 
         {/* Balance card — all tabs */}
         <div className="flex justify-center">
-          <div className="bg-white rounded-2xl px-12 py-5 border border-gray-100 shadow-sm text-center w-full max-w-md">
+          <div className="bg-white rounded-2xl px-4 sm:px-12 py-4 sm:py-5 border border-gray-100 shadow-sm text-center w-full max-w-md">
             <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">
               {activeTab === 'bnb' ? `BNB Mauri · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_eg' ? `Egresos BNB · ${MONTH_NAMES[month]} ${year}` : activeTab === 'bnb_personal' ? `Personal BNB · ${MONTH_NAMES[month]} ${year}` : `Balance ${MONTH_NAMES[month]} ${year}`}
             </p>
-            <p className={`text-5xl font-bold tracking-tight ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
+            <p className={`text-3xl sm:text-5xl font-bold tracking-tight ${balance >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
               {balance < 0 && '−'}Bs. {fmt(Math.abs(balance))}
             </p>
           </div>

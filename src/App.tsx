@@ -32,6 +32,7 @@ import VitrinaPage from "./admin/pages/VitrinaPage";
 import SpanishSchoolAdminPage from "./admin/pages/SpanishSchoolPage";
 import LimpiezasPage from "./admin/pages/LimpiezasPage";
 import BilletesPage from "./admin/pages/BilletesPage";
+import MarketingPage from "./admin/pages/MarketingPage";
 
 const defaultFilters: BookingFilters = {
   checkIn: "",
@@ -70,6 +71,7 @@ function AdminApp() {
         <Route path="spanish"      element={<SpanishSchoolAdminPage />} />
         <Route path="limpiezas"    element={<LimpiezasPage />} />
         <Route path="billetes"     element={<BilletesPage />} />
+        <Route path="marketing"    element={<MarketingPage />} />
       </Routes>
     </AdminLayout>
   );
