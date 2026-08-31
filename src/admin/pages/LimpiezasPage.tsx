@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { ChevronLeft, ChevronRight, X, Trash2, Pencil } from 'lucide-react';
 
 // ── Staff ────────────────────────────────────────────────────────────────────
-const STAFF = ['Arlet', 'Carla', 'Vicky', 'Maria', 'Marioly'] as const;
+const STAFF = ['Arlet', 'Carla', 'Vicky', 'Maria', 'Marioly', 'Romina'] as const;
 type Staff = typeof STAFF[number];
 
 const STAFF_STYLE: Record<Staff, { pill: string; btn: string }> = {
@@ -12,6 +12,7 @@ const STAFF_STYLE: Record<Staff, { pill: string; btn: string }> = {
   Vicky:   { pill: 'bg-orange-100 text-orange-800', btn: 'bg-orange-500 text-white' },
   Maria:   { pill: 'bg-blue-100   text-blue-800',   btn: 'bg-blue-500   text-white' },
   Marioly: { pill: 'bg-pink-100   text-pink-800',   btn: 'bg-pink-500   text-white' },
+  Romina:  { pill: 'bg-teal-100   text-teal-800',   btn: 'bg-teal-500   text-white' },
 };
 
 const ROOM_TASKS = ['Limpieza', 'Habilitación'] as const;

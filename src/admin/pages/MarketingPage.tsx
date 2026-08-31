@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { MONTH_NAMES } from '../constants';
 
-const CATEGORIES = ['Empresa', 'Mascotas', 'Desayuno', 'Salón', 'Cena', 'Turístico', 'Otros'] as const;
+const CATEGORIES = ['Empresa', 'Mascotas', 'Desayuno', 'Salón', 'Cena', 'Turístico', 'Fecha Festiva', 'Personal de Trabajo', 'Otros'] as const;
 const NETWORKS   = ['TikTok', 'Instagram', 'Facebook', 'YouTube', 'WhatsApp'] as const;
 const ACCOUNTS   = ['Bastille Hotel', 'Cretassic Hostal'] as const;
 
@@ -29,7 +29,7 @@ export interface MarketingPost {
   network_stats: NetworkStats;
   photo_url: string | null;
   photo_position: string;
-  category: Category;
+  categories: Category[];
   post_type: PostType;
   paid_ads: boolean;
   paid_ads_amount: number;
@@ -47,13 +47,15 @@ const NET_COLORS: Record<Network, string> = {
   WhatsApp:  'bg-green-500 text-white',
 };
 const CAT_COLORS: Record<string, string> = {
-  Empresa:     'bg-blue-100 text-blue-700',
-  Mascotas:    'bg-amber-100 text-amber-700',
-  Desayuno:    'bg-orange-100 text-orange-700',
-  'Salón':     'bg-purple-100 text-purple-700',
-  Cena:        'bg-red-100 text-red-700',
-  'Turístico': 'bg-teal-100 text-teal-700',
-  Otros:       'bg-gray-100 text-gray-600',
+  Empresa:               'bg-blue-100 text-blue-700',
+  Mascotas:              'bg-amber-100 text-amber-700',
+  Desayuno:              'bg-orange-100 text-orange-700',
+  'Salón':               'bg-purple-100 text-purple-700',
+  Cena:                  'bg-red-100 text-red-700',
+  'Turístico':           'bg-teal-100 text-teal-700',
+  'Fecha Festiva':       'bg-pink-100 text-pink-700',
+  'Personal de Trabajo': 'bg-indigo-100 text-indigo-700',
+  Otros:                 'bg-gray-200 text-gray-700',
 };
 const ACCOUNT_COLORS: Record<Account, string> = {
   'Bastille Hotel':   'border-amber-400 bg-amber-50 text-amber-800',
@@ -63,6 +65,14 @@ const ACCOUNT_COLORS: Record<Account, string> = {
 const today    = new Date();
 const todayStr = today.toISOString().slice(0, 10);
 
+function parseCategories(row: any): Category[] {
+  const raw = row?.category ?? row?.categories;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as Category[];
+  try { const p = JSON.parse(raw); if (Array.isArray(p)) return p as Category[]; } catch {}
+  return [raw as Category]; // backward compat: old single string value
+}
+
 const emptyStats = (): NetStats => ({ likes: 0, comments: 0, views: 0 });
 const emptyForm  = () => ({
   date: todayStr,
@@ -71,7 +81,7 @@ const emptyForm  = () => ({
   networks: [] as Network[],
   network_stats: {} as NetworkStats,
   photo_position: '50% 50%',
-  category: 'Otros' as Category,
+  categories: [] as Category[],
   post_type: 'Post' as PostType,
   paid_ads: false,
   paid_ads_amount: 3,
@@ -197,6 +207,7 @@ export default function MarketingPage() {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [saving, setSaving]   = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const firstDay = `${year}-${String(month + 1).padStart(2, '0')}-01`;
@@ -212,7 +223,7 @@ export default function MarketingPage() {
         .gte('date', firstDay).lte('date', lastDay)
         .order('date', { ascending: false });
       if (error) console.error('marketing_posts error:', error.message);
-      setPosts((data ?? []) as MarketingPost[]);
+      setPosts((data ?? []).map(row => ({ ...row, categories: parseCategories(row) })) as MarketingPost[]);
     } catch (e) {
       console.error('MarketingPage load failed:', e);
       setPosts([]);
@@ -234,7 +245,7 @@ export default function MarketingPage() {
       account_name: post.account_name, networks: post.networks,
       network_stats: post.network_stats ?? {},
       photo_position: post.photo_position ?? '50% 50%',
-      category: post.category, post_type: post.post_type ?? 'Post',
+      categories: parseCategories(post), post_type: post.post_type ?? 'Post',
       paid_ads: post.paid_ads ?? false, paid_ads_amount: post.paid_ads_amount ?? 3,
       pending: post.pending ?? false,
       notes: post.notes ?? '',
@@ -278,7 +289,8 @@ export default function MarketingPage() {
       if (upErr) { setUploadErr('Error subiendo foto: ' + upErr.message); setSaving(false); return; }
       photo_url = supabase.storage.from('vitrina-images').getPublicUrl(upData.path).data.publicUrl;
     }
-    const payload = { ...form, photo_url, created_by: profile?.id ?? null };
+    const { categories, ...rest } = form;
+    const payload = { ...rest, category: JSON.stringify(categories), photo_url, created_by: profile?.id ?? null };
     const { error: dbErr } = editPost
       ? await supabase.from('marketing_posts').update(payload).eq('id', editPost.id)
       : await supabase.from('marketing_posts').insert(payload);
@@ -286,20 +298,45 @@ export default function MarketingPage() {
     setSaving(false); setShowModal(false); load();
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar esta publicación?')) return;
-    await supabase.from('marketing_posts').delete().eq('id', id);
+  async function confirmDelete() {
+    if (!deleteId) return;
+    await supabase.from('marketing_posts').delete().eq('id', deleteId);
+    setDeleteId(null);
     load();
   }
+
+  const [filterCat,     setFilterCat]     = useState<Category | 'all'>('all');
+  const [filterAccount, setFilterAccount] = useState<Account | 'all'>('all');
 
   const prevMonth = () => { if (month === 0) { setMonth(11); setYear(y => y-1); } else setMonth(m => m-1); };
   const nextMonth = () => { if (month === 11) { setMonth(0); setYear(y => y+1); } else setMonth(m => m+1); };
 
   const published = posts.filter(p => !p.pending);
   const pending   = posts.filter(p => p.pending);
+
+  // Apply filters
+  function matchesFilter(p: MarketingPost) {
+    if (filterAccount !== 'all' && p.account_name !== filterAccount) return false;
+    if (filterCat !== 'all' && !(p.categories ?? []).includes(filterCat)) return false;
+    return true;
+  }
+  const filteredPublished = published.filter(matchesFilter);
+  const filteredPending   = pending.filter(matchesFilter);
+
   const totalLikes    = published.reduce((s, p) => s + aggStats(p.network_stats ?? {}).likes, 0);
   const totalComments = published.reduce((s, p) => s + aggStats(p.network_stats ?? {}).comments, 0);
   const totalViews    = published.reduce((s, p) => s + aggStats(p.network_stats ?? {}).views, 0);
+
+  // Analytics
+  const paidPosts    = published.filter(p => p.paid_ads);
+  const videoPosts   = published.filter(p => p.post_type === 'Video');
+  const bastillePosts   = published.filter(p => p.account_name === 'Bastille Hotel');
+  const cretassicPosts  = published.filter(p => p.account_name === 'Cretassic Hostal');
+  const topByViews = [...published]
+    .sort((a, b) => aggStats(b.network_stats ?? {}).views - aggStats(a.network_stats ?? {}).views)
+    .slice(0, 3);
+  const catCounts: Partial<Record<Category, number>> = {};
+  for (const p of published) for (const c of (p.categories ?? [])) catCounts[c] = (catCounts[c] ?? 0) + 1;
 
   function renderCard(post: MarketingPost) {
     const agg = aggStats(post.network_stats ?? {});
@@ -343,7 +380,9 @@ export default function MarketingPage() {
             {post.networks.map(net => (
               <span key={net} className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${NET_COLORS[net]}`}>{net}</span>
             ))}
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${CAT_COLORS[post.category] ?? 'bg-gray-100 text-gray-600'}`}>{post.category}</span>
+            {(post.categories ?? []).map(cat => (
+              <span key={cat} className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${CAT_COLORS[cat] ?? 'bg-gray-100 text-gray-600'}`}>{cat}</span>
+            ))}
             {post.paid_ads && (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">💰 ${post.paid_ads_amount} USD</span>
             )}
@@ -383,7 +422,7 @@ export default function MarketingPage() {
               className="flex-1 py-1.5 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center justify-center gap-1 transition-colors">
               <Edit2 size={12} /> {isPending ? 'Editar / Publicar' : 'Editar'}
             </button>
-            <button onClick={() => handleDelete(post.id)}
+            <button onClick={() => setDeleteId(post.id)}
               className="px-3 py-1.5 text-xs text-red-400 border border-red-100 rounded-lg hover:bg-red-50 transition-colors">
               <Trash2 size={12} />
             </button>
@@ -420,13 +459,13 @@ export default function MarketingPage() {
         </div>
       </div>
 
-      {/* Summary stats */}
+      {/* ── Summary stats ── */}
       {published.length > 0 && (
         <div className="grid grid-cols-3 gap-4">
           {[
-            { icon: <Heart size={20} className="text-rose-400" />, label: 'Total likes',        val: totalLikes },
+            { icon: <Heart size={20} className="text-rose-400" />, label: 'Total likes',       val: totalLikes },
             { icon: <MessageCircle size={20} className="text-blue-400" />, label: 'Comentarios', val: totalComments },
-            { icon: <Eye size={20} className="text-purple-400" />, label: 'Visualizaciones',    val: totalViews },
+            { icon: <Eye size={20} className="text-purple-400" />, label: 'Visualizaciones',   val: totalViews },
           ].map(({ icon, label, val }) => (
             <div key={label} className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm flex items-center gap-3">
               <div className="flex-shrink-0">{icon}</div>
@@ -439,7 +478,125 @@ export default function MarketingPage() {
         </div>
       )}
 
-      {/* Posts */}
+      {/* ── Analytics panel ── */}
+      {published.length > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-5">
+          <h3 className="font-bold text-gray-800 text-sm">📊 Resumen {MONTH_NAMES[month]} {year}</h3>
+
+          {/* Key counts */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: 'Publicaciones', val: published.length, sub: `${videoPosts.length} videos · ${published.length - videoPosts.length} posts`, color: 'text-pink-500' },
+              { label: 'Bastille Hotel', val: bastillePosts.length, sub: 'publicaciones', color: 'text-amber-600' },
+              { label: 'Cretassic Hostal', val: cretassicPosts.length, sub: 'publicaciones', color: 'text-teal-600' },
+              { label: 'Con publicidad pagada', val: paidPosts.length, sub: paidPosts.length > 0 ? `Bs. ${paidPosts.reduce((s, p) => s + (p.paid_ads_amount ?? 0), 0).toFixed(0)} invertido` : 'sin publicidad', color: 'text-green-600' },
+            ].map(({ label, val, sub, color }) => (
+              <div key={label} className="bg-gray-50 rounded-xl p-3">
+                <p className={`text-2xl font-bold ${color}`}>{val}</p>
+                <p className="text-xs font-semibold text-gray-700 mt-0.5">{label}</p>
+                <p className="text-[11px] text-gray-400 mt-0.5">{sub}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* By category */}
+          {Object.keys(catCounts).length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 mb-2">Por categoría</p>
+              <div className="flex flex-wrap gap-2">
+                {(Object.entries(catCounts) as [Category, number][])
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([cat, count]) => (
+                    <span key={cat} className={`px-2.5 py-1 rounded-full text-xs font-semibold ${CAT_COLORS[cat] ?? 'bg-gray-100 text-gray-600'}`}>
+                      {cat} <span className="font-bold">{count}</span>
+                    </span>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top 3 by views */}
+          {topByViews.length > 0 && topByViews[0] && aggStats(topByViews[0].network_stats ?? {}).views > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 mb-2">🏆 Más vistos</p>
+              <div className="space-y-2">
+                {topByViews.map((p, i) => {
+                  const agg = aggStats(p.network_stats ?? {});
+                  return (
+                    <div key={p.id} className="flex items-center gap-3 bg-gray-50 rounded-xl px-3 py-2">
+                      <span className={`text-sm font-bold w-5 text-center ${i === 0 ? 'text-amber-500' : i === 1 ? 'text-gray-400' : 'text-amber-700'}`}>
+                        {i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-gray-800 truncate">{p.title || '(sin título)'}</p>
+                        <p className="text-[11px] text-gray-400">{p.account_name} · {p.post_type}</p>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-gray-500 shrink-0">
+                        <span className="flex items-center gap-1"><Eye size={11} />{agg.views.toLocaleString()}</span>
+                        <span className="flex items-center gap-1"><Heart size={11} />{agg.likes.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Paid posts */}
+          {paidPosts.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 mb-2">💰 Publicidad pagada</p>
+              <div className="space-y-2">
+                {paidPosts.map(p => (
+                  <div key={p.id} className="flex items-center gap-3 bg-green-50 rounded-xl px-3 py-2 border border-green-100">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-gray-800 truncate">{p.title || '(sin título)'}</p>
+                      <p className="text-[11px] text-gray-400">{p.account_name} · {p.networks.join(', ')}</p>
+                    </div>
+                    <span className="text-xs font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded-full shrink-0">
+                      Bs. {(p.paid_ads_amount ?? 0).toFixed(0)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Filters ── */}
+      {posts.length > 0 && (
+        <div className="flex flex-wrap gap-2 items-center">
+          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Filtrar:</span>
+          {/* Account */}
+          {(['all', 'Bastille Hotel', 'Cretassic Hostal'] as const).map(acc => (
+            <button key={acc} onClick={() => setFilterAccount(acc as any)}
+              className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                filterAccount === acc ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
+              }`}>
+              {acc === 'all' ? 'Todas las cuentas' : acc}
+            </button>
+          ))}
+          <span className="text-gray-300">|</span>
+          {/* Categories */}
+          <button onClick={() => setFilterCat('all')}
+            className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+              filterCat === 'all' ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
+            }`}>
+            Todas las categorías
+          </button>
+          {(Object.keys(catCounts) as Category[]).map(cat => (
+            <button key={cat} onClick={() => setFilterCat(f => f === cat ? 'all' : cat)}
+              className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                filterCat === cat ? `${CAT_COLORS[cat] ?? 'bg-gray-200'} border-current` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
+              }`}>
+              {cat} {catCounts[cat] ? `(${catCounts[cat]})` : ''}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Posts grid ── */}
       {loading ? (
         <div className="text-center py-16 text-gray-400">Cargando...</div>
       ) : posts.length === 0 ? (
@@ -449,23 +606,55 @@ export default function MarketingPage() {
         </div>
       ) : (
         <>
-          {published.length > 0 && (
+          {filteredPublished.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-sm font-semibold text-green-600 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-green-400 inline-block" /> Publicados
+                <span className="w-2 h-2 rounded-full bg-green-400 inline-block" /> Publicados ({filteredPublished.length})
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{published.map(renderCard)}</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{filteredPublished.map(renderCard)}</div>
             </div>
           )}
-          {pending.length > 0 && (
+          {filteredPending.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-sm font-semibold text-amber-600 flex items-center gap-1.5">
-                <Clock size={14} /> Pendientes de subir
+                <Clock size={14} /> Pendientes de subir ({filteredPending.length})
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{pending.map(renderCard)}</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{filteredPending.map(renderCard)}</div>
             </div>
           )}
+          {filteredPublished.length === 0 && filteredPending.length === 0 && (
+            <p className="text-center text-sm text-gray-400 py-8">Sin resultados para los filtros seleccionados.</p>
+          )}
         </>
+      )}
+
+      {/* ── Delete confirm modal ── */}
+      {deleteId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-xs shadow-2xl overflow-hidden">
+            <div className="bg-red-50 px-6 pt-6 pb-4 flex flex-col items-center text-center">
+              <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-3">
+                <Trash2 size={22} className="text-red-500" />
+              </div>
+              <h3 className="font-bold text-gray-900 text-base">¿Eliminar publicación?</h3>
+              <p className="text-sm text-gray-500 mt-1">Esta acción no se puede deshacer.</p>
+            </div>
+            <div className="flex border-t border-gray-100">
+              <button
+                onClick={() => setDeleteId(null)}
+                className="flex-1 py-3 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors border-r border-gray-100"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="flex-1 py-3 text-sm font-bold text-red-500 hover:bg-red-50 transition-colors"
+              >
+                Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Modal ── */}
@@ -603,18 +792,31 @@ export default function MarketingPage() {
                 </div>
               )}
 
-              {/* Category */}
+              {/* Category — multi-select */}
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-2">Categoría</label>
+                <label className="block text-xs font-semibold text-gray-600 mb-2">
+                  Categoría <span className="text-gray-400 font-normal">(podés elegir varias)</span>
+                </label>
                 <div className="flex flex-wrap gap-2">
-                  {CATEGORIES.map(cat => (
-                    <button key={cat} type="button" onClick={() => setForm(f => ({ ...f, category: cat }))}
-                      className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
-                        form.category === cat ? (CAT_COLORS[cat] ?? 'bg-gray-200 text-gray-700') : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                      }`}>
-                      {cat}
-                    </button>
-                  ))}
+                  {CATEGORIES.map(cat => {
+                    const selected = form.categories.includes(cat);
+                    return (
+                      <button key={cat} type="button"
+                        onClick={() => setForm(f => ({
+                          ...f,
+                          categories: f.categories.includes(cat)
+                            ? f.categories.filter(c => c !== cat)
+                            : [...f.categories, cat],
+                        }))}
+                        className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors border-2 ${
+                          selected
+                            ? `${CAT_COLORS[cat] ?? 'bg-gray-200 text-gray-700'} border-current`
+                            : 'bg-gray-100 text-gray-500 border-transparent hover:bg-gray-200'
+                        }`}>
+                        {selected && '✓ '}{cat}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 

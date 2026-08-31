@@ -701,7 +701,7 @@ export default function ReportesPage() {
           .gte('date', firstDay).lte('date', lastDay),
         supabase.from('reservations').select('guest_name,wants_invoice,is_empresa,siaat_number,price_per_night,num_nights')
           .eq('wants_invoice', true).lte('check_in', lastDay).gt('check_out', firstDay),
-        supabase.from('marketing_posts').select('date,account_name,networks,likes,comments,views,category,notes')
+        supabase.from('marketing_posts').select('date,account_name,networks,network_stats,category,title,paid_ads,paid_ads_amount,pending,post_type')
           .gte('date', firstDay).lte('date', lastDay).order('date', { ascending: true }),
       ]);
       // Exclude INICIO/FINAL DE CAJA shift refs (they inflate totals)
@@ -988,70 +988,180 @@ export default function ReportesPage() {
 
         // ── 8. Marketing ────────────────────────────────────────────────────────
         ...(mkts.length > 0 ? (() => {
-          const mktLikes    = mkts.reduce((s:number,p:any) => s + (p.likes||0), 0);
-          const mktComments = mkts.reduce((s:number,p:any) => s + (p.comments||0), 0);
-          const mktViews    = mkts.reduce((s:number,p:any) => s + (p.views||0), 0);
-          // By network
-          const byNet: Record<string,number> = {};
-          for (const p of mkts) for (const n of (p.networks||[])) byNet[n] = (byNet[n]||0)+1;
+          // Aggregate stats from network_stats JSONB
+          const getStats = (ns: any) => {
+            let likes = 0, comments = 0, views = 0;
+            for (const v of Object.values(ns || {})) {
+              const s = v as any;
+              likes += s?.likes ?? 0; comments += s?.comments ?? 0; views += s?.views ?? 0;
+            }
+            return { likes, comments, views };
+          };
+          // Parse categories (JSON array or legacy single string)
+          const parseCats = (p: any): string[] => {
+            const raw = p?.category;
+            if (!raw) return ['Otros'];
+            try { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) return arr; } catch {}
+            return [raw];
+          };
+
+          // Totals
+          let totLikes = 0, totComments = 0, totViews = 0;
+          for (const p of mkts) { const s = getStats(p.network_stats); totLikes += s.likes; totComments += s.comments; totViews += s.views; }
+
+          // By account
+          const byAcc: Record<string,number> = {};
+          for (const p of mkts) byAcc[p.account_name||'?'] = (byAcc[p.account_name||'?']||0)+1;
+
           // By category
           const byCat: Record<string,number> = {};
-          for (const p of mkts) byCat[p.category||'Otros'] = (byCat[p.category||'Otros']||0)+1;
+          for (const p of mkts) for (const c of parseCats(p)) byCat[c] = (byCat[c]||0)+1;
+
+          // By network (posts + likes + views)
+          const byNet: Record<string,{posts:number,likes:number,views:number}> = {};
+          for (const p of mkts) {
+            for (const [net, s] of Object.entries(p.network_stats || {}) as any) {
+              if (!byNet[net]) byNet[net] = { posts:0, likes:0, views:0 };
+              byNet[net].posts++; byNet[net].likes += (s as any)?.likes??0; byNet[net].views += (s as any)?.views??0;
+            }
+          }
+
+          // Paid posts
+          const paid = mkts.filter((p:any) => p.paid_ads);
+          const totPaid = paid.reduce((s:number,p:any) => s+(p.paid_ads_amount||0), 0);
+
+          // Top 3 by views
+          const top3 = [...mkts]
+            .map((p:any) => ({ ...p, _stats: getStats(p.network_stats) }))
+            .sort((a,b) => b._stats.views - a._stats.views)
+            .slice(0,3);
+
+          const MEDALS = ['🥇','🥈','🥉'];
+
           return [
             { text: '📱 MARKETING — REDES SOCIALES', ...sectionHdr },
+
+            // ── Big stat boxes
             {
               columns: [
-                { text: `📸 Publicaciones: ${mkts.length}`, fontSize:9, bold:true },
-                { text: `❤️ Likes: ${mktLikes.toLocaleString()}`, fontSize:9 },
-                { text: `💬 Comentarios: ${mktComments.toLocaleString()}`, fontSize:9 },
-                { text: `👁 Vistas: ${mktViews.toLocaleString()}`, fontSize:9 },
+                { stack:[
+                  { text: mkts.length.toString(), fontSize:18, bold:true, color:'#1f2937', alignment:'center' },
+                  { text:'publicaciones', fontSize:7, color:'#6b7280', alignment:'center' },
+                ], width:'*' },
+                { stack:[
+                  { text: totLikes.toLocaleString(), fontSize:18, bold:true, color:'#ef4444', alignment:'center' },
+                  { text:'❤️ likes', fontSize:7, color:'#6b7280', alignment:'center' },
+                ], width:'*' },
+                { stack:[
+                  { text: totComments.toLocaleString(), fontSize:18, bold:true, color:'#3b82f6', alignment:'center' },
+                  { text:'💬 comentarios', fontSize:7, color:'#6b7280', alignment:'center' },
+                ], width:'*' },
+                { stack:[
+                  { text: totViews.toLocaleString(), fontSize:18, bold:true, color:'#10b981', alignment:'center' },
+                  { text:'👁 vistas', fontSize:7, color:'#6b7280', alignment:'center' },
+                ], width:'*' },
+                ...(paid.length ? [{ stack:[
+                  { text: paid.length.toString(), fontSize:18, bold:true, color:'#f59e0b', alignment:'center' },
+                  { text:`💰 pagados (Bs.${fmtN(totPaid)})`, fontSize:7, color:'#6b7280', alignment:'center' },
+                ], width:'*' }] : []),
               ],
-              margin: [0,0,0,6],
+              margin:[0,4,0,10],
             },
+
+            // ── 3-column breakdown: cuenta / red / categoría
             {
-              columns: [
+              columns:[
                 {
-                  width: '50%',
-                  stack: [
-                    { text: 'Por red social:', fontSize:8, bold:true, color:'#555', margin:[0,0,0,2] },
-                    ...Object.entries(byNet).map(([net,cnt]) => ({ text: `• ${net}: ${cnt}`, fontSize:8, color:'#666' })),
+                  width:'34%',
+                  stack:[
+                    { text:'Por cuenta', fontSize:8, bold:true, color:'#374151', margin:[0,0,0,3] },
+                    ...Object.entries(byAcc).map(([acc,cnt]) => ({
+                      columns:[
+                        { text:`@${acc}`, fontSize:8, color:'#6b7280', width:'*' },
+                        { text:cnt.toString(), fontSize:8, bold:true, color:'#1f2937', width:20, alignment:'right' },
+                      ], margin:[0,1,0,1],
+                    })),
                   ],
                 },
                 {
-                  width: '50%',
-                  stack: [
-                    { text: 'Por categoría:', fontSize:8, bold:true, color:'#555', margin:[0,0,0,2] },
-                    ...Object.entries(byCat).map(([cat,cnt]) => ({ text: `• ${cat}: ${cnt}`, fontSize:8, color:'#666' })),
+                  width:'34%',
+                  stack:[
+                    { text:'Por red social', fontSize:8, bold:true, color:'#374151', margin:[0,0,0,3] },
+                    ...Object.entries(byNet).sort((a,b)=>b[1].posts-a[1].posts).map(([net,d]) => ({
+                      columns:[
+                        { text:net, fontSize:8, color:'#6b7280', width:'*' },
+                        { text:`${d.posts}p`, fontSize:8, bold:true, color:'#1f2937', width:30, alignment:'right' },
+                      ], margin:[0,1,0,1],
+                    })),
+                  ],
+                },
+                {
+                  width:'32%',
+                  stack:[
+                    { text:'Por categoría', fontSize:8, bold:true, color:'#374151', margin:[0,0,0,3] },
+                    ...Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([cat,cnt]) => ({
+                      columns:[
+                        { text:cat, fontSize:7, color:'#6b7280', width:'*' },
+                        { text:cnt.toString(), fontSize:8, bold:true, color:'#1f2937', width:20, alignment:'right' },
+                      ], margin:[0,1,0,1],
+                    })),
                   ],
                 },
               ],
-              margin: [0,0,0,6],
+              margin:[0,0,0,10],
             },
+
+            // ── Top 3 posts
+            { text:'⭐ Top publicaciones por vistas', fontSize:9, bold:true, color:'#374151', margin:[0,0,0,4] },
             {
-              table: {
-                widths: [50, 80, 80, 40, 40, 50],
-                headerRows: 1,
-                body: [
+              columns: top3.map((p:any, i:number) => ({
+                width:'*',
+                stack:[
+                  { text:`${MEDALS[i]} @${p.account_name||'—'}`, fontSize:8, bold:true, color:'#1f2937' },
+                  { text: p.title || Object.keys(p.network_stats||{}).join(', ') || '—', fontSize:7, color:'#6b7280', margin:[0,1,0,2] },
+                  { columns:[
+                    { text:`👁 ${p._stats.views.toLocaleString()}`, fontSize:7, color:'#10b981' },
+                    { text:`❤️ ${p._stats.likes.toLocaleString()}`, fontSize:7, color:'#ef4444' },
+                    { text:`💬 ${p._stats.comments.toLocaleString()}`, fontSize:7, color:'#3b82f6' },
+                  ]},
+                  { text: p.date?.slice(5)??'', fontSize:7, color:'#9ca3af', margin:[0,2,0,0] },
+                ],
+                margin:[0,0,i<2?8:0,0],
+              })),
+              margin:[0,0,0,10],
+            },
+
+            // ── Detail table
+            { text:'Detalle de publicaciones', fontSize:8, bold:true, color:'#374151', margin:[0,0,0,3] },
+            {
+              table:{
+                widths:[36,60,55,36,36,40],
+                headerRows:1,
+                body:[
                   [
-                    { text:'Fecha',    fontSize:8, bold:true, fillColor:'#f9fafb' },
-                    { text:'Cuenta',   fontSize:8, bold:true, fillColor:'#f9fafb' },
-                    { text:'Redes',    fontSize:8, bold:true, fillColor:'#f9fafb' },
-                    { text:'Likes',    fontSize:8, bold:true, fillColor:'#f9fafb', alignment:'right' },
-                    { text:'Com.',     fontSize:8, bold:true, fillColor:'#f9fafb', alignment:'right' },
-                    { text:'Vistas',   fontSize:8, bold:true, fillColor:'#f9fafb', alignment:'right' },
+                    { text:'Fecha',  fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151' },
+                    { text:'Cuenta', fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151' },
+                    { text:'Redes',  fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151' },
+                    { text:'Likes',  fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151', alignment:'right' },
+                    { text:'Com.',   fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151', alignment:'right' },
+                    { text:'Vistas', fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151', alignment:'right' },
                   ],
-                  ...mkts.map((p:any) => ([
-                    { text: p.date?.slice(5) ?? '', fontSize:7, color:'#555' },
-                    { text: `@${p.account_name||''}`, fontSize:7, color:'#555' },
-                    { text: (p.networks||[]).join(', '), fontSize:7, color:'#555' },
-                    { text: (p.likes||0).toLocaleString(), fontSize:7, color:'#555', alignment:'right' },
-                    { text: (p.comments||0).toLocaleString(), fontSize:7, color:'#555', alignment:'right' },
-                    { text: (p.views||0).toLocaleString(), fontSize:7, color:'#555', alignment:'right' },
-                  ])),
+                  ...mkts.map((p:any) => {
+                    const s = getStats(p.network_stats);
+                    const netStr = p.network_stats ? Object.keys(p.network_stats).join(', ') : (p.networks||[]).join(', ');
+                    return [
+                      { text:p.date?.slice(5)??'', fontSize:6.5, color:'#555' },
+                      { text:`@${p.account_name||''}`, fontSize:6.5, color:'#555' },
+                      { text:netStr, fontSize:6.5, color:'#555' },
+                      { text:s.likes.toLocaleString(), fontSize:6.5, color:'#555', alignment:'right' },
+                      { text:s.comments.toLocaleString(), fontSize:6.5, color:'#555', alignment:'right' },
+                      { text:s.views.toLocaleString(), fontSize:6.5, color:'#555', alignment:'right' },
+                    ];
+                  }),
                 ],
               },
-              layout: 'lightHorizontalLines',
-              margin: [0,0,0,4],
+              layout:'lightHorizontalLines',
+              margin:[0,0,0,4],
             },
           ];
         })() : [{ text: '📱 MARKETING — Sin publicaciones registradas este mes', ...sectionHdr }]),
