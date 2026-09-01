@@ -86,6 +86,7 @@ export default function DashboardPage() {
   const [dirty,          setDirty]          = useState<Reservation[]>([]);
   const [cajaMayor,      setCajaMayor]      = useState(0);
   const [cajaChica,      setCajaChica]      = useState(0);
+  const [cuentaBNB,      setCuentaBNB]      = useState(0);
   const [monthIncome,    setMonthIncome]    = useState(0);
   const [monthEgreso,    setMonthEgreso]    = useState(0);
   const [retirosSonia,   setRetirosSonia]   = useState(0);
@@ -115,12 +116,19 @@ export default function DashboardPage() {
         .eq('status', 'habilitacion');
       setDirty(dirtyData ?? []);
 
-      // 3. Caja Mayor balance (all time)
+      // 3. Caja Mayor — mes actual solamente (el saldo anterior entra como SALDO DEL MES ANTERIOR)
       const { data: cmData } = await supabase.from('transactions').select('type,amount')
-        .eq('caja', 'CAJA MAYOR');
+        .eq('caja', 'CAJA MAYOR').gte('date', firstDay);
       const cmBalance = (cmData ?? []).reduce((s, t) =>
         s + (t.type === 'ingreso' ? t.amount : -t.amount), 0);
       setCajaMayor(cmBalance);
+
+      // 3b. Cuenta BNB — mes actual
+      const { data: bnbData } = await supabase.from('transactions').select('type,amount')
+        .eq('caja', 'CUENTA BNB').gte('date', firstDay);
+      const bnbBalance = (bnbData ?? []).reduce((s, t) =>
+        s + (t.type === 'ingreso' ? t.amount : -t.amount), 0);
+      setCuentaBNB(bnbBalance);
 
       // 4. Caja Chica last balance
       const { data: ccData } = await supabase.from('petty_cash').select('balance')
@@ -285,15 +293,17 @@ export default function DashboardPage() {
       {/* ── STAT CARDS ── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard icon={Wallet} iconBg="bg-amber-100" iconColor="text-amber-600"
-          label="Caja Mayor" value={`Bs. ${cajaMayor.toFixed(0)}`} sub="saldo acumulado" />
+          label="Caja Mayor" value={`Bs. ${cajaMayor.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`mes de ${month}`} />
         <StatCard icon={Wallet} iconBg="bg-purple-100" iconColor="text-purple-600"
-          label="Caja Chica" value={`Bs. ${cajaChica.toFixed(0)}`} sub="saldo actual" />
+          label="Caja Chica" value={`Bs. ${cajaChica.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="saldo actual" />
+        <StatCard icon={Wallet} iconBg="bg-indigo-100" iconColor="text-indigo-500"
+          label="Cuenta BNB" value={`Bs. ${cuentaBNB.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`mes de ${month}`} />
 
         {isAdmin && (<>
           <StatCard icon={TrendingUp} iconBg="bg-emerald-100" iconColor="text-emerald-600"
-            label="Ingresos" value={`Bs. ${monthIncome.toFixed(0)}`} sub={`+ Retiros Bs. ${retirosSonia.toFixed(0)}`} />
+            label="Ingresos" value={`Bs. ${monthIncome.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`+ Retiros Bs. ${retirosSonia.toFixed(2)}`} />
           <StatCard icon={TrendingDown} iconBg="bg-red-100" iconColor="text-red-600"
-            label="Egresos" value={`Bs. ${monthEgreso.toFixed(0)}`} sub={`excl. retiros — ${month}`} />
+            label="Egresos" value={`Bs. ${monthEgreso.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`excl. retiros — ${month}`} />
           <StatCard icon={PawPrint} iconBg="bg-orange-100" iconColor="text-orange-600"
             label="Mascotas" value={petCount} sub="últimos 90 días" />
           <StatCard icon={Building2} iconBg="bg-indigo-100" iconColor="text-indigo-600"

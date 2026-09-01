@@ -3,7 +3,7 @@ import type React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, CalendarDays, ArrowLeftRight,
-  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles, TrendingUp,
+  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles, TrendingUp, Wallet, Receipt,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -29,7 +29,9 @@ const navItems: NavItem[] = [
 ];
 
 const adminItems = [
-  { to: '/admin/staff', icon: Users, label: 'Personal' },
+  { to: '/admin/staff',      icon: Users,    label: 'Personal' },
+  { to: '/admin/planillas',  icon: Wallet,   label: 'Planillas Sueldos' },
+  { to: '/admin/impuestos',  icon: Receipt,  label: 'Impuestos' },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {

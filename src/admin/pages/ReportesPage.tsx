@@ -691,18 +691,24 @@ export default function ReportesPage() {
       const lastDay     = `${yearS}-${monthS}-${String(daysInMonth).padStart(2,'0')}`;
       const monthLabel  = `${MONTHS_ES[month]} ${year}`;
 
+      // Previous month (taxes paid this month = last month's tax entry)
+      const prevMonth = month === 1 ? 12 : month - 1;
+      const prevYear  = month === 1 ? year - 1 : year;
+
       // ── Fetch data ───────────────────────────────────────────────────────────
-      const [txRes, resRes, limpRes, empRes, mktRes] = await Promise.all([
+      const [txRes, resRes, limpRes, empRes, mktRes, taxRes, taxPrevRes] = await Promise.all([
         supabase.from('transactions').select('type,amount,caja,category,description')
           .gte('date', firstDay).lte('date', lastDay),
-        supabase.from('reservations').select('has_pet,guest_country,num_guests,additional_guests,status,guest_name')
+        supabase.from('reservations').select('has_pet,guest_country,num_guests,additional_guests,status,guest_name,is_empresa,empresa_name')
           .in('status',['ocupado','limpieza']).lte('check_in', lastDay).gt('check_out', firstDay),
-        supabase.from('limpiezas').select('cleaner,task_type')
+        supabase.from('cleaning_tasks').select('date,row_key,task_type,assigned_to')
           .gte('date', firstDay).lte('date', lastDay),
         supabase.from('reservations').select('guest_name,wants_invoice,is_empresa,siaat_number,price_per_night,num_nights')
           .eq('wants_invoice', true).lte('check_in', lastDay).gt('check_out', firstDay),
-        supabase.from('marketing_posts').select('date,account_name,networks,network_stats,category,title,paid_ads,paid_ads_amount,pending,post_type')
+        supabase.from('marketing_posts').select('date,account_name,networks,network_stats,category,title,paid_ads,paid_ads_amount,pending,post_type,photo_url,photo_position')
           .gte('date', firstDay).lte('date', lastDay).order('date', { ascending: true }),
+        supabase.from('tax_entries').select('monto_factura,compras,saldo_compras_anterior').eq('year', year).eq('month', month).maybeSingle(),
+        supabase.from('tax_entries').select('iva,it,trabajo,impresiones,monto_factura,compras').eq('year', prevYear).eq('month', prevMonth).maybeSingle(),
       ]);
       // Exclude INICIO/FINAL DE CAJA shift refs (they inflate totals)
       const allTxs = (txRes.data ?? []) as any[];
@@ -711,11 +717,15 @@ export default function ReportesPage() {
       const limps  = (limpRes.data ?? []) as any[];
       const emps   = (empRes.data  ?? []) as any[];
       const mkts   = (mktRes.data  ?? []) as any[];
+      const taxEntry     = taxRes?.data     as { monto_factura: number; compras: number; saldo_compras_anterior: number } | null;
+      const taxPrevEntry = taxPrevRes?.data as { iva: number; it: number; trabajo: number; impresiones: number; monto_factura: number; compras: number } | null;
+      const prevMonthLabel = `${MONTHS_ES[prevMonth]} ${prevYear}`;
 
       // ── Compute stats ────────────────────────────────────────────────────────
-      const ingresos = txs.filter((t:any) => t.type === 'ingreso');
+      // Exclude TRASPASO DE CAJA — they cancel out (egreso + ingreso) and inflate totals
+      const ingresos = txs.filter((t:any) => t.type === 'ingreso' && t.category !== 'TRASPASO DE CAJA');
       // Retiros Doña Sonia = money she collected → treat as special positive row, exclude from expense totals
-      const egresos  = txs.filter((t:any) => t.type === 'egreso' && t.category !== 'RETIROS DOÑA SONIA');
+      const egresos  = txs.filter((t:any) => t.type === 'egreso' && t.category !== 'RETIROS DOÑA SONIA' && t.category !== 'TRASPASO DE CAJA');
       const soniaTx  = txs.filter((t:any) => t.category === 'RETIROS DOÑA SONIA');
       const soniaTotal = soniaTx.reduce((s:number,t:any) => s+t.amount, 0);
 
@@ -760,9 +770,100 @@ export default function ReportesPage() {
         }
       }
 
-      // Limpiezas by cleaner
+      // ── Nationality breakdown (skip blank, merge gendered forms) ────────────
+      const natMap: Record<string,number> = {};
+      let sinNacionalidad = 0;
+      const addNat = (country: string) => {
+        const raw = (country||'').trim();
+        if (!raw) { sinNacionalidad++; return; }
+        // Merge masculine/feminine: Boliviano + Boliviana → Boliviana/o
+        let key = raw;
+        if (raw.endsWith('o') && raw.length > 3) key = raw.slice(0,-1) + 'a/o';
+        else if (raw.endsWith('a') && raw.length > 3) key = raw.slice(0,-1) + 'a/o';
+        natMap[key] = (natMap[key]||0) + 1;
+      };
+      for (const r of ress) {
+        addNat(r.guest_country || '');
+        for (const ag of (r.additional_guests||[]) as any[]) {
+          if (ag.role === 'babies') continue;
+          addNat(ag.nationality || ag.guest_nationality || '');
+        }
+      }
+      const natSorted = Object.entries(natMap).sort((a,b) => b[1]-a[1]);
+
+      // ── Reservation type breakdown ───────────────────────────────────────────
+      const resEmpresa = ress.filter((r:any) => r.is_empresa).length;
+      const resPersona = ress.filter((r:any) => !r.is_empresa).length;
+      const resMascota = ress.filter((r:any) => r.has_pet).length;
+      // Use empresa_name (company name), fallback to guest_name
+      const empresaNames = [...new Set<string>(
+        ress.filter((r:any) => r.is_empresa)
+            .map((r:any) => ((r.empresa_name || r.guest_name || '').trim()))
+            .filter(Boolean)
+      )];
+
+      // ── Salon usage (from H02 transactions) ─────────────────────────────────
+      const salonTxs = ingresos.filter((t:any) => t.category === 'H02-ALQUILER DE SALÓN');
+      const salonByClient: Record<string,{count:number;total:number}> = {};
+      for (const t of salonTxs) {
+        const key = (t.description||'Sin descripción').trim();
+        if (!salonByClient[key]) salonByClient[key] = {count:0, total:0};
+        salonByClient[key].count++;
+        salonByClient[key].total += t.amount;
+      }
+      const salonSorted = Object.entries(salonByClient).sort((a,b) => b[1].total - a[1].total);
+
+      // ── Traspasos de caja ────────────────────────────────────────────────────
+      // Use only egresos side (from-caja) to avoid double-counting
+      const traspasosEgreso = txs.filter((t:any) => t.category === 'TRASPASO DE CAJA' && t.type === 'egreso')
+                                  .sort((a:any,b:any) => (a.date||'').localeCompare(b.date||''));
+      const traspasosTotal = traspasosEgreso.reduce((s:number,t:any) => s+t.amount, 0);
+
+      // ── Ingresos VARIOS detail ────────────────────────────────────────────────
+      const variosTxs = ingresos.filter((t:any) => t.category === 'VARIOS');
+      const otrosTxs  = ingresos.filter((t:any) => !['H01-HOSPEDAJE','SALDO DEL MES ANTERIOR','VARIOS'].includes(t.category||''))
+                                .sort((a:any,b:any) => b.amount - a.amount).slice(0,6);
+
+      // ── Limpiezas stats ──────────────────────────────────────────────────────
+      // assigned_to can be "Carla & Arlet" — split by " & "
+      const parseAssigned = (v: string | null): string[] =>
+        v ? v.split(' & ').map(s => s.trim()).filter(Boolean) : [];
+
+      const EXTRA_TASK_KEYS = [
+        'Ordenar Baulera 1','Ordenar Baulera 2','Ordenar Baulera 3',
+        'Lavado Edredon','Lavado Toallas','Trapeado pasillos','Trapeado gradas',
+        'Limpieza ascensor','Limpieza vidrios','Desempolvado','Lavado alfombras baño',
+        'Limpieza Cocina','Limpieza Comedor','Lavado Manteles','Lavado colchas',
+        'Ayudas en Cretassic Hostal',
+      ];
+      const isGeneralTask = (row_key: string) => EXTRA_TASK_KEYS.includes(row_key);
+
+      // Room tasks per cleaner: { cleaner: { Limpieza: n, Habilitación: n } }
+      const roomTasksByCleaner: Record<string,Record<string,number>> = {};
+      // General tasks per cleaner: { cleaner: string[] }
+      const generalTasksByCleaner: Record<string,string[]> = {};
+
+      for (const l of limps) {
+        const people = parseAssigned(l.assigned_to);
+        if (!people.length) continue;
+        if (isGeneralTask(l.row_key)) {
+          for (const p of people) {
+            if (!generalTasksByCleaner[p]) generalTasksByCleaner[p] = [];
+            generalTasksByCleaner[p].push(l.row_key);
+          }
+        } else {
+          const tipo = l.task_type || 'Limpieza';
+          for (const p of people) {
+            if (!roomTasksByCleaner[p]) roomTasksByCleaner[p] = {};
+            roomTasksByCleaner[p][tipo] = (roomTasksByCleaner[p][tipo] || 0) + 1;
+          }
+        }
+      }
+
+      // Total room tasks per cleaner (for bar chart)
       const limpByCleaner: Record<string,number> = {};
-      for (const l of limps) limpByCleaner[l.cleaner||'?'] = (limpByCleaner[l.cleaner||'?']||0) + 1;
+      for (const [p, tipos] of Object.entries(roomTasksByCleaner))
+        limpByCleaner[p] = Object.values(tipos).reduce((s,n) => s+n, 0);
       const limpSorted = Object.entries(limpByCleaner).sort((a,b) => b[1]-a[1]);
 
       // ── SVG chart helpers ────────────────────────────────────────────────────
@@ -800,39 +901,26 @@ export default function ReportesPage() {
         return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">${paths}</svg>`;
       }
 
-      // ── pdfmake doc ──────────────────────────────────────────────────────────
-      const pm = await loadPdfMake();
-
-      void { fontSize: 13, bold: true, color: '#1a1a1a', margin: [0,0,0,2] as any }; // titleStyle unused
-      const sectionHdr  = { fontSize: 10, bold: true, color: '#444', margin: [0,10,0,4] as any, decoration: 'underline' as any };
-      const small       = { fontSize: 8, color: '#666' };
-      const COLORS_CAJA = { 'CAJA MAYOR':'#22c55e','CAJA CHICA':'#f59e0b','CUENTA BNB':'#6366f1','TARJETA':'#06b6d4' };
-      const CAT_COLORS: string[]  = ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#6366f1','#a855f7','#ec4899','#14b8a6','#84cc16']; void CAT_COLORS;
+      // ── HTML Report ──────────────────────────────────────────────────────────
+      const COLORS_CAJA: Record<string,string> = { 'CAJA MAYOR':'#22c55e','CAJA CHICA':'#f59e0b','CUENTA BNB':'#6366f1','TARJETA':'#06b6d4' };
 
       const cajaSlices = Object.entries(incByCaja).map(([k,v]) => ({
-        label: k, val: v, color: (COLORS_CAJA as any)[k]||'#999',
+        label: k, val: v, color: COLORS_CAJA[k]||'#999',
       }));
 
-      // Helper: category breakdown table
-      function catDetail(cat: string): any {
-        const rows = egresos.filter((t:any) => (t.category||'OTROS') === cat);
-        if (!rows.length) return null;
+      // Helper: category breakdown HTML
+      function catDetailHtml(cat: string, type: 'ingreso'|'egreso' = 'egreso'): string {
+        const source = type === 'ingreso' ? ingresos : egresos;
+        const rows = source.filter((t:any) => (t.category||'OTROS') === cat);
+        if (!rows.length) return '';
         const total = rows.reduce((s:number,t:any) => s+t.amount, 0);
-        return {
-          table: {
-            widths: ['*', 'auto'],
-            body: [
-              [{ text: cat, fontSize:8, bold:true, color:'#dc2626', colSpan:2 }, {}],
-              ...rows.map((t:any) => ([
-                { text: t.description||'—', fontSize:7.5, color:'#555' },
-                { text: `Bs. ${fmtN(t.amount)}`, fontSize:7.5, color:'#333', alignment:'right' },
-              ])),
-              [{ text:'SUBTOTAL', fontSize:8, bold:true }, { text:`Bs. ${fmtN(total)}`, fontSize:8, bold:true, color:'#dc2626', alignment:'right' }],
-            ],
-          },
-          layout: { hLineWidth:(i:number,n:any)=>i===0||i===1||i===n.table.body.length?0.5:0.2, vLineWidth:()=>0, hLineColor:()=>'#ddd', paddingLeft:()=>2, paddingRight:()=>2, paddingTop:()=>2, paddingBottom:()=>2 },
-          margin:[0,4,0,8],
-        };
+        const color = type === 'ingreso' ? '#16a34a' : '#dc2626';
+        const borderColor = type === 'ingreso' ? '#22c55e' : '#ef4444';
+        return `<div class="cat-detail" style="border-left-color:${borderColor}">
+          <div class="cat-title" style="color:${color}">${cat}</div>
+          ${rows.map((t:any) => `<div class="cat-row"><span>${t.description||'—'}</span><span class="amount">Bs. ${fmtN(t.amount)}</span></div>`).join('')}
+          <div class="cat-row cat-subtotal"><span>SUBTOTAL</span><span class="amount">Bs. ${fmtN(total)}</span></div>
+        </div>`;
       }
 
       const limpPieSlices = limpSorted.map(([name,cnt],i) => ({
@@ -840,343 +928,375 @@ export default function ReportesPage() {
         color:['#8b5cf6','#ec4899','#06b6d4','#22c55e','#f59e0b','#ef4444'][i%6],
       }));
 
-      const content: any[] = [
-        // ── Header ──────────────────────────────────────────────────────────────
-        { text: '🏨 HOTEL BASTILLE — REPORTE FAMILIAR', fontSize:15, bold:true, color:'#1a1a1a', margin:[0,0,0,2] },
-        { text: `📅 ${monthLabel.toUpperCase()}`, fontSize:10, color:'#666', margin:[0,0,0,12] },
-
-        // ── 1. Resumen financiero ────────────────────────────────────────────────
-        { text: '📊 RESUMEN FINANCIERO', ...sectionHdr },
-        {
-          columns: [
-            {
-              width: '*',
-              table: {
-                widths: ['*','auto'],
-                body: [
-                  [{ text:'✅ INGRESOS TOTALES', fontSize:9, bold:true, color:'#16a34a' },{ text:`Bs. ${fmtN(totalInc)}`, fontSize:9, bold:true, color:'#16a34a', alignment:'right' }],
-                  [{ text:'❌ EGRESOS TOTALES',  fontSize:9, bold:true, color:'#dc2626' },{ text:`Bs. ${fmtN(totalEgr)}`, fontSize:9, bold:true, color:'#dc2626', alignment:'right' }],
-                  ...(soniaTotal>0?[[{ text:'💚 Recaudado Doña Sonia', fontSize:9, bold:true, color:'#16a34a' },{ text:`+ Bs. ${fmtN(soniaTotal)}`, fontSize:9, bold:true, color:'#16a34a', alignment:'right' }]]:[]),
-                  [{ text:'💰 BALANCE NETO', fontSize:11, bold:true },{ text:`Bs. ${fmtN(net)}`, fontSize:11, bold:true, color:net>=0?'#1d4ed8':'#dc2626', alignment:'right' }],
-                  [{ text:'👷 Sueldos',           ...small },{ text:`Bs. ${fmtN(sueldos)}`,   ...small, alignment:'right' }],
-                  [{ text:'⚡ Servicios básicos',  ...small },{ text:`Bs. ${fmtN(servicios)}`, ...small, alignment:'right' }],
-                  [{ text:'🛍️ Ventas vitrina',    ...small },{ text:`Bs. ${fmtN(vitrina)}`,   ...small, alignment:'right' }],
-                  [{ text:'🧾 Facturado',          ...small },{ text:`Bs. ${fmtN(totalFacturado)}`, ...small, alignment:'right' }],
-                ],
-              },
-              layout:'lightHorizontalLines',
-            },
-            {
-              width:130,
-              stack:[
-                { text:'💵 Ingresos por caja', fontSize:8, color:'#555', alignment:'center', margin:[0,0,0,4] },
-                cajaSlices.length ? { svg:pieChart(cajaSlices,110), width:110, alignment:'center' } : { text:'Sin datos', fontSize:8, color:'#aaa', alignment:'center' },
-                ...cajaSlices.map(s=>({ text:`■ ${s.label.replace('CAJA MAYOR','Efectivo').replace('CAJA CHICA','Caja Chica').replace('CUENTA BNB','QR')}: Bs. ${fmtN(s.val)}`, fontSize:7, color:s.color, margin:[0,1,0,0] })),
-              ],
-            },
-          ],
-          columnGap:16, margin:[0,0,0,8],
-        },
-
-        // ── 2. Ingresos por categoría ────────────────────────────────────────────
-        { text: '💚 INGRESOS POR CATEGORÍA', ...sectionHdr },
-        incCatSorted.length
-          ? { svg:hBar(incCatSorted.slice(0,10), incCatSorted[0]?.[1]||1, '#22c55e', 60), margin:[0,0,0,10] }
-          : { text:'Sin ingresos.', fontSize:9, color:'#aaa', margin:[0,0,0,8] },
-
-        // ── 3. Egresos por categoría + desglose ──────────────────────────────────
-        { text: '💸 EGRESOS POR CATEGORÍA', ...sectionHdr },
-        egrCatSorted.length
-          ? { svg:hBar(egrCatSorted.slice(0,14), egrCatSorted[0]?.[1]||1, '#ef4444', 60), margin:[0,0,0,6] }
-          : { text:'Sin egresos.', fontSize:9, color:'#aaa', margin:[0,0,0,8] },
-        { text:'📋 Detalle por categoría:', fontSize:9, bold:true, color:'#444', margin:[0,4,0,4] },
-        ...egrCatSorted.map(([cat]) => catDetail(cat)).filter(Boolean),
-
-        // ── 4. Huéspedes ─────────────────────────────────────────────────────────
-        { text: '🧳 HUÉSPEDES DEL MES', ...sectionHdr },
-        {
-          table:{
-            widths:['*','*','*','*'],
-            body:[[
-              { text:`${totalGuests}\n🧑 Huéspedes`,          fontSize:12,bold:true,alignment:'center',margin:[0,6,0,6] },
-              { text:`${totalGuests-foreignGuests}\n🇧🇴 Nacionales`,fontSize:12,bold:true,color:'#2563eb',alignment:'center',margin:[0,6,0,6] },
-              { text:`${foreignGuests}\n✈️ Extranjeros`,       fontSize:12,bold:true,color:'#7c3aed',alignment:'center',margin:[0,6,0,6] },
-              { text:`${pets}\n🐾 Mascotas`,                  fontSize:12,bold:true,color:'#d97706',alignment:'center',margin:[0,6,0,6] },
-            ]],
-          },
-          layout:{ hLineWidth:()=>0.4,vLineWidth:()=>0.4,hLineColor:()=>'#ddd',vLineColor:()=>'#ddd' },
-          margin:[0,0,0,10],
-        },
-
-        // ── 5. Empresas y Facturas ───────────────────────────────────────────────
-        { text: '🧾 FACTURAS Y EMPRESAS', ...sectionHdr },
-        {
-          table:{
-            widths:['*','auto','auto'],
-            body:[
-              [{ text:'Cliente', fontSize:8,bold:true },{ text:'SIAAT', fontSize:8,bold:true,alignment:'center' },{ text:'Monto', fontSize:8,bold:true,alignment:'right' }],
-              ...(emps.length ? emps.map((r:any)=>([
-                { text:(r.is_empresa?'🏢 ':'👤 ')+(r.guest_name||'—'), fontSize:8 },
-                { text:r.siaat_number||'—', fontSize:8, alignment:'center', color:'#666' },
-                { text:`Bs. ${fmtN((r.price_per_night||0)*(r.num_nights||1))}`, fontSize:8, alignment:'right' },
-              ])) : [[{ text:'Sin facturas este mes.', fontSize:8, color:'#aaa', colSpan:3 },{},{}]]),
-              emps.length ? [
-                { text:`TOTAL (${emps.length} factura${emps.length!==1?'s':''})`, fontSize:8, bold:true },
-                {},
-                { text:`Bs. ${fmtN(totalFacturado)}`, fontSize:8, bold:true, color:'#1d4ed8', alignment:'right' },
-              ] : null,
-            ].filter(Boolean) as any[],
-          },
-          layout:'lightHorizontalLines',
-          margin:[0,0,0,10],
-        },
-
-        // ── 6. Limpiezas ─────────────────────────────────────────────────────────
-        { text: '🧹 LIMPIEZAS POR PERSONA', ...sectionHdr },
-        {
-          columns:[
-            limpSorted.length
-              ? { svg:hBar(limpSorted, limpSorted[0]?.[1]||1,'#8b5cf6',40), width:'*' }
-              : { text:'Sin limpiezas.', fontSize:9, color:'#aaa', width:'*' },
-            limpPieSlices.length
-              ? { stack:[
-                  { svg:pieChart(limpPieSlices,100), width:100, alignment:'center' },
-                  ...limpPieSlices.map(s=>({ text:`■ ${s.label}: ${s.val}`, fontSize:7, color:s.color, margin:[0,1,0,0], alignment:'center' })),
-                ], width:120 }
-              : { text:'', width:120 },
-          ],
-          columnGap:12, margin:[0,0,0,6],
-        },
-        limpSorted.length ? {
-          table:{
-            widths:['*','auto','auto'],
-            body:[
-              [{ text:'👩 Persona',fontSize:8,bold:true },{ text:'Limpiezas',fontSize:8,bold:true,alignment:'center' },{ text:'%',fontSize:8,bold:true,alignment:'center' }],
-              ...limpSorted.map(([name,cnt])=>([
-                { text:name, fontSize:8 },
-                { text:String(cnt), fontSize:8, alignment:'center' },
-                { text:`${((cnt/limps.length)*100).toFixed(0)}%`, fontSize:8, alignment:'center' },
-              ])),
-              [{ text:'TOTAL',fontSize:8,bold:true },{ text:String(limps.length),fontSize:8,bold:true,alignment:'center' },{ text:'100%',fontSize:8,bold:true,alignment:'center' }],
-            ],
-          },
-          layout:'lightHorizontalLines',
-          margin:[0,0,0,10],
-        } : {},
-
-        // ── 7. Sueldos & Servicios básicos ──────────────────────────────────────
-        { text: '⚡ SUELDOS Y SERVICIOS BÁSICOS', ...sectionHdr },
-        {
-          table:{
-            widths:['*','auto'],
-            body:[
-              [{ text:'👷 B05 — Sueldos y Salarios',fontSize:9,bold:true },{ text:`Bs. ${fmtN(sueldos)}`,fontSize:9,bold:true,color:'#dc2626',alignment:'right' }],
-              ...egresos.filter((t:any)=>t.category==='B05-SUELDOS Y SALARIOS').map((t:any)=>([
-                { text:`  · ${t.description||'—'}`, fontSize:8, color:'#666' },
-                { text:`Bs. ${fmtN(t.amount)}`, fontSize:8, color:'#666', alignment:'right' },
-              ])),
-              [{ text:'⚡ B03 — Servicios Básicos',fontSize:9,bold:true },{ text:`Bs. ${fmtN(servicios)}`,fontSize:9,bold:true,color:'#dc2626',alignment:'right' }],
-              ...egresos.filter((t:any)=>t.category==='B03-SERVICIOS BÁSICOS').map((t:any)=>([
-                { text:`  · ${t.description||'—'}`, fontSize:8, color:'#666' },
-                { text:`Bs. ${fmtN(t.amount)}`, fontSize:8, color:'#666', alignment:'right' },
-              ])),
-            ],
-          },
-          layout:'lightHorizontalLines',
-          margin:[0,0,0,4],
-        },
-
-        // ── 8. Marketing ────────────────────────────────────────────────────────
-        ...(mkts.length > 0 ? (() => {
-          // Aggregate stats from network_stats JSONB
-          const getStats = (ns: any) => {
-            let likes = 0, comments = 0, views = 0;
-            for (const v of Object.values(ns || {})) {
-              const s = v as any;
-              likes += s?.likes ?? 0; comments += s?.comments ?? 0; views += s?.views ?? 0;
-            }
-            return { likes, comments, views };
-          };
-          // Parse categories (JSON array or legacy single string)
-          const parseCats = (p: any): string[] => {
-            const raw = p?.category;
-            if (!raw) return ['Otros'];
-            try { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) return arr; } catch {}
-            return [raw];
-          };
-
-          // Totals
-          let totLikes = 0, totComments = 0, totViews = 0;
-          for (const p of mkts) { const s = getStats(p.network_stats); totLikes += s.likes; totComments += s.comments; totViews += s.views; }
-
-          // By account
-          const byAcc: Record<string,number> = {};
-          for (const p of mkts) byAcc[p.account_name||'?'] = (byAcc[p.account_name||'?']||0)+1;
-
-          // By category
-          const byCat: Record<string,number> = {};
-          for (const p of mkts) for (const c of parseCats(p)) byCat[c] = (byCat[c]||0)+1;
-
-          // By network (posts + likes + views)
-          const byNet: Record<string,{posts:number,likes:number,views:number}> = {};
-          for (const p of mkts) {
-            for (const [net, s] of Object.entries(p.network_stats || {}) as any) {
-              if (!byNet[net]) byNet[net] = { posts:0, likes:0, views:0 };
-              byNet[net].posts++; byNet[net].likes += (s as any)?.likes??0; byNet[net].views += (s as any)?.views??0;
-            }
-          }
-
-          // Paid posts
-          const paid = mkts.filter((p:any) => p.paid_ads);
-          const totPaid = paid.reduce((s:number,p:any) => s+(p.paid_ads_amount||0), 0);
-
-          // Top 3 by views
-          const top3 = [...mkts]
-            .map((p:any) => ({ ...p, _stats: getStats(p.network_stats) }))
-            .sort((a,b) => b._stats.views - a._stats.views)
-            .slice(0,3);
-
-          const MEDALS = ['🥇','🥈','🥉'];
-
-          return [
-            { text: '📱 MARKETING — REDES SOCIALES', ...sectionHdr },
-
-            // ── Big stat boxes
-            {
-              columns: [
-                { stack:[
-                  { text: mkts.length.toString(), fontSize:18, bold:true, color:'#1f2937', alignment:'center' },
-                  { text:'publicaciones', fontSize:7, color:'#6b7280', alignment:'center' },
-                ], width:'*' },
-                { stack:[
-                  { text: totLikes.toLocaleString(), fontSize:18, bold:true, color:'#ef4444', alignment:'center' },
-                  { text:'❤️ likes', fontSize:7, color:'#6b7280', alignment:'center' },
-                ], width:'*' },
-                { stack:[
-                  { text: totComments.toLocaleString(), fontSize:18, bold:true, color:'#3b82f6', alignment:'center' },
-                  { text:'💬 comentarios', fontSize:7, color:'#6b7280', alignment:'center' },
-                ], width:'*' },
-                { stack:[
-                  { text: totViews.toLocaleString(), fontSize:18, bold:true, color:'#10b981', alignment:'center' },
-                  { text:'👁 vistas', fontSize:7, color:'#6b7280', alignment:'center' },
-                ], width:'*' },
-                ...(paid.length ? [{ stack:[
-                  { text: paid.length.toString(), fontSize:18, bold:true, color:'#f59e0b', alignment:'center' },
-                  { text:`💰 pagados (Bs.${fmtN(totPaid)})`, fontSize:7, color:'#6b7280', alignment:'center' },
-                ], width:'*' }] : []),
-              ],
-              margin:[0,4,0,10],
-            },
-
-            // ── 3-column breakdown: cuenta / red / categoría
-            {
-              columns:[
-                {
-                  width:'34%',
-                  stack:[
-                    { text:'Por cuenta', fontSize:8, bold:true, color:'#374151', margin:[0,0,0,3] },
-                    ...Object.entries(byAcc).map(([acc,cnt]) => ({
-                      columns:[
-                        { text:`@${acc}`, fontSize:8, color:'#6b7280', width:'*' },
-                        { text:cnt.toString(), fontSize:8, bold:true, color:'#1f2937', width:20, alignment:'right' },
-                      ], margin:[0,1,0,1],
-                    })),
-                  ],
-                },
-                {
-                  width:'34%',
-                  stack:[
-                    { text:'Por red social', fontSize:8, bold:true, color:'#374151', margin:[0,0,0,3] },
-                    ...Object.entries(byNet).sort((a,b)=>b[1].posts-a[1].posts).map(([net,d]) => ({
-                      columns:[
-                        { text:net, fontSize:8, color:'#6b7280', width:'*' },
-                        { text:`${d.posts}p`, fontSize:8, bold:true, color:'#1f2937', width:30, alignment:'right' },
-                      ], margin:[0,1,0,1],
-                    })),
-                  ],
-                },
-                {
-                  width:'32%',
-                  stack:[
-                    { text:'Por categoría', fontSize:8, bold:true, color:'#374151', margin:[0,0,0,3] },
-                    ...Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([cat,cnt]) => ({
-                      columns:[
-                        { text:cat, fontSize:7, color:'#6b7280', width:'*' },
-                        { text:cnt.toString(), fontSize:8, bold:true, color:'#1f2937', width:20, alignment:'right' },
-                      ], margin:[0,1,0,1],
-                    })),
-                  ],
-                },
-              ],
-              margin:[0,0,0,10],
-            },
-
-            // ── Top 3 posts
-            { text:'⭐ Top publicaciones por vistas', fontSize:9, bold:true, color:'#374151', margin:[0,0,0,4] },
-            {
-              columns: top3.map((p:any, i:number) => ({
-                width:'*',
-                stack:[
-                  { text:`${MEDALS[i]} @${p.account_name||'—'}`, fontSize:8, bold:true, color:'#1f2937' },
-                  { text: p.title || Object.keys(p.network_stats||{}).join(', ') || '—', fontSize:7, color:'#6b7280', margin:[0,1,0,2] },
-                  { columns:[
-                    { text:`👁 ${p._stats.views.toLocaleString()}`, fontSize:7, color:'#10b981' },
-                    { text:`❤️ ${p._stats.likes.toLocaleString()}`, fontSize:7, color:'#ef4444' },
-                    { text:`💬 ${p._stats.comments.toLocaleString()}`, fontSize:7, color:'#3b82f6' },
-                  ]},
-                  { text: p.date?.slice(5)??'', fontSize:7, color:'#9ca3af', margin:[0,2,0,0] },
-                ],
-                margin:[0,0,i<2?8:0,0],
-              })),
-              margin:[0,0,0,10],
-            },
-
-            // ── Detail table
-            { text:'Detalle de publicaciones', fontSize:8, bold:true, color:'#374151', margin:[0,0,0,3] },
-            {
-              table:{
-                widths:[36,60,55,36,36,40],
-                headerRows:1,
-                body:[
-                  [
-                    { text:'Fecha',  fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151' },
-                    { text:'Cuenta', fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151' },
-                    { text:'Redes',  fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151' },
-                    { text:'Likes',  fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151', alignment:'right' },
-                    { text:'Com.',   fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151', alignment:'right' },
-                    { text:'Vistas', fontSize:7, bold:true, fillColor:'#f3f4f6', color:'#374151', alignment:'right' },
-                  ],
-                  ...mkts.map((p:any) => {
-                    const s = getStats(p.network_stats);
-                    const netStr = p.network_stats ? Object.keys(p.network_stats).join(', ') : (p.networks||[]).join(', ');
-                    return [
-                      { text:p.date?.slice(5)??'', fontSize:6.5, color:'#555' },
-                      { text:`@${p.account_name||''}`, fontSize:6.5, color:'#555' },
-                      { text:netStr, fontSize:6.5, color:'#555' },
-                      { text:s.likes.toLocaleString(), fontSize:6.5, color:'#555', alignment:'right' },
-                      { text:s.comments.toLocaleString(), fontSize:6.5, color:'#555', alignment:'right' },
-                      { text:s.views.toLocaleString(), fontSize:6.5, color:'#555', alignment:'right' },
-                    ];
-                  }),
-                ],
-              },
-              layout:'lightHorizontalLines',
-              margin:[0,0,0,4],
-            },
-          ];
-        })() : [{ text: '📱 MARKETING — Sin publicaciones registradas este mes', ...sectionHdr }]),
-
-        { text:`✍️ Generado: ${new Date().toLocaleDateString('es-BO',{timeZone:'America/La_Paz',day:'2-digit',month:'long',year:'numeric'})}`, fontSize:7, color:'#999', margin:[0,14,0,0], alignment:'right' },
-      ];
-
-      const docDef: any = {
-        pageSize: 'A4',
-        pageMargins: [40, 40, 40, 40],
-        content,
-        defaultStyle: { font: 'Roboto' },
+      // ── HTML Report ─────────────────────────────────────────────────────────
+      // Marketing helpers
+      const getStatsF = (ns: any) => {
+        let likes = 0, comments = 0, views = 0;
+        for (const v of Object.values(ns || {})) {
+          const s = v as any;
+          likes += s?.likes ?? 0; comments += s?.comments ?? 0; views += s?.views ?? 0;
+        }
+        return { likes, comments, views };
+      };
+      const parseCatsF = (p: any): string[] => {
+        const raw = p?.category;
+        if (!raw) return ['Otros'];
+        try { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) return arr; } catch {}
+        return [raw];
       };
 
-      pm.createPdf(docDef).download(`REPORTE_FAMILIAR_${yearS}_${String(month).padStart(2,'0')}.pdf`);
+      let mktTotLikes = 0, mktTotComments = 0, mktTotViews = 0;
+      for (const p of mkts) { const s = getStatsF(p.network_stats); mktTotLikes += s.likes; mktTotComments += s.comments; mktTotViews += s.views; }
+      const mktByAcc: Record<string,number> = {};
+      for (const p of mkts) mktByAcc[p.account_name||'?'] = (mktByAcc[p.account_name||'?']||0)+1;
+      const mktByCat: Record<string,number> = {};
+      for (const p of mkts) for (const c of parseCatsF(p)) mktByCat[c] = (mktByCat[c]||0)+1;
+      const mktByNet: Record<string,{posts:number,likes:number,views:number}> = {};
+      for (const p of mkts) {
+        for (const [net, sv] of Object.entries(p.network_stats || {}) as any[]) {
+          if (!mktByNet[net]) mktByNet[net] = { posts:0, likes:0, views:0 };
+          mktByNet[net].posts++; mktByNet[net].likes += (sv as any)?.likes??0; mktByNet[net].views += (sv as any)?.views??0;
+        }
+      }
+      const mktPaid = mkts.filter((p:any) => p.paid_ads);
+      const mktTotPaid = mktPaid.reduce((s:number,p:any) => s+(p.paid_ads_amount||0), 0);
+      const mktTop3 = [...mkts]
+        .map((p:any) => ({ ...p, _stats: getStatsF(p.network_stats) }))
+        .sort((a,b) => b._stats.views - a._stats.views)
+        .slice(0,3);
+
+      // CSS bar helper
+      function cssBar(entries: [string,number][], maxVal: number, color: string, unit = 'Bs.'): string {
+        return entries.map(([label, val]) => {
+          const pct = maxVal > 0 ? (val / maxVal) * 100 : 0;
+          const lbl = label.length > 28 ? label.slice(0,26) + '…' : label;
+          const valStr = unit === 'Bs.' ? `Bs. ${fmtN(val)}` : `${val} ${unit}`;
+          return `<div class="bar-row"><div class="bar-label">${lbl}</div><div class="bar-track"><div class="bar-fill" style="width:${pct.toFixed(1)}%;background:${color}"></div></div><div class="bar-val">${valStr}</div></div>`;
+        }).join('');
+      }
+
+      const generatedDate = new Date().toLocaleDateString('es-BO',{timeZone:'America/La_Paz',day:'2-digit',month:'long',year:'numeric'});
+
+      const CSS = `
+*{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a1a;background:#fff;padding:28px;font-size:11px}
+@media print{body{padding:0;font-size:9.5px}@page{size:A4;margin:10mm}.no-print{display:none!important}.pie-wrap{display:none!important}.fin-grid{grid-template-columns:1fr!important}}
+h1{font-size:19px;font-weight:800;letter-spacing:.5px}
+.sub{font-size:12px;color:#666;margin-top:3px;margin-bottom:14px;padding-bottom:8px;border-bottom:3px solid #1a1a1a}
+.sec{margin-bottom:16px}
+.sec-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:#374151;border-bottom:1.5px solid #e5e7eb;padding-bottom:3px;margin-bottom:7px}
+.stat-grid{display:grid;gap:7px}
+.stat-box{background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px;text-align:center}
+.stat-num{font-size:24px;font-weight:800;line-height:1}
+.stat-label{font-size:9px;color:#6b7280;margin-top:2px}
+.fin-grid{display:grid;grid-template-columns:1fr 140px;gap:20px;align-items:start}
+.fin-table{width:100%;border-collapse:collapse}
+.fin-table td{padding:3px 0;border-bottom:1px solid #f3f4f6;font-size:10px}
+.fin-table td:last-child{text-align:right;white-space:nowrap;padding-left:12px}
+.bar-row{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.bar-label{width:140px;text-align:right;color:#555;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
+.bar-track{flex:1;background:#f3f4f6;border-radius:3px;height:11px;overflow:hidden}
+.bar-fill{height:100%;border-radius:3px}
+.bar-val{width:80px;font-size:9px;color:#333;font-weight:600;white-space:nowrap}
+table{width:100%;border-collapse:collapse;font-size:10px}
+th{background:#f3f4f6;font-weight:600;padding:3px 6px;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.4px}
+td{padding:3px 6px;border-bottom:1px solid #f3f4f6}
+.r{text-align:right;white-space:nowrap}
+.green{color:#16a34a}.red{color:#dc2626}.blue{color:#1d4ed8}.bold{font-weight:700}
+.cat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
+.cat-detail{background:#fafafa;border-left:3px solid #ef4444;padding:6px}
+.cat-title{font-size:9px;font-weight:700;color:#dc2626;margin-bottom:3px;text-transform:uppercase}
+.cat-row{display:flex;justify-content:space-between;font-size:9px;color:#555;padding:1px 0;border-bottom:1px solid #eee}
+.cat-row .amount{white-space:nowrap;margin-left:6px}
+.cat-subtotal{font-weight:700;color:#1a1a1a;border-bottom:none;margin-top:2px}
+.limp-grid{display:grid;grid-template-columns:1fr 100px;gap:12px;align-items:start}
+.mkt-stat-grid{display:grid;gap:6px;margin-bottom:12px}
+.mkt-stat{text-align:center;background:#f9fafb;border-radius:6px;padding:7px;border:1px solid #e5e7eb}
+.mkt-num{font-size:20px;font-weight:800;line-height:1}
+.mkt-label{font-size:8px;color:#6b7280;margin-top:2px}
+.top3-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.top3-card{background:#f9fafb;border-radius:6px;padding:8px;border-top:3px solid #6366f1}
+.top3-rank{font-size:15px;font-weight:800;color:#6366f1}
+.top3-account{font-size:10px;font-weight:700;margin-top:2px}
+.top3-ttl{font-size:8px;color:#6b7280;margin:2px 0 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top3-stats{display:flex;gap:6px;font-size:9px;font-weight:700}
+.tv{color:#10b981}.tl{color:#ef4444}.tc{color:#3b82f6}
+.bd-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+.bd-title{font-size:9px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+.bd-row{display:flex;justify-content:space-between;font-size:9px;color:#6b7280;padding:2px 0;border-bottom:1px solid #f3f4f6}
+.bd-val{font-weight:700;color:#1f2937}
+.footer{text-align:right;font-size:8px;color:#9ca3af;margin-top:16px;padding-top:6px;border-top:1px solid #e5e7eb}
+.print-btn{position:fixed;top:20px;right:20px;background:#1d4ed8;color:#fff;border:none;padding:10px 22px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+@media print{.print-btn{display:none}}
+`;
+
+      const mktColCount = mktPaid.length ? 5 : 4;
+
+      const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+<title>Reporte Familiar — ${monthLabel}</title>
+<style>${CSS}</style></head><body>
+<button class="print-btn no-print" onclick="window.print()">Imprimir / PDF</button>
+<h1>HOTEL BASTILLE — REPORTE FAMILIAR</h1>
+<div class="sub">${monthLabel.toUpperCase()}</div>
+
+<!-- 1. RESUMEN FINANCIERO -->
+<div class="sec">
+<div class="sec-title">Resumen Financiero</div>
+<div class="fin-grid">
+  <table class="fin-table">
+    <tr><td class="bold green">INGRESOS TOTALES</td><td class="bold green">Bs. ${fmtN(totalInc)}</td></tr>
+    <tr><td class="bold red">EGRESOS TOTALES</td><td class="bold red">Bs. ${fmtN(totalEgr)}</td></tr>
+    ${soniaTotal>0?`<tr><td class="bold green">Recaudado Doña Sonia</td><td class="bold green">+ Bs. ${fmtN(soniaTotal)}</td></tr>`:''}
+    <tr style="border-top:2px solid #ddd"><td class="bold" style="font-size:13px">BALANCE NETO</td><td class="bold ${net>=0?'blue':'red'}" style="font-size:13px">Bs. ${fmtN(net)}</td></tr>
+    <tr><td style="color:#666">Sueldos</td><td style="color:#666">Bs. ${fmtN(sueldos)}</td></tr>
+    <tr><td style="color:#666">Servicios básicos</td><td style="color:#666">Bs. ${fmtN(servicios)}</td></tr>
+    <tr><td style="color:#666">Ventas vitrina</td><td style="color:#666">Bs. ${fmtN(vitrina)}</td></tr>
+    <tr><td style="color:#666">Facturado</td><td style="color:#666">Bs. ${fmtN(totalFacturado)}</td></tr>
+  </table>
+  <div class="pie-wrap" style="text-align:center">
+    <div style="font-size:9px;color:#555;font-weight:600;margin-bottom:6px">INGRESOS POR CAJA</div>
+    ${pieChart(cajaSlices,110)}
+    ${cajaSlices.map(s=>`<div style="font-size:8px;color:${s.color};margin-top:3px"><span style="background:${s.color};display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:3px;vertical-align:middle"></span>${s.label.replace('CAJA MAYOR','Efectivo').replace('CAJA CHICA','Caja Chica').replace('CUENTA BNB','QR')}: Bs. ${fmtN(s.val)}</div>`).join('')}
+  </div>
+</div>
+</div>
+
+<!-- 2. INGRESOS POR CATEGORÍA -->
+<div class="sec">
+<div class="sec-title">Ingresos por Categoría</div>
+${incCatSorted.length
+  ? cssBar(incCatSorted.slice(0,12) as [string,number][], incCatSorted[0]?.[1]||1, '#22c55e')
+  : '<p style="color:#aaa;font-size:11px">Sin ingresos.</p>'}
+${incCatSorted.length
+  ? `<div style="font-size:10px;font-weight:700;color:#444;margin:12px 0 8px;text-transform:uppercase;letter-spacing:.5px">Detalle por categoría</div>
+     <div class="cat-grid">${incCatSorted.map(([cat]) => catDetailHtml(cat, 'ingreso')).join('')}</div>`
+  : ''}
+</div>
+
+<!-- 3. EGRESOS POR CATEGORÍA -->
+<div class="sec">
+<div class="sec-title">Egresos por Categoría</div>
+${egrCatSorted.length
+  ? cssBar(egrCatSorted.slice(0,14) as [string,number][], egrCatSorted[0]?.[1]||1, '#ef4444')
+  : '<p style="color:#aaa;font-size:11px">Sin egresos.</p>'}
+${egrCatSorted.length
+  ? `<div style="font-size:10px;font-weight:700;color:#444;margin:12px 0 8px;text-transform:uppercase;letter-spacing:.5px">Detalle por categoría</div>
+     <div class="cat-grid">${egrCatSorted.map(([cat]) => catDetailHtml(cat, 'egreso')).join('')}</div>`
+  : ''}
+</div>
+
+<!-- 3b. SUELDOS Y SERVICIOS BÁSICOS -->
+<div class="sec">
+<div class="sec-title">Sueldos y Servicios Básicos</div>
+<table>
+  <tr><td class="bold red">B05 — Sueldos y Salarios</td><td class="r bold red">Bs. ${fmtN(sueldos)}</td></tr>
+  ${egresos.filter((t:any)=>t.category==='B05-SUELDOS Y SALARIOS').map((t:any)=>`<tr><td style="padding-left:16px;color:#666">${t.description||'—'}</td><td class="r" style="color:#666">Bs. ${fmtN(t.amount)}</td></tr>`).join('')}
+  <tr><td class="bold red">B03 — Servicios Básicos</td><td class="r bold red">Bs. ${fmtN(servicios)}</td></tr>
+  ${egresos.filter((t:any)=>t.category==='B03-SERVICIOS BÁSICOS').map((t:any)=>`<tr><td style="padding-left:16px;color:#666">${t.description||'—'}</td><td class="r" style="color:#666">Bs. ${fmtN(t.amount)}</td></tr>`).join('')}
+</table>
+</div>
+
+<!-- 4. HUÉSPEDES -->
+<div class="sec">
+<div class="sec-title">Huéspedes del Mes</div>
+<div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">
+  <div class="stat-box"><div class="stat-num">${totalGuests}</div><div class="stat-label">Huéspedes</div></div>
+  <div class="stat-box"><div class="stat-num blue">${totalGuests-foreignGuests}</div><div class="stat-label">Nacionales</div></div>
+  <div class="stat-box"><div class="stat-num" style="color:#7c3aed">${foreignGuests}</div><div class="stat-label">Extranjeros</div></div>
+  <div class="stat-box"><div class="stat-num" style="color:#d97706">${pets}</div><div class="stat-label">Mascotas</div></div>
+</div>
+</div>
+
+<!-- 4b. NACIONALIDADES Y TIPOS -->
+<div class="sec">
+<div class="sec-title">Nacionalidades y Tipos de Reserva</div>
+<div style="display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap">
+  <div style="flex:1;min-width:200px">
+    <div style="font-size:9px;color:#555;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Desglose por Nacionalidad</div>
+    <table>
+      <tr><th>Nacionalidad</th><th style="text-align:right">Huéspedes</th><th style="text-align:right">%</th></tr>
+      ${natSorted.map(([nat,n])=>`<tr><td>${nat}</td><td style="text-align:right;font-weight:700">${n}</td><td style="text-align:right;color:#666">${totalGuests>0?((n/totalGuests)*100).toFixed(0):0}%</td></tr>`).join('')}
+      ${sinNacionalidad>0?`<tr style="color:#9ca3af"><td><em>Sin nacionalidad registrada</em></td><td style="text-align:right">${sinNacionalidad}</td><td style="text-align:right">—</td></tr>`:''}
+    </table>
+  </div>
+  <div style="flex:0 0 auto;text-align:center">
+    <div style="font-size:9px;color:#555;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Tipo de Reserva</div>
+    ${pieChart([
+      {label:'Personas',val:resPersona,color:'#22c55e'},
+      {label:'Empresas',val:resEmpresa,color:'#6366f1'},
+      {label:'Con mascota',val:resMascota,color:'#f59e0b'},
+    ],110)}
+    <div style="margin-top:6px;font-size:9px;text-align:left;display:inline-block">
+      <div style="color:#22c55e;margin-bottom:2px"><span style="background:#22c55e;display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle"></span>Personas: <strong>${resPersona}</strong></div>
+      <div style="color:#6366f1;margin-bottom:2px"><span style="background:#6366f1;display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle"></span>Empresas: <strong>${resEmpresa}</strong></div>
+      <div style="color:#f59e0b"><span style="background:#f59e0b;display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle"></span>Con mascota: <strong>${resMascota}</strong></div>
+    </div>
+  </div>
+</div>
+${empresaNames.length ? `
+<div style="margin-top:14px">
+  <div style="font-size:9px;font-weight:700;color:#444;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Empresas alojadas este mes</div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px">
+    ${empresaNames.map(n=>`<span style="background:#f0f0ff;color:#4f46e5;border:1px solid #c7d2fe;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:600">${n}</span>`).join('')}
+  </div>
+</div>` : ''}
+</div>
+
+<!-- 5. FACTURAS -->
+<div class="sec">
+<div class="sec-title">Facturas y Empresas</div>
+${taxPrevEntry ? `
+<div style="background:#fef9ec;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;margin-bottom:12px">
+  <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Impuestos pagados en ${monthLabel} (correspondientes a ${prevMonthLabel})</div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:11px;color:#1f2937">
+    <span>IVA: <strong>Bs. ${fmtN(taxPrevEntry.iva||0)}</strong></span>
+    <span>IT: <strong>Bs. ${fmtN(taxPrevEntry.it||0)}</strong></span>
+    <span>Trabajo: <strong>Bs. ${fmtN(taxPrevEntry.trabajo||0)}</strong></span>
+    <span>Impresiones: <strong>Bs. ${fmtN(taxPrevEntry.impresiones||0)}</strong></span>
+    <span style="color:#b45309;font-weight:700">TOTAL: Bs. ${fmtN((taxPrevEntry.iva||0)+(taxPrevEntry.it||0)+(taxPrevEntry.trabajo||0)+(taxPrevEntry.impresiones||0))}</span>
+    <span style="border-left:1px solid #fde68a;padding-left:20px">Ventas ${prevMonthLabel}: <strong>Bs. ${fmtN(taxPrevEntry.monto_factura||0)}</strong></span>
+    <span>Compras ${prevMonthLabel}: <strong>Bs. ${fmtN(taxPrevEntry.compras||0)}</strong></span>
+  </div>
+</div>` : ''}
+<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;margin-bottom:12px">
+  <div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Impuestos ${monthLabel} (a pagar el 10 del mes siguiente)</div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:11px;color:#1f2937">
+    <span>IVA: <strong style="color:#6b7280">— Pendiente</strong></span>
+    <span>IT: <strong style="color:#6b7280">— Pendiente</strong></span>
+    <span>Trabajo: <strong style="color:#6b7280">— Pendiente</strong></span>
+    <span>Impresiones: <strong style="color:#6b7280">— Pendiente</strong></span>
+    <span style="border-left:1px solid #bbf7d0;padding-left:20px">Ventas aprox.: <strong style="color:#16a34a">Bs. ${fmtN(taxEntry?.monto_factura||0)}</strong></span>
+  </div>
+  <div style="margin-top:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:10px 14px;font-size:11px;color:#1f2937">
+    <div style="font-size:10px;font-weight:700;color:#9a3412;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Detalle Compras ${monthLabel}</div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <div style="display:flex;justify-content:space-between"><span>Compras del mes</span><strong style="color:#ea580c">Bs. ${fmtN(taxEntry?.compras||0)}</strong></div>
+      <div style="display:flex;justify-content:space-between"><span>Saldo mes anterior</span><strong style="color:#a855f7">Bs. ${fmtN(taxEntry?.saldo_compras_anterior||0)}</strong></div>
+      <div style="display:flex;justify-content:space-between;border-top:1px solid #fed7aa;padding-top:4px;margin-top:2px"><span style="font-weight:700">TOTAL COMPRAS</span><strong style="color:#c2410c;font-size:13px">Bs. ${fmtN((taxEntry?.compras||0)+(taxEntry?.saldo_compras_anterior||0))}</strong></div>
+    </div>
+  </div>
+</div>
+${emps.length
+  ? `<table>
+      <tr><th>Cliente</th><th>SIAAT</th><th style="text-align:right">Monto</th></tr>
+      ${emps.map((r:any)=>`<tr><td>${r.is_empresa?'[Emp] ':''}${r.guest_name||'—'}</td><td style="color:#666">${r.siaat_number||'—'}</td><td class="r">Bs. ${fmtN((r.price_per_night||0)*(r.num_nights||1))}</td></tr>`).join('')}
+      <tr class="bold"><td>TOTAL (${emps.length} factura${emps.length!==1?'s':''})</td><td></td><td class="r blue">Bs. ${fmtN(totalFacturado)}</td></tr>
+    </table>`
+  : '<p style="color:#aaa;font-size:11px">Sin facturas este mes.</p>'}
+</div>
+
+<!-- 5b. ALQUILER DE SALÓN -->
+${salonSorted.length ? `<div class="sec">
+<div class="sec-title">Alquiler de Salón</div>
+<table>
+  <tr><th>Cliente / Descripción</th><th style="text-align:center">Usos</th><th style="text-align:right">Total</th></tr>
+  ${salonSorted.map(([name,s])=>`<tr><td>${name}</td><td style="text-align:center">${s.count}</td><td class="r">Bs. ${fmtN(s.total)}</td></tr>`).join('')}
+  <tr class="bold"><td>TOTAL</td><td style="text-align:center">${salonSorted.reduce((s,[,v])=>s+v.count,0)}</td><td class="r blue">Bs. ${fmtN(salonSorted.reduce((s,[,v])=>s+v.total,0))}</td></tr>
+</table>
+</div>` : ''}
+
+<!-- 5c. TRASPASOS DE CAJA -->
+${traspasosEgreso.length ? `<div class="sec">
+<div class="sec-title">Traspasos de Caja</div>
+<table>
+  <tr><th>Fecha</th><th>Descripción</th><th>Origen</th><th style="text-align:right">Monto</th></tr>
+  ${traspasosEgreso.map((t:any)=>`<tr><td>${fmt(t.date)}</td><td>${t.description||''}</td><td>${t.caja||''}</td><td class="r">Bs. ${fmtN(t.amount)}</td></tr>`).join('')}
+  <tr class="bold"><td colspan="3">TOTAL TRASPASOS</td><td class="r blue">Bs. ${fmtN(traspasosTotal)}</td></tr>
+</table>
+</div>` : ''}
+
+<!-- 5d. INGRESOS VARIOS DETALLE -->
+${variosTxs.length ? `<div class="sec">
+<div class="sec-title">Detalle Ingresos — VARIOS</div>
+<table>
+  <tr><th>Descripción</th><th style="text-align:right">Monto</th></tr>
+  ${variosTxs.map((t:any)=>`<tr><td>${t.description||'Sin descripción'}</td><td class="r">Bs. ${fmtN(t.amount)}</td></tr>`).join('')}
+  <tr class="bold"><td>TOTAL VARIOS</td><td class="r blue">Bs. ${fmtN(variosTxs.reduce((s:number,t:any)=>s+t.amount,0))}</td></tr>
+</table>
+</div>` : ''}
+
+<!-- 6. LIMPIEZAS -->
+<div class="sec">
+<div class="sec-title">Limpiezas por Persona</div>
+${limpSorted.length ? `
+<div class="limp-grid">
+  <div>${cssBar(limpSorted as [string,number][], limpSorted[0]?.[1]||1, '#8b5cf6', 'hab.')}</div>
+  <div style="text-align:center">
+    ${limpPieSlices.length ? pieChart(limpPieSlices,100) : ''}
+    ${limpPieSlices.map(s=>`<div style="font-size:8px;color:${s.color};margin-top:2px"><span style="background:${s.color};display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:3px;vertical-align:middle"></span>${s.label}: ${s.val}</div>`).join('')}
+  </div>
+</div>
+<table style="margin-top:10px">
+  <tr><th>Persona</th><th style="text-align:center">Limpiezas</th><th style="text-align:center">Habilitaciones</th><th style="text-align:center">Total</th><th style="text-align:center">%</th></tr>
+  ${Object.entries(roomTasksByCleaner).sort((a,b)=>Object.values(b[1]).reduce((s,n)=>s+n,0)-Object.values(a[1]).reduce((s,n)=>s+n,0)).map(([name,tipos])=>{
+    const limp = tipos['Limpieza']||0;
+    const hab  = tipos['Habilitación']||0;
+    const tot  = limp+hab;
+    const totalAll = Object.values(limpByCleaner).reduce((s,n)=>s+n,0);
+    return `<tr><td>${name}</td><td style="text-align:center">${limp}</td><td style="text-align:center">${hab}</td><td style="text-align:center;font-weight:700">${tot}</td><td style="text-align:center">${totalAll>0?((tot/totalAll)*100).toFixed(0):0}%</td></tr>`;
+  }).join('')}
+  <tr class="bold"><td>TOTAL</td><td style="text-align:center">${Object.values(roomTasksByCleaner).reduce((s,t)=>s+(t['Limpieza']||0),0)}</td><td style="text-align:center">${Object.values(roomTasksByCleaner).reduce((s,t)=>s+(t['Habilitación']||0),0)}</td><td style="text-align:center">${Object.values(limpByCleaner).reduce((s,n)=>s+n,0)}</td><td style="text-align:center">100%</td></tr>
+</table>` : '<p style="color:#aaa;font-size:11px">Sin limpiezas registradas.</p>'}
+
+${Object.keys(generalTasksByCleaner).length ? `
+<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#374151;margin:14px 0 6px">Tareas Generales</div>
+<table>
+  <tr><th>Persona</th><th>Tareas realizadas</th><th style="text-align:center">Total</th></tr>
+  ${Object.entries(generalTasksByCleaner).sort((a,b)=>b[1].length-a[1].length).map(([name,tasks])=>{
+    const counts: Record<string,number> = {};
+    for (const t of tasks) counts[t]=(counts[t]||0)+1;
+    return `<tr><td>${name}</td><td style="color:#555;font-size:10px">${Object.entries(counts).map(([t,n])=>n>1?`${t} (x${n})`:t).join(', ')}</td><td style="text-align:center;font-weight:700">${tasks.length}</td></tr>`;
+  }).join('')}
+</table>` : ''}
+</div>
+
+<!-- 8. MARKETING -->
+${mkts.length > 0 ? `
+<div class="sec">
+<div class="sec-title">Marketing — Redes Sociales</div>
+<div class="mkt-stat-grid" style="grid-template-columns:repeat(${mktColCount},1fr)">
+  <div class="mkt-stat"><div class="mkt-num">${mkts.length}</div><div class="mkt-label">publicaciones</div></div>
+  <div class="mkt-stat"><div class="mkt-num red">${mktTotLikes.toLocaleString()}</div><div class="mkt-label">likes</div></div>
+  <div class="mkt-stat"><div class="mkt-num blue">${mktTotComments.toLocaleString()}</div><div class="mkt-label">comentarios</div></div>
+  <div class="mkt-stat"><div class="mkt-num" style="color:#10b981">${mktTotViews.toLocaleString()}</div><div class="mkt-label">vistas</div></div>
+  ${mktPaid.length ? `<div class="mkt-stat"><div class="mkt-num" style="color:#f59e0b">${mktPaid.length}</div><div class="mkt-label">pagados · Bs. ${fmtN(mktTotPaid)}</div></div>` : ''}
+</div>
+<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#374151;margin-bottom:8px">Top publicaciones por vistas</div>
+<div class="top3-grid">
+${mktTop3.map((p:any,i:number)=>`<div class="top3-card" style="border-top-color:${['#f59e0b','#9ca3af','#b45309'][i]};padding:0;overflow:hidden">
+  ${p.photo_url ? `<div style="width:100%;height:110px;overflow:hidden;background:#f3f4f6">
+    <img src="${p.photo_url}" style="width:100%;height:100%;object-fit:cover;object-position:${p.photo_position||'50% 50%'}" crossorigin="anonymous" />
+  </div>` : '<div style="width:100%;height:60px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;font-size:22px">📷</div>'}
+  <div style="padding:8px 10px">
+    <div class="top3-rank" style="font-size:16px">${['1°','2°','3°'][i]}</div>
+    <div class="top3-account">@${p.account_name||'—'}</div>
+    <div class="top3-ttl">${p.title||Object.keys(p.network_stats||{}).join(', ')||'—'}</div>
+    <div class="top3-stats"><span class="tv">V: ${p._stats.views.toLocaleString()}</span><span class="tl">L: ${p._stats.likes.toLocaleString()}</span><span class="tc">C: ${p._stats.comments.toLocaleString()}</span></div>
+    <div style="font-size:9px;color:#9ca3af;margin-top:4px">${p.date?.slice(5)??''}</div>
+  </div>
+</div>`).join('')}
+</div>
+<div class="bd-grid">
+  <div><div class="bd-title">Por cuenta</div>${Object.entries(mktByAcc).map(([acc,cnt])=>`<div class="bd-row"><span>@${acc}</span><span class="bd-val">${cnt}</span></div>`).join('')}</div>
+  <div><div class="bd-title">Por red social</div>${Object.entries(mktByNet).sort((a,b)=>b[1].posts-a[1].posts).map(([net,d])=>`<div class="bd-row"><span>${net}</span><span class="bd-val">${d.posts}p</span></div><div style="font-size:9px;color:#6b7280;padding:0 0 4px 8px"><span class="tv">V: ${d.views.toLocaleString()}</span> &nbsp; <span class="tl">L: ${d.likes.toLocaleString()}</span></div>`).join('')}</div>
+  <div><div class="bd-title">Por categoría</div>${Object.entries(mktByCat).sort((a,b)=>b[1]-a[1]).map(([cat,cnt])=>{const pct=mkts.length>0?(cnt/mkts.length)*100:0;return `<div class="bd-row"><span>${cat}</span><span class="bd-val">${cnt}</span></div><div style="background:#f3f4f6;border-radius:2px;height:6px;margin-bottom:4px"><div style="width:${pct.toFixed(0)}%;height:100%;background:#6366f1;border-radius:2px"></div></div>`;}).join('')}</div>
+</div>
+<div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Detalle de publicaciones</div>
+<table>
+  <tr><th>Fecha</th><th>Cuenta</th><th>Redes</th><th style="text-align:right">Likes</th><th style="text-align:right">Com.</th><th style="text-align:right">Vistas</th></tr>
+  ${mkts.map((p:any)=>{const s=getStatsF(p.network_stats);const nets=p.network_stats?Object.keys(p.network_stats).join(', '):(p.networks||[]).join(', ');return `<tr><td>${p.date?.slice(5)??''}</td><td>@${p.account_name||''}</td><td style="color:#666">${nets}</td><td class="r">${s.likes.toLocaleString()}</td><td class="r">${s.comments.toLocaleString()}</td><td class="r">${s.views.toLocaleString()}</td></tr>`;}).join('')}
+</table>
+</div>` : `
+<div class="sec">
+<div class="sec-title">Marketing — Redes Sociales</div>
+<p style="color:#aaa;font-size:11px">Sin publicaciones registradas este mes.</p>
+</div>`}
+
+<div class="footer">Generado: ${generatedDate}</div>
+</body></html>`;
+
+      const win = window.open('', '_blank', 'width=960,height=750');
+      if (win) { win.document.write(html); win.document.close(); }
     } catch (e: any) {
       setFamiliarError(e.message ?? 'Error generando PDF');
     } finally {

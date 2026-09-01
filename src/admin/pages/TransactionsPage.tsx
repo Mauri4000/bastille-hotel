@@ -126,6 +126,15 @@ export default function TransactionsPage() {
   const [vitrinaSaleProductId, setVitrinaSaleProductId] = useState<string | null>(null);
   const [vitrinaSellQty,       setVitrinaSellQty]       = useState(1);
 
+  // Traspaso de caja
+  const TRASPASO_CAJAS = ['CAJA MAYOR', 'CAJA CHICA'] as const;
+  type TraspasoType = 'CAJA MAYOR' | 'CAJA CHICA';
+  const TRASPASO_AUTORIZA = ['Don Guido', 'Doña Sonia', 'Don Mauri'] as const;
+  const [isTraspaso,      setIsTraspaso]      = useState(false);
+  const [traspasoFrom,    setTraspasoFrom]    = useState<TraspasoType>('CAJA MAYOR');
+  const [traspasoTo,      setTraspasoTo]      = useState<TraspasoType>('CAJA CHICA');
+  const [traspasoAutoriza,setTraspasoAutoriza]= useState<string>('Don Guido');
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     const firstDay = `${year}-${String(month + 1).padStart(2,'0')}-01`;
@@ -236,8 +245,8 @@ export default function TransactionsPage() {
     : filtered
   ).filter(t => !isShiftRef(t));
 
-  const totalIncome  = filteredCash.filter(t => t.type === 'ingreso').reduce((s, t) => s + t.amount, 0);
-  const totalExpense = filteredCash.filter(t => t.type === 'egreso').reduce((s, t) => s + t.amount, 0);
+  const totalIncome  = filteredCash.filter(t => t.type === 'ingreso' && t.category !== 'TRASPASO DE CAJA').reduce((s, t) => s + t.amount, 0);
+  const totalExpense = filteredCash.filter(t => t.type === 'egreso'  && t.category !== 'TRASPASO DE CAJA').reduce((s, t) => s + t.amount, 0);
   const balance      = totalIncome - totalExpense;
 
   // Per-caja monthly balances (using already-loaded month transactions, no all-time fetch needed)
@@ -265,6 +274,10 @@ export default function TransactionsPage() {
     setOccupiedRooms([]);
     setVitrinaSaleProductId(null);
     setVitrinaSellQty(1);
+    setIsTraspaso(false);
+    setTraspasoFrom('CAJA MAYOR');
+    setTraspasoTo('CAJA CHICA');
+    setTraspasoAutoriza('Don Guido');
     setModalOpen(true);
   }
 
@@ -293,6 +306,32 @@ export default function TransactionsPage() {
 
   // ── save ──
   async function handleSave() {
+    // ── Traspaso de caja ──
+    if (isTraspaso) {
+      if (!form.amount || parseFloat(form.amount) <= 0) { setFormError('Ingresa un monto válido.'); return; }
+      if (traspasoFrom === traspasoTo) { setFormError('Origen y destino no pueden ser iguales.'); return; }
+      setSaving(true); setFormError('');
+      const amt = parseFloat(form.amount);
+      const dateVal = form.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+      const autDesc = traspasoAutoriza ? ` Aut. ${traspasoAutoriza}` : '';
+      const descFrom = form.description?.trim()
+        ? `${form.description} - ${CAJA_LABEL[traspasoTo]}${autDesc}`
+        : `Traspaso a ${CAJA_LABEL[traspasoTo]}${autDesc}`;
+      const descTo = form.description?.trim()
+        ? `${form.description} - desde ${CAJA_LABEL[traspasoFrom]}${autDesc}`
+        : `Traspaso desde ${CAJA_LABEL[traspasoFrom]}${autDesc}`;
+      const { error } = await supabase.from('transactions').insert([
+        { date: dateVal, time: form.time||null, type: 'egreso',  amount: amt, category: 'TRASPASO DE CAJA', caja: traspasoFrom, description: descFrom, responsible_id: profile?.id ?? null },
+        { date: dateVal, time: form.time||null, type: 'ingreso', amount: amt, category: 'TRASPASO DE CAJA', caja: traspasoTo,   description: descTo,   responsible_id: profile?.id ?? null },
+      ]);
+      setSaving(false);
+      if (error) { setFormError('Error: ' + error.message); return; }
+      await logActivity(profile?.id, profile?.name, 'Traspaso de caja', 'transaction', undefined, `Bs. ${amt} de ${CAJA_LABEL[traspasoFrom]} → ${CAJA_LABEL[traspasoTo]}`);
+      setModalOpen(false);
+      fetchData();
+      return;
+    }
+
     if (!form.amount || parseFloat(form.amount) <= 0) { setFormError('Ingresa un monto válido.'); return; }
     if (!form.category) { setFormError('Selecciona una categoría.'); return; }
 
@@ -767,9 +806,9 @@ export default function TransactionsPage() {
                 {(['ingreso', 'egreso'] as TransactionType[]).map(t => (
                   <button
                     key={t}
-                    onClick={() => setForm(f => ({ ...f, type: t, category: '' }))}
+                    onClick={() => { setIsTraspaso(false); setForm(f => ({ ...f, type: t, category: '' })); }}
                     className={`flex-1 py-2 rounded-md text-sm font-semibold transition-colors capitalize ${
-                      form.type === t
+                      !isTraspaso && form.type === t
                         ? t === 'ingreso'
                           ? 'bg-green-500 text-white'
                           : 'bg-red-500 text-white'
@@ -779,7 +818,56 @@ export default function TransactionsPage() {
                     {t === 'ingreso' ? '↑ Ingreso' : '↓ Egreso'}
                   </button>
                 ))}
+                {!editingTxId && (
+                  <button
+                    onClick={() => setIsTraspaso(true)}
+                    className={`flex-1 py-2 rounded-md text-sm font-semibold transition-colors ${
+                      isTraspaso ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-50'
+                    }`}
+                  >
+                    ⇄ Traspaso
+                  </button>
+                )}
               </div>
+
+              {/* Traspaso form */}
+              {isTraspaso && (
+                <div className="space-y-3 bg-blue-50 rounded-xl p-4 border border-blue-100">
+                  <p className="text-xs text-blue-700 font-medium">Mueve dinero entre cajas. Se crea un egreso en origen y un ingreso en destino automáticamente.</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">De (origen)</label>
+                      <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                        value={traspasoFrom} onChange={e => setTraspasoFrom(e.target.value as TraspasoType)}>
+                        {TRASPASO_CAJAS.map(c => <option key={c} value={c}>{CAJA_LABEL[c]}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">A (destino)</label>
+                      <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                        value={traspasoTo} onChange={e => setTraspasoTo(e.target.value as TraspasoType)}>
+                        {TRASPASO_CAJAS.map(c => <option key={c} value={c}>{CAJA_LABEL[c]}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Autorizó</label>
+                    <div className="flex gap-2">
+                      {TRASPASO_AUTORIZA.map(name => (
+                        <button key={name} type="button"
+                          onClick={() => setTraspasoAutoriza(name)}
+                          className={`flex-1 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                            traspasoAutoriza === name
+                              ? 'bg-blue-500 border-blue-500 text-white'
+                              : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                          }`}>
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Date + time */}
               <div className="grid grid-cols-2 gap-3">
@@ -803,13 +891,13 @@ export default function TransactionsPage() {
                 />
               </div>
 
-              {/* Category */}
-              <div>
+              {/* Category — hidden in traspaso mode */}
+              {!isTraspaso && <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Categoría *</label>
                 <CustomSelect value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))}
                   options={categories.map(c => ({ value: c, label: c }))}
                   placeholder="— Seleccionar —" />
-              </div>
+              </div>}
 
               {/* Servicios Básicos sub-selector */}
               {form.category === 'B03-SERVICIOS BÁSICOS' && (
@@ -924,8 +1012,8 @@ export default function TransactionsPage() {
               )}
 
 
-              {/* Caja */}
-              <div>
+              {/* Caja — hidden in traspaso mode (from/to already chosen above) */}
+              {!isTraspaso && <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Caja</label>
                 <CustomSelect value={form.caja} onChange={v => setForm(f => ({ ...f, caja: v as CajaType }))}
                   options={CAJAS.map(c => ({ value: c, label: c }))}
@@ -943,7 +1031,7 @@ export default function TransactionsPage() {
                     🏦 Enviar a Personal BNB
                   </button>
                 )}
-              </div>
+              </div>}
 
               {/* Description */}
               <div>
