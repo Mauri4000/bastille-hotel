@@ -680,7 +680,7 @@ export default function ReportesPage() {
   const [familiarLoad,  setFamiliarLoad]  = useState(false);
   const [familiarError, setFamiliarError] = useState<string | null>(null);
 
-  async function handleGenerarFamiliar() {
+  async function handleGenerarFamiliar(landscape = false) {
     setFamiliarLoad(true); setFamiliarError(null);
     try {
       const [yearS, monthS] = familiarMonth.split('-');
@@ -821,8 +821,6 @@ export default function ReportesPage() {
 
       // ── Ingresos VARIOS detail ────────────────────────────────────────────────
       const variosTxs = ingresos.filter((t:any) => t.category === 'VARIOS');
-      const otrosTxs  = ingresos.filter((t:any) => !['H01-HOSPEDAJE','SALDO DEL MES ANTERIOR','VARIOS'].includes(t.category||''))
-                                .sort((a:any,b:any) => b.amount - a.amount).slice(0,6);
 
       // ── Limpiezas stats ──────────────────────────────────────────────────────
       // assigned_to can be "Carla & Arlet" — split by " & "
@@ -869,21 +867,6 @@ export default function ReportesPage() {
       // ── SVG chart helpers ────────────────────────────────────────────────────
       const fmtN = (n: number) => n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 
-      function hBar(entries: [string,number][], maxVal: number, barColor: string, h: number): string {
-        const rowH = 22, pad = 4, labelW = 160, barMaxW = 280, valW = 80;
-        const W = labelW + barMaxW + valW + pad*3;
-        const H = entries.length * rowH + pad*2;
-        let rows = '';
-        entries.forEach(([label, val], i) => {
-          const y = pad + i * rowH;
-          const bw = maxVal > 0 ? (val / maxVal) * barMaxW : 0;
-          const truncLabel = label.length > 24 ? label.slice(0,22)+'…' : label;
-          rows += `<rect x="${labelW+pad}" y="${y+3}" width="${bw.toFixed(1)}" height="${rowH-8}" fill="${barColor}" rx="3"/>`;
-          rows += `<text x="${labelW}" y="${y+rowH/2+4}" text-anchor="end" font-size="9" fill="#555" font-family="Helvetica">${truncLabel}</text>`;
-          rows += `<text x="${labelW+pad+bw+4}" y="${y+rowH/2+4}" font-size="9" fill="#333" font-family="Helvetica">Bs. ${fmtN(val)}</text>`;
-        });
-        return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${Math.max(H,h)}">${rows}</svg>`;
-      }
 
       function pieChart(slices: {label:string;val:number;color:string}[], size=120): string {
         const total = slices.reduce((s,x) => s+x.val, 0);
@@ -980,7 +963,7 @@ export default function ReportesPage() {
       const CSS = `
 *{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
 body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a1a;background:#fff;padding:28px;font-size:11px}
-@media print{body{padding:0;font-size:9.5px}@page{size:A4;margin:10mm}.no-print{display:none!important}.pie-wrap{display:none!important}.fin-grid{grid-template-columns:1fr!important}}
+@media print{body{padding:0;font-size:9.5px}@page{size:${landscape ? 'A4 landscape' : 'A4'};margin:${landscape ? '8mm' : '10mm'}}.no-print{display:none!important}.pie-wrap{display:none!important}.fin-grid{grid-template-columns:1fr!important}${landscape ? '.cat-grid{display:block!important;columns:4!important;column-gap:8px!important;margin-top:8px}.cat-detail{break-inside:avoid;display:block;margin-bottom:6px}' : ''}}
 h1{font-size:19px;font-weight:800;letter-spacing:.5px}
 .sub{font-size:12px;color:#666;margin-top:3px;margin-bottom:14px;padding-bottom:8px;border-bottom:3px solid #1a1a1a}
 .sec{margin-bottom:16px}
@@ -1025,6 +1008,7 @@ td{padding:3px 6px;border-bottom:1px solid #f3f4f6}
 .bd-title{font-size:9px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
 .bd-row{display:flex;justify-content:space-between;font-size:9px;color:#6b7280;padding:2px 0;border-bottom:1px solid #f3f4f6}
 .bd-val{font-weight:700;color:#1f2937}
+.sec-banner{text-align:center;font-size:13px;font-weight:900;letter-spacing:2px;text-transform:uppercase;padding:6px 0;margin:18px 0 10px;border-top:2px solid currentColor;border-bottom:2px solid currentColor}
 .footer{text-align:right;font-size:8px;color:#9ca3af;margin-top:16px;padding-top:6px;border-top:1px solid #e5e7eb}
 .print-btn{position:fixed;top:20px;right:20px;background:#1d4ed8;color:#fff;border:none;padding:10px 22px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.2)}
 @media print{.print-btn{display:none}}
@@ -1036,8 +1020,11 @@ td{padding:3px 6px;border-bottom:1px solid #f3f4f6}
 <title>Reporte Familiar — ${monthLabel}</title>
 <style>${CSS}</style></head><body>
 <button class="print-btn no-print" onclick="window.print()">Imprimir / PDF</button>
-<h1>HOTEL BASTILLE — REPORTE FAMILIAR</h1>
-<div class="sub">${monthLabel.toUpperCase()}</div>
+<div style="text-align:center;margin-bottom:4px">
+  <div style="font-size:9px;font-weight:600;letter-spacing:3px;text-transform:uppercase;color:#666">REPORTE FAMILIAR</div>
+  <h1 style="font-size:28px;font-weight:900;letter-spacing:1px;line-height:1">BASTILLE HOTEL</h1>
+</div>
+<div class="sub" style="text-align:center">${monthLabel.toUpperCase()}</div>
 
 <!-- 1. RESUMEN FINANCIERO -->
 <div class="sec">
@@ -1061,6 +1048,7 @@ td{padding:3px 6px;border-bottom:1px solid #f3f4f6}
 </div>
 </div>
 
+<div class="sec-banner" style="color:#16a34a">INGRESOS</div>
 <!-- 2. INGRESOS POR CATEGORÍA -->
 <div class="sec">
 <div class="sec-title">Ingresos por Categoría</div>
@@ -1073,6 +1061,7 @@ ${incCatSorted.length
   : ''}
 </div>
 
+<div class="sec-banner" style="color:#dc2626">EGRESOS</div>
 <!-- 3. EGRESOS POR CATEGORÍA -->
 <div class="sec">
 <div class="sec-title">Egresos por Categoría</div>
@@ -1088,12 +1077,10 @@ ${egrCatSorted.length
 <!-- 3b. SUELDOS Y SERVICIOS BÁSICOS -->
 <div class="sec">
 <div class="sec-title">Sueldos y Servicios Básicos</div>
-<table>
-  <tr><td class="bold red">B05 — Sueldos y Salarios</td><td class="r bold red">Bs. ${fmtN(sueldos)}</td></tr>
-  ${egresos.filter((t:any)=>t.category==='B05-SUELDOS Y SALARIOS').map((t:any)=>`<tr><td style="padding-left:16px;color:#666">${t.description||'—'}</td><td class="r" style="color:#666">Bs. ${fmtN(t.amount)}</td></tr>`).join('')}
-  <tr><td class="bold red">B03 — Servicios Básicos</td><td class="r bold red">Bs. ${fmtN(servicios)}</td></tr>
-  ${egresos.filter((t:any)=>t.category==='B03-SERVICIOS BÁSICOS').map((t:any)=>`<tr><td style="padding-left:16px;color:#666">${t.description||'—'}</td><td class="r" style="color:#666">Bs. ${fmtN(t.amount)}</td></tr>`).join('')}
-</table>
+<div class="cat-grid">
+  ${catDetailHtml('B05-SUELDOS Y SALARIOS', 'egreso')}
+  ${catDetailHtml('B03-SERVICIOS BÁSICOS', 'egreso')}
+</div>
 </div>
 
 <!-- 4. HUÉSPEDES -->
@@ -1215,6 +1202,7 @@ ${variosTxs.length ? `<div class="sec">
 </table>
 </div>` : ''}
 
+<div class="sec-banner" style="color:#7c3aed">LIMPIEZAS — CAMARERAS</div>
 <!-- 6. LIMPIEZAS -->
 <div class="sec">
 <div class="sec-title">Limpiezas por Persona</div>
@@ -1252,6 +1240,7 @@ ${Object.keys(generalTasksByCleaner).length ? `
 
 <!-- 8. MARKETING -->
 ${mkts.length > 0 ? `
+<div class="sec-banner" style="color:#6366f1">MARKETING — REDES SOCIALES</div>
 <div class="sec">
 <div class="sec-title">Marketing — Redes Sociales</div>
 <div class="mkt-stat-grid" style="grid-template-columns:repeat(${mktColCount},1fr)">
@@ -1287,6 +1276,7 @@ ${mktTop3.map((p:any,i:number)=>`<div class="top3-card" style="border-top-color:
   ${mkts.map((p:any)=>{const s=getStatsF(p.network_stats);const nets=p.network_stats?Object.keys(p.network_stats).join(', '):(p.networks||[]).join(', ');return `<tr><td>${p.date?.slice(5)??''}</td><td>@${p.account_name||''}</td><td style="color:#666">${nets}</td><td class="r">${s.likes.toLocaleString()}</td><td class="r">${s.comments.toLocaleString()}</td><td class="r">${s.views.toLocaleString()}</td></tr>`;}).join('')}
 </table>
 </div>` : `
+<div class="sec-banner" style="color:#6366f1">MARKETING — REDES SOCIALES</div>
 <div class="sec">
 <div class="sec-title">Marketing — Redes Sociales</div>
 <p style="color:#aaa;font-size:11px">Sin publicaciones registradas este mes.</p>
@@ -1783,14 +1773,24 @@ ${mktTop3.map((p:any,i:number)=>`<div class="top3-card" style="border-top-color:
             />
           </div>
           <button
-            onClick={handleGenerarFamiliar}
+            onClick={() => handleGenerarFamiliar(false)}
             disabled={familiarLoad}
             className="flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-semibold hover:bg-amber-600 disabled:opacity-50 transition-colors"
           >
             {familiarLoad
               ? <RefreshCw size={14} className="animate-spin" />
               : <Download size={14} />}
-            {familiarLoad ? 'Generando…' : 'Descargar PDF'}
+            {familiarLoad ? 'Generando…' : 'PDF Vertical'}
+          </button>
+          <button
+            onClick={() => handleGenerarFamiliar(true)}
+            disabled={familiarLoad}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-semibold hover:bg-blue-600 disabled:opacity-50 transition-colors"
+          >
+            {familiarLoad
+              ? <RefreshCw size={14} className="animate-spin" />
+              : <Download size={14} />}
+            {familiarLoad ? 'Generando…' : 'PDF Horizontal'}
           </button>
           {familiarError && (
             <div className="flex items-center gap-2 text-red-600 text-sm">

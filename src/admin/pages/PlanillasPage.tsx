@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, X, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, X } from 'lucide-react';
 
 const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
@@ -51,7 +51,6 @@ function EntryModal({ entry, onClose, onSave }: {
   onSave: (data: Omit<Entry,'id'>, id?: string) => void;
 }) {
   const isNew = !entry?.id;
-  const today = new Date();
   const [form, setForm] = useState<Omit<Entry,'id'>>(
     entry ? { ...empty(), ...entry } : empty()
   );
