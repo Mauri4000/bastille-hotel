@@ -412,6 +412,28 @@ export default function CalendarPage() {
   // Note tooltip (Excel-style hover)
   const [noteTooltip, setNoteTooltip] = useState<{ notes: string; x: number; y: number } | null>(null);
 
+  // ── Multi-room reservation handler ──
+  async function handleSaveMultiRoom() {
+    if (!multiRoomModal) return;
+    const { checkIn, checkOut, guestName, numGuests, pricePerNight, selectedRooms } = multiRoomModal;
+    if (!guestName.trim()) { setMultiRoomModal(m => m ? { ...m, error: 'Ingresa el nombre de la reserva.' } : m); return; }
+    if (!checkIn || !checkOut || checkIn >= checkOut) { setMultiRoomModal(m => m ? { ...m, error: 'Fechas inválidas.' } : m); return; }
+    if (selectedRooms.size === 0) { setMultiRoomModal(m => m ? { ...m, error: 'Selecciona al menos una habitación.' } : m); return; }
+    setMultiRoomModal(m => m ? { ...m, saving: true, error: '' } : m);
+    const price = parseFloat(pricePerNight) || 0;
+    const rows = Array.from(selectedRooms).map(roomId => ({
+      room_id: roomId, guest_name: guestName.trim(),
+      num_guests: numGuests, check_in: checkIn, check_out: checkOut,
+      status: 'reserva' as ReservationStatus, price_per_night: price,
+    }));
+    const { error } = await supabase.from('reservations').insert(rows);
+    if (error) { setMultiRoomModal(m => m ? { ...m, saving: false, error: error.message } : m); return; }
+    logActivity(profile?.id, profile?.name, 'Reserva múltiple creada', 'reservation', undefined,
+      `${Array.from(selectedRooms).join(', ')} — ${guestName} (${checkIn} → ${checkOut})`);
+    setMultiRoomModal(null);
+    fetchData();
+  }
+
   // Pagos Pendientes panel
   const [pagosOpen, setPagosOpen] = useState(false);
   type PagoRow = { res: Reservation; total: number; paid: number; pending: number; vitrinaItems: PendingVitrinaItem[]; vitrinaTotal: number };
@@ -555,6 +577,11 @@ export default function CalendarPage() {
   const [quickMenu, setQuickMenu] = useState<{ roomId: string; day: number; x: number; y: number } | null>(null);
   // Context menu when clicking a filled card
   const [cardMenu, setCardMenu] = useState<{ res: Reservation; x: number; y: number } | null>(null);
+  // Multi-room reservation modal
+  const [multiRoomModal, setMultiRoomModal] = useState<{
+    checkIn: string; checkOut: string; guestName: string; numGuests: number;
+    pricePerNight: string; selectedRooms: Set<string>; saving: boolean; error: string;
+  } | null>(null);
   // Mantenimiento creation form
   const [maintenanceForm, setMaintenanceForm] = useState<{ roomId: string; day: number; detail: string; endDate: string } | null>(null);
 
@@ -1178,6 +1205,11 @@ export default function CalendarPage() {
       checkoutPaidVitrina: [],
       prevRoomInfo,
     });
+    // Seed pendingVitrina from DB cart (so any user sees what Mariana/etc added)
+    const dbCart: PendingVitrinaItem[] = (res as any).vitrina_cart ?? [];
+    if (dbCart.length > 0 && !(pendingVitrina[res.id]?.length)) {
+      setPendingVitrina(prev => ({ ...prev, [res.id]: dbCart }));
+    }
   }
 
   async function cancelCheckout() {
@@ -1237,6 +1269,7 @@ export default function CalendarPage() {
       invoice_number:  checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
       is_blacklist:    checkoutModal.is_blacklist,
       night_prices:    checkoutModal.checkoutNightPrices.length > 0 ? checkoutModal.checkoutNightPrices : null,
+      vitrina_cart:    [],
       updated_at:      new Date().toISOString(),
     }).eq('id', res.id);
 
@@ -1345,7 +1378,10 @@ export default function CalendarPage() {
     });
     const { data: prod } = await supabase.from('vitrina_products').select('quantity').eq('id', item.productId).single();
     if (prod) await supabase.from('vitrina_products').update({ quantity: Math.max(0, prod.quantity - item.qty), updated_at: new Date().toISOString() }).eq('id', item.productId);
-    setPendingVitrina(prev => ({ ...prev, [res.id]: (prev[res.id] ?? []).filter(i => i.productId !== item.productId) }));
+    const newCart = (pendingVitrina[res.id] ?? []).filter(i => i.productId !== item.productId);
+    setPendingVitrina(prev => ({ ...prev, [res.id]: newCart }));
+    // Sync removed item back to DB
+    supabase.from('reservations').update({ vitrina_cart: newCart, updated_at: new Date().toISOString() }).eq('id', res.id);
     setCheckoutModal(m => ({ ...m, checkoutPaidVitrina: [...m.checkoutPaidVitrina, item] }));
     logActivity(profile?.id, profile?.name, 'Vitrina pagada', 'transaction', res.id,
       `${item.productName}${item.qty > 1 ? ` x${item.qty}` : ''} — ${res.room_id} Bs. ${item.total.toFixed(2)}`);
@@ -3793,7 +3829,7 @@ export default function CalendarPage() {
                 🔄 Cambiar habitación
               </button>
             </>)}
-            {cardMenu.res.status === 'reserva' && (
+            {cardMenu.res.status === 'reserva' && (<>
               <button onClick={() => {
                 const now = new Date();
                 const d = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
@@ -3803,7 +3839,11 @@ export default function CalendarPage() {
               }} className="w-full text-left px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-50">
                 💵 Adelanto
               </button>
-            )}
+              <button onClick={() => { openRoomChange(cardMenu.res); setCardMenu(null); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50">
+                🔄 Cambiar habitación
+              </button>
+            </>)}
             {cardMenu.res.status === 'limpieza' && (
               <button onClick={async () => {
                 await supabase.from('reservations').delete().eq('id', cardMenu.res.id);
@@ -3884,6 +3924,14 @@ export default function CalendarPage() {
             <button onClick={() => openNew(quickMenu.roomId, quickMenu.day, 'reserva', 'reserva')}
               className="w-full text-left px-4 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-50">
               📅 Reserva
+            </button>
+            <button onClick={() => {
+              const date = toDateStr(new Date(year, month, quickMenu.day));
+              const next = toDateStr(new Date(year, month, quickMenu.day + 1));
+              setMultiRoomModal({ checkIn: date, checkOut: next, guestName: '', numGuests: 1, pricePerNight: '', selectedRooms: new Set([quickMenu.roomId]), saving: false, error: '' });
+              setQuickMenu(null);
+            }} className="w-full text-left px-4 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-50">
+              🏨 Reserva varias habitaciones
             </button>
             <button onClick={() => openNew(quickMenu.roomId, quickMenu.day, 'ocupado', 'directo')}
               className="w-full text-left px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-50">
@@ -4003,20 +4051,20 @@ export default function CalendarPage() {
         <VitrinaProductPicker
           onClose={() => setVitrinaSaleRes(null)}
           onConfirm={(items: VitrinaCartItem[]) => {
-            const res = vitrinaSaleRes;
-            setPendingVitrina(prev => {
-              const existing = prev[res.id] ?? [];
-              const merged = [...existing];
-              for (const item of items) {
-                const idx = merged.findIndex(m => m.productId === item.product.id);
-                if (idx >= 0) {
-                  merged[idx] = { ...merged[idx], qty: merged[idx].qty + item.qty, total: merged[idx].total + item.total };
-                } else {
-                  merged.push({ productId: item.product.id, productName: item.product.name, price: item.product.price, qty: item.qty, total: item.total, caja: item.caja });
-                }
+            const res = vitrinaSaleRes!;
+            const existing = pendingVitrina[res.id] ?? [];
+            const merged = [...existing];
+            for (const item of items) {
+              const idx = merged.findIndex(m => m.productId === item.product.id);
+              if (idx >= 0) {
+                merged[idx] = { ...merged[idx], qty: merged[idx].qty + item.qty, total: merged[idx].total + item.total };
+              } else {
+                merged.push({ productId: item.product.id, productName: item.product.name, price: item.product.price, qty: item.qty, total: item.total, caja: item.caja });
               }
-              return { ...prev, [res.id]: merged };
-            });
+            }
+            setPendingVitrina(prev => ({ ...prev, [res.id]: merged }));
+            // Persist cart to DB so other users (other browsers/sessions) see it
+            supabase.from('reservations').update({ vitrina_cart: merged, updated_at: new Date().toISOString() }).eq('id', res.id);
             logActivity(profile?.id, profile?.name, 'Vitrina al carrito', 'transaction', res.id,
               `${items.map(i => `${i.product.name}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ')} — ${res.room_id} ${res.guest_name}`);
             setVitrinaSaleRes(null);
@@ -4728,10 +4776,11 @@ export default function CalendarPage() {
             style={{ top: quickMenu.y + 4, left: Math.min(quickMenu.x, window.innerWidth - 184) }}
           >
             {[
-              { label: '📅 Reserva',         action: () => openNew(quickMenu.roomId, quickMenu.day, 'reserva', 'reserva') },
-              { label: '✅ Check-in directo', action: () => openNew(quickMenu.roomId, quickMenu.day, 'ocupado', 'directo') },
-              { label: '🔧 Mantenimiento',   action: () => { setMaintenanceForm({ roomId: quickMenu.roomId, day: quickMenu.day, detail: '', endDate: toDateStr(new Date(year, month, quickMenu.day + 1)) }); setQuickMenu(null); } },
-              { label: '🧹 Habilitación',    action: () => quickCreateStatus(quickMenu.roomId, quickMenu.day, 'habilitacion', 'Habilitación') },
+              { label: '📅 Reserva',                     action: () => openNew(quickMenu.roomId, quickMenu.day, 'reserva', 'reserva') },
+              { label: '🏨 Reserva varias habitaciones', action: () => { const date = toDateStr(new Date(year, month, quickMenu.day)); const next = toDateStr(new Date(year, month, quickMenu.day + 1)); setMultiRoomModal({ checkIn: date, checkOut: next, guestName: '', numGuests: 1, pricePerNight: '', selectedRooms: new Set([quickMenu.roomId]), saving: false, error: '' }); setQuickMenu(null); } },
+              { label: '✅ Check-in directo',             action: () => openNew(quickMenu.roomId, quickMenu.day, 'ocupado', 'directo') },
+              { label: '🔧 Mantenimiento',               action: () => { setMaintenanceForm({ roomId: quickMenu.roomId, day: quickMenu.day, detail: '', endDate: toDateStr(new Date(year, month, quickMenu.day + 1)) }); setQuickMenu(null); } },
+              { label: '🧹 Habilitación',                action: () => quickCreateStatus(quickMenu.roomId, quickMenu.day, 'habilitacion', 'Habilitación') },
             ].map(opt => (
               <button
                 key={opt.label}
@@ -4774,6 +4823,118 @@ export default function CalendarPage() {
               <button onClick={handleSaveNota}
                 className="px-5 py-2 text-sm font-semibold bg-indigo-500 hover:bg-indigo-400 text-white rounded-lg">
                 Guardar nota
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Multi-room reservation modal ── */}
+      {multiRoomModal && (
+        <div className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-amber-50 rounded-t-2xl flex-shrink-0">
+              <div>
+                <h3 className="font-bold text-gray-900">🏨 Reserva varias habitaciones</h3>
+                <p className="text-xs text-amber-700 font-semibold mt-0.5">Una reserva bajo el mismo nombre</p>
+              </div>
+              <button onClick={() => setMultiRoomModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4 overflow-y-auto">
+              {/* Guest name */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Nombre de la reserva *</label>
+                <input
+                  type="text"
+                  value={multiRoomModal.guestName}
+                  onChange={e => setMultiRoomModal(m => m ? { ...m, guestName: e.target.value } : m)}
+                  placeholder="Ej: Empresa XYZ / Juan Pérez"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+              </div>
+
+              {/* Dates */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Check-in *</label>
+                  <DatePicker value={multiRoomModal.checkIn} accentClass="border-amber-400 ring-amber-100" useFixed
+                    onChange={v => setMultiRoomModal(m => m ? { ...m, checkIn: v } : m)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Check-out *</label>
+                  <DatePicker value={multiRoomModal.checkOut} accentClass="border-amber-400 ring-amber-100" useFixed
+                    onChange={v => setMultiRoomModal(m => m ? { ...m, checkOut: v } : m)} />
+                </div>
+              </div>
+
+              {/* Guests + Price */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Huéspedes por hab.</label>
+                  <input type="number" min={1} value={multiRoomModal.numGuests}
+                    onChange={e => setMultiRoomModal(m => m ? { ...m, numGuests: parseInt(e.target.value) || 1 } : m)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Precio/noche (Bs.)</label>
+                  <input type="number" min={0} step={0.01} value={multiRoomModal.pricePerNight}
+                    onChange={e => setMultiRoomModal(m => m ? { ...m, pricePerNight: e.target.value } : m)}
+                    placeholder="0.00"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                </div>
+              </div>
+
+              {/* Room selector */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Habitaciones <span className="text-amber-600 font-bold">({multiRoomModal.selectedRooms.size} seleccionada{multiRoomModal.selectedRooms.size !== 1 ? 's' : ''})</span>
+                </label>
+                <div className="grid grid-cols-3 gap-2 max-h-52 overflow-y-auto">
+                  {rooms.filter(r => r.id !== 'SALON').map(r => {
+                    const checked = multiRoomModal.selectedRooms.has(r.id);
+                    return (
+                      <button key={r.id} type="button"
+                        onClick={() => setMultiRoomModal(m => {
+                          if (!m) return m;
+                          const next = new Set(m.selectedRooms);
+                          if (next.has(r.id)) next.delete(r.id); else next.add(r.id);
+                          return { ...m, selectedRooms: next };
+                        })}
+                        className={`text-left px-3 py-2 rounded-xl border-2 transition-all text-xs ${
+                          checked ? 'border-amber-500 bg-amber-50 font-bold text-amber-800' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                        }`}>
+                        <div className="font-semibold">{r.id}</div>
+                        <div className="text-[10px] opacity-70 truncate">{r.type}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {multiRoomModal.error && (
+                <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  ⚠️ {multiRoomModal.error}
+                </p>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+              <button onClick={() => setMultiRoomModal(null)}
+                className="flex-1 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                disabled={multiRoomModal.saving || multiRoomModal.selectedRooms.size === 0}
+                onClick={handleSaveMultiRoom}
+                className="flex-1 py-2 text-sm font-semibold bg-amber-500 hover:bg-amber-400 text-white rounded-lg disabled:opacity-40 flex items-center justify-center gap-2">
+                {multiRoomModal.saving
+                  ? <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Guardando...</>
+                  : `✓ Reservar ${multiRoomModal.selectedRooms.size} hab.`}
               </button>
             </div>
           </div>
