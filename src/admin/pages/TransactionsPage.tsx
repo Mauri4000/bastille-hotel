@@ -245,8 +245,13 @@ export default function TransactionsPage() {
     : filtered
   ).filter(t => !isShiftRef(t));
 
-  const totalIncome  = filteredCash.filter(t => t.type === 'ingreso' && t.category !== 'TRASPASO DE CAJA').reduce((s, t) => s + t.amount, 0);
-  const totalExpense = filteredCash.filter(t => t.type === 'egreso'  && t.category !== 'TRASPASO DE CAJA').reduce((s, t) => s + t.amount, 0);
+  // Traspasos only cancel out when viewing all cajas together (both legs — the egreso from
+  // the origin caja and the ingreso to the destination caja — are present, netting to zero).
+  // In a single-caja view (mayor/chica) only one leg appears, so it's real cash movement
+  // for that register and must be counted.
+  const excludeTraspaso = activeTab === 'all';
+  const totalIncome  = filteredCash.filter(t => t.type === 'ingreso' && (!excludeTraspaso || t.category !== 'TRASPASO DE CAJA')).reduce((s, t) => s + t.amount, 0);
+  const totalExpense = filteredCash.filter(t => t.type === 'egreso'  && (!excludeTraspaso || t.category !== 'TRASPASO DE CAJA')).reduce((s, t) => s + t.amount, 0);
   const balance      = totalIncome - totalExpense;
 
   // Per-caja monthly balances (using already-loaded month transactions, no all-time fetch needed)
