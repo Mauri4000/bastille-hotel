@@ -1384,8 +1384,8 @@ export default function CalendarPage() {
     if (prod) await supabase.from('vitrina_products').update({ quantity: Math.max(0, prod.quantity - item.qty), updated_at: new Date().toISOString() }).eq('id', item.productId);
     const newCart = (pendingVitrina[res.id] ?? []).filter(i => i.productId !== item.productId);
     setPendingVitrina(prev => ({ ...prev, [res.id]: newCart }));
-    // Sync removed item back to DB
-    supabase.from('reservations').update({ vitrina_cart: newCart, updated_at: new Date().toISOString() }).eq('id', res.id);
+    // Sync removed item back to DB (awaited so the request actually fires)
+    await supabase.from('reservations').update({ vitrina_cart: newCart, updated_at: new Date().toISOString() }).eq('id', res.id);
     setCheckoutModal(m => ({ ...m, checkoutPaidVitrina: [...m.checkoutPaidVitrina, item] }));
     logActivity(profile?.id, profile?.name, 'Vitrina pagada', 'transaction', res.id,
       `${item.productName}${item.qty > 1 ? ` x${item.qty}` : ''} — ${res.room_id} Bs. ${item.total.toFixed(2)}`);
@@ -4054,7 +4054,7 @@ export default function CalendarPage() {
       {vitrinaSaleRes && (
         <VitrinaProductPicker
           onClose={() => setVitrinaSaleRes(null)}
-          onConfirm={(items: VitrinaCartItem[]) => {
+          onConfirm={async (items: VitrinaCartItem[]) => {
             const res = vitrinaSaleRes!;
             const existing = pendingVitrina[res.id] ?? [];
             const merged = [...existing];
@@ -4068,7 +4068,7 @@ export default function CalendarPage() {
             }
             setPendingVitrina(prev => ({ ...prev, [res.id]: merged }));
             // Persist cart to DB so other users (other browsers/sessions) see it
-            supabase.from('reservations').update({ vitrina_cart: merged, updated_at: new Date().toISOString() }).eq('id', res.id);
+            await supabase.from('reservations').update({ vitrina_cart: merged, updated_at: new Date().toISOString() }).eq('id', res.id);
             logActivity(profile?.id, profile?.name, 'Vitrina al carrito', 'transaction', res.id,
               `${items.map(i => `${i.product.name}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ')} — ${res.room_id} ${res.guest_name}`);
             setVitrinaSaleRes(null);
