@@ -1078,6 +1078,10 @@ export default function CalendarPage() {
     e.stopPropagation();
     setMenuOpenId(null);
 
+    // Always re-fetch the reservation from DB to get fresh vitrina_cart and other fields
+    const { data: freshRes } = await supabase.from('reservations').select('*').eq('id', res.id).single();
+    if (freshRes) res = freshRes as any;
+
     let siaat   = (res as any).siaat_number   ?? '';
     let invoice = (res as any).invoice_number ?? '';
     let wantInv = res.wants_invoice ?? false;
