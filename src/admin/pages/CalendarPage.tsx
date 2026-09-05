@@ -193,6 +193,10 @@ export default function CalendarPage() {
     checkoutMascotaPaid:    0,
     checkoutMascotaPayAmt:  '',
     checkoutMascotaPayCaja: 'CAJA MAYOR' as string,
+    // desayuno extra
+    checkoutDesayunoPaid:    0,
+    checkoutDesayunoPayAmt:  '',
+    checkoutDesayunoPayCaja: 'CAJA MAYOR' as string,
     // per-night prices (editable breakdown)
     checkoutNightPrices: [] as number[],
     // vitrina items paid in this session (for Anular)
@@ -219,6 +223,13 @@ export default function CalendarPage() {
     res: Reservation; extra_price: string; caja: string;
   } | null>(null);
   const [pendingMascotaPrice, setPendingMascotaPrice] = useState<Record<string, string>>({});
+
+  // Desayuno extra popup (from card menu)
+  const [desayunoModal, setDesayunoModal] = useState<{
+    res: Reservation; qty: number; caja: string;
+  } | null>(null);
+  const DESAYUNO_PRICE = 30;
+  const [pendingDesayunoAmt, setPendingDesayunoAmt] = useState<Record<string, string>>({});
 
   // Adelanto popup (from card menu)
   const [adelantoModal, setAdelantoModal] = useState<{
@@ -1127,6 +1138,11 @@ export default function CalendarPage() {
       .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H05-MASCOTAS');
     const mascotaPaid = (mascotaTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
 
+    const { data: desayunoTxs } = await supabase
+      .from('transactions').select('amount')
+      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H06-DESAYUNO');
+    const desayunoPaid = (desayunoTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+
     const nights = Math.max(1, Math.round(
       (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
     ));
@@ -1205,13 +1221,16 @@ export default function CalendarPage() {
       checkoutMascotaPaid:    mascotaPaid,
       checkoutMascotaPayAmt:  pendingMascotaPrice[res.id] ?? '',
       checkoutMascotaPayCaja: 'CAJA MAYOR',
+      checkoutDesayunoPaid:    desayunoPaid,
+      checkoutDesayunoPayAmt:  pendingDesayunoAmt[res.id] || ((res as any).desayuno_pending > 0 ? String((res as any).desayuno_pending) : ''),
+      checkoutDesayunoPayCaja: 'CAJA MAYOR',
       checkoutNightPrices: nightPrices,
       checkoutPaidVitrina: [],
       prevRoomInfo,
     });
-    // Seed pendingVitrina from DB cart (so any user sees what Mariana/etc added)
+    // Seed pendingVitrina from DB cart (so any user sees what others added)
     const dbCart: PendingVitrinaItem[] = (res as any).vitrina_cart ?? [];
-    if (dbCart.length > 0 && !(pendingVitrina[res.id]?.length)) {
+    if (dbCart.length > 0) {
       setPendingVitrina(prev => ({ ...prev, [res.id]: dbCart }));
     }
   }
@@ -1485,6 +1504,40 @@ export default function CalendarPage() {
     logActivity(profile?.id, profile?.name, 'Pago anulado (mascota)', 'transaction', res.id,
       `${res.room_id} — ${res.guest_name} · Bs. ${tx.amount.toFixed(2)}`);
     setCheckoutModal(m => ({ ...m, checkoutMascotaPaid: Math.max(0, m.checkoutMascotaPaid - tx.amount) }));
+  }
+
+  async function checkoutPayDesayuno() {
+    const amt = parseFloat(checkoutModal.checkoutDesayunoPayAmt) || 0;
+    if (amt <= 0 || !checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const now = new Date();
+    const today   = now.toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
+    const timeStr = now.toLocaleTimeString('es-BO', { timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false });
+    await supabase.from('transactions').insert({
+      date: today, time: timeStr, type: 'ingreso', category: 'H06-DESAYUNO',
+      room_id: res.room_id, reservation_id: res.id, amount: amt,
+      description: `Desayuno extra — ${res.guest_name}`,
+      caja: checkoutModal.checkoutDesayunoPayCaja, responsible_id: profile?.id ?? null,
+    });
+    logActivity(profile?.id, profile?.name, 'Pago desayuno', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${amt.toFixed(2)} (${checkoutModal.checkoutDesayunoPayCaja})`);
+    setPendingDesayunoAmt(prev => { const n = { ...prev }; delete n[res.id]; return n; });
+    await supabase.from('reservations').update({ desayuno_pending: 0, updated_at: new Date().toISOString() }).eq('id', res.id);
+    setCheckoutModal(m => ({ ...m, checkoutDesayunoPaid: m.checkoutDesayunoPaid + amt, checkoutDesayunoPayAmt: '' }));
+  }
+
+  async function checkoutAnularDesayuno() {
+    if (!checkoutModal.res) return;
+    const res = checkoutModal.res;
+    const { data: txs } = await supabase.from('transactions').select('id, amount')
+      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H06-DESAYUNO')
+      .order('created_at', { ascending: false }).limit(1);
+    const tx = txs?.[0];
+    if (!tx) return;
+    await supabase.from('transactions').delete().eq('id', tx.id);
+    logActivity(profile?.id, profile?.name, 'Pago anulado (desayuno)', 'transaction', res.id,
+      `${res.room_id} — ${res.guest_name} · Bs. ${tx.amount.toFixed(2)}`);
+    setCheckoutModal(m => ({ ...m, checkoutDesayunoPaid: Math.max(0, m.checkoutDesayunoPaid - tx.amount) }));
   }
 
   async function checkoutAnularVitrinaItem(resId: string, txDesc: string, productId: string, qty: number, amount: number) {
@@ -3593,6 +3646,58 @@ export default function CalendarPage() {
                       </div>
                     )}
 
+                    {/* ── Desayuno extra ── */}
+                    {(checkoutModal.checkoutDesayunoPaid > 0 || checkoutModal.checkoutDesayunoPayAmt) && (
+                      <div className="bg-yellow-50 rounded-xl overflow-hidden border border-yellow-200">
+                        <div className="px-4 py-2 bg-yellow-100 text-xs font-bold uppercase tracking-wider text-yellow-800 flex items-center justify-between">
+                          <span>🍳 Desayuno extra</span>
+                        </div>
+                        <div className="px-4 py-3 space-y-1 text-sm">
+                          {checkoutModal.checkoutDesayunoPaid > 0 ? (
+                            <div className="flex justify-between items-center text-green-700 font-semibold">
+                              <span>✓ Ya registrado — Bs. {checkoutModal.checkoutDesayunoPaid.toFixed(2)}</span>
+                              <button onClick={checkoutAnularDesayuno}
+                                className="text-[10px] font-normal text-red-400 hover:text-red-600 underline ml-2">
+                                Anular
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-xs text-yellow-700 mb-1">Sin cargo registrado — registrar ahora:</p>
+                              <div className="flex gap-2 items-center">
+                                <input type="number" min={0} step={0.5}
+                                  value={checkoutModal.checkoutDesayunoPayAmt}
+                                  onChange={e => setCheckoutModal(m => ({ ...m, checkoutDesayunoPayAmt: e.target.value }))}
+                                  placeholder="Monto Bs."
+                                  className="flex-1 border border-yellow-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400" />
+                                <div className="flex rounded-lg overflow-hidden border border-gray-200 flex-shrink-0">
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutDesayunoPayCaja: 'CAJA MAYOR' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold transition-colors ${checkoutModal.checkoutDesayunoPayCaja === 'CAJA MAYOR' ? 'bg-green-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    Efectivo
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutDesayunoPayCaja: 'CUENTA BNB' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutDesayunoPayCaja === 'CUENTA BNB' ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    QR
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setCheckoutModal(m => ({ ...m, checkoutDesayunoPayCaja: 'TARJETA' }))}
+                                    className={`px-3 py-1.5 text-xs font-semibold border-l border-gray-200 transition-colors ${checkoutModal.checkoutDesayunoPayCaja === 'TARJETA' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                    Tarjeta
+                                  </button>
+                                </div>
+                                <button onClick={checkoutPayDesayuno}
+                                  className="px-3 py-1.5 text-xs font-bold bg-yellow-500 hover:bg-yellow-400 text-white rounded-lg whitespace-nowrap flex-shrink-0">
+                                  💳 Pagar
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     {/* ── Late Checkout ── */}
                     {hasLate && (
                       <div className="bg-purple-50 rounded-xl overflow-hidden border border-purple-200">
@@ -3819,6 +3924,10 @@ export default function CalendarPage() {
               <button onClick={() => { setMascotaModal({ res: cardMenu.res, extra_price: '', caja: 'CAJA MAYOR' }); setCardMenu(null); }}
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-teal-600 hover:bg-teal-50">
                 🐾 Mascota
+              </button>
+              <button onClick={() => { setDesayunoModal({ res: cardMenu.res, qty: 1, caja: 'CAJA MAYOR' }); setCardMenu(null); }}
+                className="w-full text-left px-4 py-2 text-sm font-semibold text-yellow-700 hover:bg-yellow-50">
+                🍳 Desayuno extra
               </button>
               <button onClick={() => { setLateCheckoutModal({ res: cardMenu.res, time: '', extra_price: '', caja: 'CAJA MAYOR' }); setCardMenu(null); }}
                 className="w-full text-left px-4 py-2 text-sm font-semibold text-purple-600 hover:bg-purple-50">
@@ -4827,6 +4936,66 @@ export default function CalendarPage() {
               <button onClick={handleSaveNota}
                 className="px-5 py-2 text-sm font-semibold bg-indigo-500 hover:bg-indigo-400 text-white rounded-lg">
                 Guardar nota
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Desayuno extra popup ── */}
+      {desayunoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-yellow-50 rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-900">🍳 Desayuno extra</h3>
+                <p className="text-xs text-yellow-700 font-semibold mt-0.5">
+                  {desayunoModal.res.room_id} — {desayunoModal.res.guest_name}
+                </p>
+              </div>
+              <button onClick={() => setDesayunoModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div className="bg-yellow-50 rounded-xl px-4 py-3 text-sm text-yellow-800">
+                Precio por desayuno: <span className="font-bold">Bs. {DESAYUNO_PRICE}</span>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Cantidad de desayunos</label>
+                <div className="flex items-center gap-3">
+                  <button type="button"
+                    onClick={() => setDesayunoModal(m => m ? { ...m, qty: Math.max(1, m.qty - 1) } : m)}
+                    className="w-9 h-9 rounded-full border-2 border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-100 text-lg font-bold">
+                    <Minus size={16} />
+                  </button>
+                  <span className="text-2xl font-bold text-gray-900 w-8 text-center">{desayunoModal.qty}</span>
+                  <button type="button"
+                    onClick={() => setDesayunoModal(m => m ? { ...m, qty: m.qty + 1 } : m)}
+                    className="w-9 h-9 rounded-full border-2 border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-100 text-lg font-bold">
+                    <Plus size={16} />
+                  </button>
+                  <span className="ml-2 text-sm font-semibold text-gray-500">
+                    = <span className="text-yellow-700 font-bold text-base">Bs. {(desayunoModal.qty * DESAYUNO_PRICE).toFixed(2)}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setDesayunoModal(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const r = desayunoModal.res;
+                  const total = desayunoModal.qty * DESAYUNO_PRICE;
+                  setPendingDesayunoAmt(prev => ({ ...prev, [r.id]: total.toFixed(2) }));
+                  await supabase.from('reservations').update({ desayuno_pending: total, updated_at: new Date().toISOString() }).eq('id', r.id);
+                  setDesayunoModal(null);
+                }}
+                className="px-5 py-2 text-sm font-semibold bg-yellow-500 hover:bg-yellow-400 text-white rounded-lg">
+                ✓ Agregar al checkout
               </button>
             </div>
           </div>
