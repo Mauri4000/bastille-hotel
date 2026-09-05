@@ -3795,7 +3795,11 @@ export default function CalendarPage() {
                                   💳 Pagar
                                 </button>
                                 <button
-                                  onClick={() => setPendingVitrina(prev => ({ ...prev, [r.id]: (prev[r.id] ?? []).filter(i => i.productId !== item.productId) }))}
+                                  onClick={async () => {
+                                    const newCart = (pendingVitrina[r.id] ?? []).filter(i => i.productId !== item.productId);
+                                    setPendingVitrina(prev => ({ ...prev, [r.id]: newCart }));
+                                    await supabase.from('reservations').update({ vitrina_cart: newCart, updated_at: new Date().toISOString() }).eq('id', r.id);
+                                  }}
                                   className="text-gray-300 hover:text-red-500 flex-shrink-0 transition-colors"
                                   title="Eliminar">
                                   <Trash2 size={14} />
