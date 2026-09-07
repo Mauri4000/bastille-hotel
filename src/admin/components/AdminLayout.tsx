@@ -3,7 +3,7 @@ import type React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, CalendarDays, ArrowLeftRight,
-  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles, TrendingUp, Wallet, Receipt, Camera, CalendarCheck,
+  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles, TrendingUp, Wallet, Receipt, CalendarCheck,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -17,7 +17,6 @@ const navItems: NavItem[] = [
   { to: '/admin',              icon: LayoutDashboard, label: 'Dashboard',          exact: true, visibleToMarketing: true },
   { to: '/admin/calendar',     icon: CalendarDays,    label: 'Calendario' },
   { to: '/admin/limpiezas',            icon: Sparkles,       label: 'Limpiezas',           visibleToMarketing: true },
-  { to: '/admin/fotos-habitaciones',   icon: Camera,         label: 'Control Fotos' },
   { to: '/admin/transactions', icon: ArrowLeftRight,  label: 'Ingresos / Egresos' },
   { to: '/admin/guests',       icon: BookUser,        label: 'Base de Huéspedes' },
   { to: '/admin/vitrina',      icon: ShoppingBag,     label: 'Stock Hotel' },
