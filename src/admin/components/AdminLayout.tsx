@@ -3,19 +3,21 @@ import type React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, CalendarDays, ArrowLeftRight,
-  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles, TrendingUp, Wallet, Receipt,
+  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles, TrendingUp, Wallet, Receipt, Camera, CalendarCheck,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 type NavItem = {
   to: string; icon: React.ElementType; label: string;
   exact?: boolean; adminOnly?: boolean; roles?: string[];
+  visibleToMarketing?: boolean;
 };
 
 const navItems: NavItem[] = [
-  { to: '/admin',              icon: LayoutDashboard, label: 'Dashboard',          exact: true },
+  { to: '/admin',              icon: LayoutDashboard, label: 'Dashboard',          exact: true, visibleToMarketing: true },
   { to: '/admin/calendar',     icon: CalendarDays,    label: 'Calendario' },
-  { to: '/admin/limpiezas',    icon: Sparkles,        label: 'Limpiezas' },
+  { to: '/admin/limpiezas',            icon: Sparkles,       label: 'Limpiezas',           visibleToMarketing: true },
+  { to: '/admin/fotos-habitaciones',   icon: Camera,         label: 'Control Fotos' },
   { to: '/admin/transactions', icon: ArrowLeftRight,  label: 'Ingresos / Egresos' },
   { to: '/admin/guests',       icon: BookUser,        label: 'Base de Huéspedes' },
   { to: '/admin/vitrina',      icon: ShoppingBag,     label: 'Stock Hotel' },
@@ -25,7 +27,8 @@ const navItems: NavItem[] = [
   { to: '/admin/historial',    icon: History,         label: 'Historial',          adminOnly: true },
   { to: '/admin/spanish',      icon: GraduationCap,   label: 'Spanish School' },
   // Marketing: visible only to admin and marketing role
-  { to: '/admin/marketing',    icon: TrendingUp,      label: 'Marketing',          roles: ['admin', 'marketing'] },
+  { to: '/admin/marketing',          icon: TrendingUp,    label: 'Marketing',           roles: ['admin', 'marketing'] },
+  { to: '/admin/marketing-calendar', icon: CalendarCheck, label: 'Calendario Tareas',   roles: ['admin', 'marketing'] },
 ];
 
 const adminItems = [
@@ -70,8 +73,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           const role = profile?.role ?? '';
           if (item.adminOnly && role !== 'admin') return false;
           if (item.roles) return item.roles.includes(role);
-          // Default: hide from marketing-only accounts
-          return role !== 'marketing';
+          if (role === 'marketing') return !!item.visibleToMarketing;
+          return true;
         }).map(({ to, icon: Icon, label, exact }) => (
           <NavLink
             key={to}

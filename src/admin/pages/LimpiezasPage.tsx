@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
-import { ChevronLeft, ChevronRight, X, Trash2, Pencil } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Trash2, Pencil, Camera, Loader2 } from 'lucide-react';
 
 // ── Staff ────────────────────────────────────────────────────────────────────
 const STAFF = ['Arlet', 'Carla', 'Vicky', 'Maria', 'Marioly', 'Romina'] as const;
@@ -39,15 +39,91 @@ function parseStaff(val: string | null): Staff[] {
   return val.split(' & ').filter(s => STAFF.includes(s as Staff)) as Staff[];
 }
 
+const STORAGE_BUCKET = 'room-photos';
+
+// Upload a file and return its public URL (overwrites previous if same path)
+async function uploadRoomPhoto(roomId: string, slot: 'dormitorio' | 'bano', file: File): Promise<string | null> {
+  const ext  = file.name.split('.').pop()?.toLowerCase() ?? 'jpg';
+  const path = `${roomId}/${slot}.${ext}`;
+  // Delete previous (any extension) — best-effort
+  await supabase.storage.from(STORAGE_BUCKET).remove([`${roomId}/dormitorio.jpg`, `${roomId}/dormitorio.jpeg`, `${roomId}/dormitorio.png`, `${roomId}/dormitorio.webp`]);
+  await supabase.storage.from(STORAGE_BUCKET).remove([`${roomId}/bano.jpg`, `${roomId}/bano.jpeg`, `${roomId}/bano.png`, `${roomId}/bano.webp`]);
+
+  const { error } = await supabase.storage.from(STORAGE_BUCKET).upload(path, file, { upsert: true, contentType: file.type });
+  if (error) { console.error('Upload error:', error); return null; }
+  const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+  // Add cache-busting so the browser fetches fresh after overwrite
+  return `${data.publicUrl}?t=${Date.now()}`;
+}
+
+// Get the current public URLs for a room's photos (returns null if not found)
+function getRoomPhotoUrls(roomId: string): { dormitorio: string; bano: string } {
+  const base = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(`${roomId}/dormitorio.jpg`).data.publicUrl;
+  const bano = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(`${roomId}/bano.jpg`).data.publicUrl;
+  return { dormitorio: base, bano };
+}
+
 interface CleaningRecord {
   id: string;
   date: string;
   row_key: string;
   task_type: string | null;
   assigned_to: string | null;
+  foto_dormitorio: string | null;
+  foto_bano: string | null;
 }
 
 type TaskMap = Record<string, CleaningRecord>;
+
+// ── Photo upload widget ───────────────────────────────────────────────────────
+function PhotoUploadSlot({
+  label, currentUrl, file, onChange,
+}: {
+  label: string;
+  currentUrl: string | null;
+  file: File | null;
+  onChange: (f: File | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const preview  = file ? URL.createObjectURL(file) : currentUrl;
+
+  return (
+    <div className="flex-1">
+      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{label}</p>
+      <div
+        onClick={() => inputRef.current?.click()}
+        className={`relative rounded-xl border-2 border-dashed cursor-pointer transition-colors overflow-hidden ${
+          preview ? 'border-sky-300' : 'border-gray-200 hover:border-sky-300'
+        }`}
+        style={{ height: 100 }}>
+        {preview ? (
+          <>
+            <img src={preview} alt={label} className="w-full h-full object-cover" />
+            <div className="absolute inset-0 bg-black/30 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity">
+              <Camera size={20} className="text-white" />
+            </div>
+          </>
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center text-gray-300 gap-1">
+            <Camera size={22} />
+            <span className="text-[10px]">Subir foto</span>
+          </div>
+        )}
+        {file && (
+          <div className="absolute top-1 right-1 bg-green-500 text-white text-[9px] font-bold px-1 py-0.5 rounded">NUEVA</div>
+        )}
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={e => onChange(e.target.files?.[0] ?? null)}
+      />
+    </div>
+  );
+}
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function LimpiezasPage() {
@@ -58,20 +134,24 @@ export default function LimpiezasPage() {
   const [taskMap, setTaskMap] = useState<TaskMap>({});
   const [loading, setLoading] = useState(true);
 
-  // Popup
-  const [popup,       setPopup]       = useState<{ rowKey: string; day: number; isRoom: boolean } | null>(null);
-  const [popupStaffs, setPopupStaffs] = useState<Staff[]>([]);
-  const [popupTask,   setPopupTask]   = useState<string | null>(null);
-  const [saving,      setSaving]      = useState(false);
+  // Popup state
+  const [popup,          setPopup]          = useState<{ rowKey: string; day: number; isRoom: boolean } | null>(null);
+  const [popupStaffs,    setPopupStaffs]    = useState<Staff[]>([]);
+  const [popupTask,      setPopupTask]      = useState<string | null>(null);
+  const [popupFotoDorm,  setPopupFotoDorm]  = useState<File | null>(null);
+  const [popupFotoBano,  setPopupFotoBano]  = useState<File | null>(null);
+  const [saving,         setSaving]         = useState(false);
+
+  // Light-box for full-screen photo preview
+  const [lightbox, setLightbox] = useState<string | null>(null);
 
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
-  // Keep a ref to taskMap for use inside async callbacks without stale closure
   const taskMapRef = useRef<TaskMap>({});
   taskMapRef.current = taskMap;
 
-  // ── Fetch (no loading flash after first load) ──────────────────────────────
+  // ── Fetch ──────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async (showLoader = true) => {
     if (showLoader) setLoading(true);
     const [{ data: roomData }, { data: taskData }] = await Promise.all([
@@ -108,6 +188,8 @@ export default function LimpiezasPage() {
     const cell = getCell(rowKey, day);
     setPopupStaffs(parseStaff(cell?.assigned_to ?? null));
     setPopupTask(isRoom ? (cell?.task_type ?? null) : null);
+    setPopupFotoDorm(null);
+    setPopupFotoBano(null);
     setPopup({ rowKey, day, isRoom });
   }
 
@@ -119,7 +201,7 @@ export default function LimpiezasPage() {
     });
   }
 
-  // ── Save — optimistic update first, then persist to DB ────────────────────
+  // ── Save ───────────────────────────────────────────────────────────────────
   async function savePopup() {
     if (!popup || saving) return;
     setSaving(true);
@@ -129,47 +211,56 @@ export default function LimpiezasPage() {
     const existing = taskMapRef.current[key];
 
     if (popupStaffs.length === 0) {
-      // Optimistic delete
       setTaskMap(prev => { const n = { ...prev }; delete n[key]; return n; });
       if (existing) await supabase.from('cleaning_tasks').delete().eq('id', existing.id);
     } else {
+      // Upload photos if this is a Habilitación
+      let fotoDormUrl: string | null = existing?.foto_dormitorio ?? null;
+      let fotoBanoUrl: string | null = existing?.foto_bano ?? null;
+
+      if (popupTask === 'Habilitación') {
+        if (popupFotoDorm) {
+          fotoDormUrl = await uploadRoomPhoto(popup.rowKey, 'dormitorio', popupFotoDorm);
+        }
+        if (popupFotoBano) {
+          fotoBanoUrl = await uploadRoomPhoto(popup.rowKey, 'bano', popupFotoBano);
+        }
+      } else {
+        // Non-habilitación: clear photo columns
+        fotoDormUrl = null;
+        fotoBanoUrl = null;
+      }
+
       const payload = {
-        task_type:   popup.isRoom ? popupTask : null,
-        assigned_to: popupStaffs.join(' & '),
+        task_type:       popup.isRoom ? popupTask : null,
+        assigned_to:     popupStaffs.join(' & '),
+        foto_dormitorio: fotoDormUrl,
+        foto_bano:       fotoBanoUrl,
       };
 
-      // Optimistic update — show immediately in grid
       setTaskMap(prev => ({
         ...prev,
         [key]: {
           id:          existing?.id ?? `tmp-${Date.now()}`,
           date,
           row_key:     popup.rowKey,
-          task_type:   payload.task_type,
-          assigned_to: payload.assigned_to,
+          ...payload,
         },
       }));
 
-      // Persist
       if (existing) {
         const { error } = await supabase.from('cleaning_tasks').update(payload).eq('id', existing.id);
-        if (error) {
-          console.error('Error updating cleaning task:', error);
-          alert('Error al guardar: ' + error.message);
-        }
+        if (error) { console.error(error); alert('Error al guardar: ' + error.message); }
       } else {
         const { data, error } = await supabase
           .from('cleaning_tasks')
           .insert({ date, row_key: popup.rowKey, ...payload })
-          .select('id')
-          .single();
+          .select('id').single();
         if (error) {
-          console.error('Error inserting cleaning task:', error);
+          console.error(error);
           alert('Error al guardar: ' + error.message);
-          // Revert optimistic update on failure
           setTaskMap(prev => { const n = { ...prev }; delete n[key]; return n; });
         } else if (data) {
-          // Replace temp id with real id
           setTaskMap(prev => ({ ...prev, [key]: { ...prev[key], id: data.id } }));
         }
       }
@@ -179,7 +270,7 @@ export default function LimpiezasPage() {
     setPopup(null);
   }
 
-  // ── Quick delete (from cell button, no popup needed) ───────────────────────
+  // ── Quick delete ───────────────────────────────────────────────────────────
   async function quickDelete(rowKey: string, day: number, e: React.MouseEvent) {
     e.stopPropagation();
     const key      = `${toDateStr(year, month, day)}|${rowKey}`;
@@ -193,11 +284,12 @@ export default function LimpiezasPage() {
   function prevMonth() { if (month === 0) { setMonth(11); setYear(y => y - 1); } else setMonth(m => m - 1); }
   function nextMonth() { if (month === 11) { setMonth(0); setYear(y => y + 1); } else setMonth(m => m + 1); }
 
-  // ── Cell renderer — plain function (NOT a React component) ──────────────────
+  // ── Cell renderer ──────────────────────────────────────────────────────────
   function renderCell(rowKey: string, day: number, isRoom: boolean) {
     const cell   = taskMap[`${toDateStr(year, month, day)}|${rowKey}`] ?? null;
     const staffs = parseStaff(cell?.assigned_to ?? null);
     const task   = cell?.task_type;
+    const hasPhotos = !!(cell?.foto_dormitorio || cell?.foto_bano);
 
     if (staffs.length === 0) {
       return (
@@ -209,22 +301,18 @@ export default function LimpiezasPage() {
 
     return (
       <div className="relative w-full h-full flex flex-col items-center justify-center gap-px px-0.5">
-        {/* Edit / Delete on hover */}
         <div className="absolute inset-0 flex items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 bg-white/80 rounded">
           <button
             onClick={e => { e.stopPropagation(); openPopup(rowKey, day, isRoom); }}
-            className="p-0.5 rounded bg-blue-100 hover:bg-blue-200 text-blue-600"
-            title="Editar">
+            className="p-0.5 rounded bg-blue-100 hover:bg-blue-200 text-blue-600" title="Editar">
             <Pencil size={9} />
           </button>
           <button
             onClick={e => quickDelete(rowKey, day, e)}
-            className="p-0.5 rounded bg-red-100 hover:bg-red-200 text-red-500"
-            title="Borrar">
+            className="p-0.5 rounded bg-red-100 hover:bg-red-200 text-red-500" title="Borrar">
             <X size={9} />
           </button>
         </div>
-        {/* Pill(s) */}
         {staffs.length === 1 ? (
           <div className={`rounded text-[9px] font-bold px-0.5 py-px leading-tight w-full text-center ${STAFF_STYLE[staffs[0]].pill}`}>
             {isRoom && task && (
@@ -239,9 +327,15 @@ export default function LimpiezasPage() {
             </div>
           ))
         )}
+        {hasPhotos && task === 'Habilitación' && (
+          <div className="text-[7px] leading-none text-sky-500 font-bold">📷</div>
+        )}
       </div>
     );
   }
+
+  // Current popup cell (if editing existing)
+  const popupCell = popup ? (taskMapRef.current[`${toDateStr(year, month, popup.day)}|${popup.rowKey}`] ?? null) : null;
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -295,7 +389,6 @@ export default function LimpiezasPage() {
             </thead>
 
             <tbody>
-              {/* Room rows */}
               {rooms.map((room, idx) => {
                 const bg = idx % 2 !== 0 ? 'rgb(249,250,251)' : 'white';
                 return (
@@ -317,7 +410,6 @@ export default function LimpiezasPage() {
                 );
               })}
 
-              {/* Divider */}
               <tr>
                 <td colSpan={days.length + 1}
                   className="bg-gray-200 border-y border-gray-300 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-gray-600">
@@ -325,7 +417,6 @@ export default function LimpiezasPage() {
                 </td>
               </tr>
 
-              {/* Extra rows */}
               {EXTRA_TASKS.map((task, idx) => {
                 const bg = idx % 2 !== 0 ? 'rgb(249,250,251)' : 'white';
                 return (
@@ -355,7 +446,7 @@ export default function LimpiezasPage() {
         <>
           <div className="fixed inset-0 z-40 bg-black/30" onClick={() => setPopup(null)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-80">
+            <div className="bg-white rounded-2xl shadow-2xl w-80 max-h-[90vh] overflow-y-auto">
 
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50 rounded-t-2xl">
                 <div>
@@ -395,9 +486,7 @@ export default function LimpiezasPage() {
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Limpiadora</p>
-                    {popupStaffs.length === 2 && (
-                      <span className="text-[10px] text-gray-400">👥 Juntas</span>
-                    )}
+                    {popupStaffs.length === 2 && <span className="text-[10px] text-gray-400">👥 Juntas</span>}
                   </div>
                   <p className="text-[10px] text-gray-400 mb-2">Selecciona hasta 2 personas</p>
                   <div className="grid grid-cols-2 gap-2">
@@ -421,6 +510,32 @@ export default function LimpiezasPage() {
                     <p className="text-xs text-center text-gray-500 mt-2 font-medium">{popupStaffs.join(' & ')}</p>
                   )}
                 </div>
+
+                {/* ── Photo uploads — only for Habilitación ── */}
+                {popup.isRoom && popupTask === 'Habilitación' && (
+                  <div>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">📷 Fotos de la habitación</p>
+                    <div className="flex gap-3">
+                      <PhotoUploadSlot
+                        label="Dormitorio"
+                        currentUrl={popupCell?.foto_dormitorio ?? null}
+                        file={popupFotoDorm}
+                        onChange={setPopupFotoDorm}
+                      />
+                      <PhotoUploadSlot
+                        label="Baño"
+                        currentUrl={popupCell?.foto_bano ?? null}
+                        file={popupFotoBano}
+                        onChange={setPopupFotoBano}
+                      />
+                    </div>
+                    {(popupCell?.foto_dormitorio || popupCell?.foto_bano) && !popupFotoDorm && !popupFotoBano && (
+                      <p className="text-[10px] text-gray-400 mt-1.5 text-center">
+                        Toca una foto para reemplazarla
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-2 px-5 py-4 border-t border-gray-100">
@@ -442,13 +557,23 @@ export default function LimpiezasPage() {
                   <Trash2 size={12} /> Borrar
                 </button>
                 <button onClick={savePopup} disabled={saving}
-                  className="flex-1 py-2 text-xs font-semibold bg-green-600 hover:bg-green-500 text-white rounded-xl disabled:opacity-50 transition-colors">
-                  {saving ? 'Guardando...' : '✓ Guardar'}
+                  className="flex-1 py-2 text-xs font-semibold bg-green-600 hover:bg-green-500 text-white rounded-xl disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5">
+                  {saving ? <><Loader2 size={12} className="animate-spin" /> Subiendo...</> : '✓ Guardar'}
                 </button>
               </div>
             </div>
           </div>
         </>
+      )}
+
+      {/* ── Lightbox ── */}
+      {lightbox && (
+        <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4" onClick={() => setLightbox(null)}>
+          <img src={lightbox} alt="foto" className="max-w-full max-h-full rounded-xl shadow-2xl object-contain" />
+          <button className="absolute top-4 right-4 text-white/70 hover:text-white" onClick={() => setLightbox(null)}>
+            <X size={28} />
+          </button>
+        </div>
       )}
     </div>
   );

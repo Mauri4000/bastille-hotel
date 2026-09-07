@@ -650,15 +650,7 @@ export default function CalendarPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // ── Real-time sync: refresh when any user changes reservations or transactions ──
-  useEffect(() => {
-    const channel = supabase
-      .channel('calendar-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, () => { fetchData(); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' },  () => { fetchData(); })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [fetchData]);
+  // Real-time auto-refresh removed — data only reloads on explicit save/action.
 
   // Load past empresa names for autocomplete
   useEffect(() => {

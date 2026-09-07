@@ -31,8 +31,10 @@ import GuestDatabasePage from "./admin/pages/GuestDatabasePage";
 import VitrinaPage from "./admin/pages/VitrinaPage";
 import SpanishSchoolAdminPage from "./admin/pages/SpanishSchoolPage";
 import LimpiezasPage from "./admin/pages/LimpiezasPage";
+import FotosHabitacionesPage from "./admin/pages/FotosHabitacionesPage";
 import BilletesPage from "./admin/pages/BilletesPage";
 import MarketingPage from "./admin/pages/MarketingPage";
+import MarketingCalendarPage from "./admin/pages/MarketingCalendarPage";
 import PlanillasPage from "./admin/pages/PlanillasPage";
 import ImpuestosPage from "./admin/pages/ImpuestosPage";
 
@@ -71,9 +73,11 @@ function AdminApp() {
         <Route path="guests"       element={<GuestDatabasePage />} />
         <Route path="vitrina"      element={<VitrinaPage />} />
         <Route path="spanish"      element={<SpanishSchoolAdminPage />} />
-        <Route path="limpiezas"    element={<LimpiezasPage />} />
-        <Route path="billetes"     element={<BilletesPage />} />
-        <Route path="marketing"    element={<MarketingPage />} />
+        <Route path="limpiezas"           element={<LimpiezasPage />} />
+        <Route path="fotos-habitaciones"  element={<FotosHabitacionesPage />} />
+        <Route path="billetes"            element={<BilletesPage />} />
+        <Route path="marketing"           element={<MarketingPage />} />
+        <Route path="marketing-calendar"  element={<MarketingCalendarPage />} />
         <Route path="planillas"    element={<PlanillasPage />} />
         <Route path="impuestos"    element={<ImpuestosPage />} />
       </Routes>
