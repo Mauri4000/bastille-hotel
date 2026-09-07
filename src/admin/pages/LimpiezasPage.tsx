@@ -56,12 +56,6 @@ async function uploadRoomPhoto(roomId: string, slot: 'dormitorio' | 'bano', file
   return `${data.publicUrl}?t=${Date.now()}`;
 }
 
-// Get the current public URLs for a room's photos (returns null if not found)
-function getRoomPhotoUrls(roomId: string): { dormitorio: string; bano: string } {
-  const base = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(`${roomId}/dormitorio.jpg`).data.publicUrl;
-  const bano = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(`${roomId}/bano.jpg`).data.publicUrl;
-  return { dormitorio: base, bano };
-}
 
 interface CleaningRecord {
   id: string;

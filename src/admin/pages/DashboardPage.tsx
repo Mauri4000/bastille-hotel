@@ -26,8 +26,6 @@ function shortDate(iso: string) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { profile } = useAuth();
-  const navigate = useNavigate();
-
   const isMarketing = profile?.role === 'marketing';
 
   const today = new Date();
