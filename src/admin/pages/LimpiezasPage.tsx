@@ -138,6 +138,8 @@ export default function LimpiezasPage() {
   const [roomPhotos,    setRoomPhotos]    = useState<RoomPhoto[]>([]);
   const [photosLoading, setPhotosLoading] = useState(false);
   const [lightbox,      setLightbox]      = useState<{ url: string; label: string; room: string; date: string; assigned_to: string | null } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ p: RoomPhoto; slot: 'dormitorio' | 'bano' } | null>(null);
+  const [deleting,      setDeleting]      = useState(false);
 
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const days        = Array.from({ length: daysInMonth }, (_, i) => i + 1);
@@ -276,19 +278,20 @@ export default function LimpiezasPage() {
   function prevMonth() { if (month === 0) { setMonth(11); setYear(y => y-1); } else setMonth(m => m-1); }
   function nextMonth() { if (month === 11) { setMonth(0);  setYear(y => y+1); } else setMonth(m => m+1); }
 
-  async function deleteSlotPhoto(p: RoomPhoto, slot: 'dormitorio' | 'bano') {
-    if (!confirm(`¿Borrar foto de ${slot === 'dormitorio' ? 'Dormitorio' : 'Baño'} de hab. ${p.room_id}?`)) return;
-    // Remove from storage (all possible extensions)
+  async function confirmDeletePhoto() {
+    if (!confirmDelete || deleting) return;
+    const { p, slot } = confirmDelete;
+    setDeleting(true);
     await supabase.storage.from(BUCKET).remove([
       `${p.room_id}/${slot}.jpg`, `${p.room_id}/${slot}.jpeg`,
       `${p.room_id}/${slot}.png`, `${p.room_id}/${slot}.webp`,
     ]);
-    // Null the DB column
     const field = slot === 'dormitorio' ? 'foto_dormitorio' : 'foto_bano';
     await supabase.from('cleaning_tasks').update({ [field]: null }).eq('id', p.record_id);
-    // Update local state
     setRoomPhotos(prev => prev.map(r => r.record_id === p.record_id ? { ...r, [field]: null } : r)
       .filter(r => r.foto_dormitorio !== null || r.foto_bano !== null));
+    setDeleting(false);
+    setConfirmDelete(null);
   }
 
   // ── Cell renderer ──────────────────────────────────────────────────────────
@@ -487,14 +490,14 @@ export default function LimpiezasPage() {
                               style={{ aspectRatio: '4/3' }}
                               onClick={() => setLightbox({ url, label: slot === 'dormitorio' ? 'Dormitorio' : 'Baño', room: p.room_id, date: p.date, assigned_to: p.assigned_to })}>
                               <img src={url} alt={slot} className="w-full h-full object-cover transition-transform group-hover:scale-105" />
-                              <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                <span className="text-white text-xs font-bold bg-black/40 px-2 py-1 rounded">Ver</span>
-                                <button
-                                  onClick={e => { e.stopPropagation(); deleteSlotPhoto(p, slot); }}
-                                  className="text-white bg-red-500/80 hover:bg-red-600 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
-                                  <Trash2 size={10} /> Borrar
-                                </button>
-                              </div>
+                              {/* Subtle dark overlay on hover */}
+                              <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl" />
+                              {/* Trash icon — top-right corner */}
+                              <button
+                                onClick={e => { e.stopPropagation(); setConfirmDelete({ p, slot }); }}
+                                className="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-red-500 shadow-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 hover:scale-110 transform">
+                                <Trash2 size={12} className="text-white" />
+                              </button>
                             </div>
                           ) : (
                             <div className="rounded-xl bg-gray-100 flex items-center justify-center text-gray-300" style={{ aspectRatio: '4/3' }}>
@@ -610,6 +613,37 @@ export default function LimpiezasPage() {
                 <button onClick={savePopup} disabled={saving}
                   className="flex-1 py-2 text-xs font-semibold bg-green-600 hover:bg-green-500 text-white rounded-xl disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5">
                   {saving ? <><Loader2 size={12} className="animate-spin" /> Subiendo...</> : '✓ Guardar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Confirm delete modal ── */}
+      {confirmDelete && (
+        <>
+          <div className="fixed inset-0 z-[110] bg-black/40 backdrop-blur-sm" onClick={() => setConfirmDelete(null)} />
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-72 overflow-hidden">
+              <div className="bg-red-50 px-5 pt-5 pb-4 flex flex-col items-center text-center">
+                <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-3">
+                  <Trash2 size={22} className="text-red-500" />
+                </div>
+                <p className="font-bold text-gray-900 text-base">¿Borrar foto?</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {confirmDelete.slot === 'dormitorio' ? 'Dormitorio' : 'Baño'} · Hab. <span className="font-semibold text-gray-700">{confirmDelete.p.room_id}</span>
+                </p>
+                <p className="text-xs text-red-400 mt-2">Esta acción no se puede deshacer.</p>
+              </div>
+              <div className="flex gap-2 px-4 py-4">
+                <button onClick={() => setConfirmDelete(null)} disabled={deleting}
+                  className="flex-1 py-2.5 text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors disabled:opacity-50">
+                  Cancelar
+                </button>
+                <button onClick={confirmDeletePhoto} disabled={deleting}
+                  className="flex-1 py-2.5 text-sm font-semibold text-white bg-red-500 hover:bg-red-600 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5">
+                  {deleting ? <><Loader2 size={14} className="animate-spin" /> Borrando...</> : <><Trash2 size={14} /> Sí, borrar</>}
                 </button>
               </div>
             </div>
