@@ -344,19 +344,6 @@ export default function CalendarPage() {
     const originalCheckOut = res.check_out;   // capture before update
 
     try {
-      // ── 1. Shorten original OR delete if moving from day 1 (0 nights) ─────
-      if (moveDate === res.check_in) {
-        // Guest never actually stayed → delete original reservation
-        const { error: e1 } = await supabase.from('reservations').delete().eq('id', res.id);
-        if (e1) throw new Error('Error al eliminar reserva original: ' + e1.message);
-      } else {
-        const { error: e1 } = await supabase.from('reservations')
-          .update({ check_out: moveDate, updated_at: new Date().toISOString() })
-          .eq('id', res.id);
-        if (e1) throw new Error('Error al acortar reserva: ' + e1.message);
-      }
-
-      // ── 2. New reservation for new room (moveDate → original check_out) ────
       const changeNotes = JSON.stringify({
         __room_change:    true,
         from_room:        res.room_id,
@@ -367,6 +354,27 @@ export default function CalendarPage() {
         changed_by_name:  profile?.name ?? 'Desconocido',
         reason,
       });
+
+      // ── 1a. Full move (from day 1): just update room_id on the original ───
+      if (moveDate === res.check_in) {
+        const { error: e1 } = await supabase.from('reservations')
+          .update({ room_id: newRoomId, notes: changeNotes, price_per_night: newPriceNight, updated_at: new Date().toISOString() })
+          .eq('id', res.id);
+        if (e1) throw new Error('Error al mover reserva: ' + e1.message);
+        logActivity(profile?.id, profile?.name, 'Cambio de habitación', 'reservation', res.id,
+          `${res.room_id} → ${newRoomId} desde ${moveDate} (${reason})`);
+        setRoomChangeModal(null);
+        await fetchData();
+        return; // done — no need for habilitación or new record
+      }
+
+      // ── 1b. Mid-stay move: shorten original ────────────────────────────────
+      const { error: e1 } = await supabase.from('reservations')
+        .update({ check_out: moveDate, updated_at: new Date().toISOString() })
+        .eq('id', res.id);
+      if (e1) throw new Error('Error al acortar reserva: ' + e1.message);
+
+      // ── 2. New reservation for new room (moveDate → original check_out) ────
       const { error: e2 } = await supabase.from('reservations').insert({
         room_id:              newRoomId,
         guest_name:           res.guest_name,
@@ -984,6 +992,8 @@ export default function CalendarPage() {
       body: 'Esta acción no se puede deshacer.',
       onConfirm: async () => {
         const { data: del } = await supabase.from('reservations').select('room_id,guest_name').eq('id', id).single();
+        // Delete linked transactions first to avoid FK 409 conflict
+        await supabase.from('transactions').delete().eq('reservation_id', id);
         await supabase.from('reservations').delete().eq('id', id);
         logActivity(profile?.id, profile?.name, 'Reserva eliminada', 'reservation', id, `${del?.room_id} — ${del?.guest_name}`);
         setModalOpen(false);
@@ -1026,6 +1036,8 @@ export default function CalendarPage() {
       title: 'Eliminar reserva',
       body: 'Esta acción no se puede deshacer.',
       onConfirm: async () => {
+        // Delete linked transactions first to avoid FK 409 conflict
+        await supabase.from('transactions').delete().eq('reservation_id', resId);
         await supabase.from('reservations').delete().eq('id', resId);
         fetchData();
       },
