@@ -300,17 +300,25 @@ export default function CalendarPage() {
 
   async function loadRoomsForMove(res: Reservation, fromDate: string) {
     setRoomChangeModal(prev => prev ? { ...prev, loading: true, newRoomId: '' } : null);
-    // Only rooms free from fromDate → res.check_out are valid
+    // If check_out <= fromDate (0-night or bad data), use fromDate+1 as upper bound
+    const conflictEnd = res.check_out > fromDate
+      ? res.check_out
+      : toDateStr(new Date(new Date(fromDate + 'T00:00:00').getTime() + 86400000));
     const { data: conflicts } = await supabase
       .from('reservations')
       .select('room_id')
       .in('status', ['ocupado', 'reserva', 'mantenimiento', 'habilitacion', 'limpieza'])
       .neq('id', res.id)
-      .lt('check_in', res.check_out)
+      .lt('check_in', conflictEnd)
       .gt('check_out', fromDate);
     const blockedIds = new Set((conflicts ?? []).map((r: any) => r.room_id));
     blockedIds.add(res.room_id);
-    const available = rooms.filter(r => !blockedIds.has(r.id));
+    // Only show actual bedrooms (exclude SALON and any non-bedroom type)
+    const available = rooms.filter(r =>
+      !blockedIds.has(r.id) &&
+      r.type?.toLowerCase() !== 'salon' &&
+      r.id?.toUpperCase() !== 'SALON'
+    );
     setRoomChangeModal(prev => prev ? { ...prev, availableRooms: available, loading: false } : null);
   }
 
@@ -336,20 +344,28 @@ export default function CalendarPage() {
     const originalCheckOut = res.check_out;   // capture before update
 
     try {
-      // ── 1. Shorten original reservation to moveDate ────────────────────────
-      const { error: e1 } = await supabase.from('reservations')
-        .update({ check_out: moveDate, updated_at: new Date().toISOString() })
-        .eq('id', res.id);
-      if (e1) throw new Error('Error al acortar reserva: ' + e1.message);
+      // ── 1. Shorten original OR delete if moving from day 1 (0 nights) ─────
+      if (moveDate === res.check_in) {
+        // Guest never actually stayed → delete original reservation
+        const { error: e1 } = await supabase.from('reservations').delete().eq('id', res.id);
+        if (e1) throw new Error('Error al eliminar reserva original: ' + e1.message);
+      } else {
+        const { error: e1 } = await supabase.from('reservations')
+          .update({ check_out: moveDate, updated_at: new Date().toISOString() })
+          .eq('id', res.id);
+        if (e1) throw new Error('Error al acortar reserva: ' + e1.message);
+      }
 
       // ── 2. New reservation for new room (moveDate → original check_out) ────
       const changeNotes = JSON.stringify({
-        __room_change: true,
-        from_room:     res.room_id,
-        from_checkin:  res.check_in,
-        from_checkout: moveDate,
-        from_price:    res.price_per_night ?? 0,
-        parent_id:     res.id,
+        __room_change:    true,
+        from_room:        res.room_id,
+        from_checkin:     res.check_in,
+        from_checkout:    moveDate,
+        from_price:       res.price_per_night ?? 0,
+        parent_id:        res.id,
+        changed_by_name:  profile?.name ?? 'Desconocido',
+        reason,
       });
       const { error: e2 } = await supabase.from('reservations').insert({
         room_id:              newRoomId,
@@ -1808,9 +1824,18 @@ export default function CalendarPage() {
                   {days.map(d => {
                     const res = cellMap[room.id]?.[d];
                     const isNota = res?.guest_name?.startsWith('📝');
+                    const isRoomChange = !isNota && !!((res as any)?.notes?.includes('__room_change'));
                     const cfg = isNota
-                      ? { bg: 'bg-red-500', text: 'text-white', border: 'border-red-600', label: 'Nota', dot: 'bg-red-500' }
+                      ? { bg: 'bg-red-500',    text: 'text-white', border: 'border-red-600',    label: 'Nota',     dot: 'bg-red-500' }
+                      : isRoomChange
+                      ? { bg: 'bg-violet-500', text: 'text-white', border: 'border-violet-600', label: 'Cambiado', dot: 'bg-violet-500' }
                       : res ? STATUS_CONFIG[res.status] : null;
+                    // Parse room-change metadata for badge display
+                    let roomChangeMeta: { from_room?: string; changed_by_name?: string; reason?: string } = {};
+                    if (isRoomChange) {
+                      try { roomChangeMeta = JSON.parse((res as any).notes ?? '{}'); } catch { /* noop */ }
+                    }
+                    const REASON_LABEL: Record<string, string> = { damaged: 'Hab. dañada', upgrade: 'Upgrade', other: 'Otro' };
                     const dateStr = toDateStr(new Date(year, month, d));
 
                     // Determine cell role in the reservation span
@@ -1897,6 +1922,12 @@ export default function CalendarPage() {
                                 </div>
                                 {res.is_empresa && (res as any).empresa_name && res.guest_name && res.guest_name !== (res as any).empresa_name && (
                                   <div className="text-[10px] leading-tight opacity-90 truncate">{res.guest_name}</div>
+                                )}
+                                {isRoomChange && (
+                                  <div className="text-[8px] font-bold bg-violet-700/50 rounded px-0.5 py-px mt-0.5 leading-snug truncate">
+                                    🔄 {roomChangeMeta.from_room ?? '?'} · {roomChangeMeta.changed_by_name ?? '?'}
+                                    {roomChangeMeta.reason ? ` · ${REASON_LABEL[roomChangeMeta.reason] ?? roomChangeMeta.reason}` : ''}
+                                  </div>
                                 )}
                                 <div className="flex items-center justify-center gap-1 mt-1 flex-wrap">
                                   <span className="text-[10px] opacity-80 font-semibold">{res.num_guests}p</span>
