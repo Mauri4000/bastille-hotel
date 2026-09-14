@@ -98,7 +98,7 @@ const emptyForm = {
   notes:             '',
   room_id:           '',
   // Arrival type (UI only — not saved)
-  arrival_type:      'reserva' as 'reserva' | 'directo',
+  arrival_type:      'reserva' as 'reserva' | 'directo' | 'hora',
   num_nights:        1,
   // Empresa
   empresa_name:      '',
@@ -685,14 +685,20 @@ export default function CalendarPage() {
       });
   }, []);
 
-  // Compute check_out from check_in + num_nights (both flows)
+  // Compute check_out from check_in + num_nights (regular flows only)
   useEffect(() => {
+    if (form.arrival_type === 'hora') {
+      // Estadía corta: check_out always equals check_in
+      if (form.check_in && form.check_out !== form.check_in)
+        setForm(f => ({ ...f, check_out: f.check_in }));
+      return;
+    }
     if (!form.check_in || form.num_nights < 1) return;
     const d = new Date(form.check_in + 'T00:00:00');
     d.setDate(d.getDate() + form.num_nights);
     const co = toDateStr(d);
     if (co !== form.check_out) setForm(f => ({ ...f, check_out: co }));
-  }, [form.check_in, form.num_nights]); // eslint-disable-line
+  }, [form.check_in, form.num_nights, form.arrival_type]); // eslint-disable-line
 
   // Close menus when clicking outside
   useEffect(() => {
@@ -767,15 +773,17 @@ export default function CalendarPage() {
   }
 
   // ── open modal ──
-  function openNew(roomId: string, day: number, statusOverride?: ReservationStatus, arrivalType?: 'reserva' | 'directo') {
+  function openNew(roomId: string, day: number, statusOverride?: ReservationStatus, arrivalType?: 'reserva' | 'directo' | 'hora') {
     const date = toDateStr(new Date(year, month, day));
     const next = toDateStr(new Date(year, month, day + 1));
+    const isHoraType = arrivalType === 'hora';
     setForm({
       ...emptyForm,
       room_id: roomId,
       check_in: date,
-      check_out: next,
-      status: statusOverride ?? 'reserva',
+      check_out: isHoraType ? date : next,   // same day for estadía corta
+      num_nights: isHoraType ? 0 : 1,
+      status: isHoraType ? 'ocupado' : (statusOverride ?? 'reserva'),
       arrival_type: arrivalType ?? 'reserva',
     });
     setAdditionalGuests([]);
@@ -825,10 +833,12 @@ export default function CalendarPage() {
       catering_coffee:   catering.includes('cafe'),
       catering_sandwich: catering.includes('sandwich'),
       catering_water:    catering.includes('agua'),
-      arrival_type:         (['reserva','confirmada'].includes(res.status) ? 'reserva' : 'directo') as 'reserva' | 'directo',
-      num_nights:           (res.check_in && res.check_out)
+      arrival_type:         (res.check_in === res.check_out && res.status === 'ocupado')
+                              ? 'hora'
+                              : (['reserva','confirmada'].includes(res.status) ? 'reserva' : 'directo') as 'reserva' | 'directo' | 'hora',
+      num_nights:           (res.check_in && res.check_out && res.check_in !== res.check_out)
                               ? Math.max(1, Math.round((new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000))
-                              : 1,
+                              : (res.check_in === res.check_out ? 0 : 1),
       empresa_name:         r.empresa_name         ?? '',
       guest_phone:          r.guest_phone          ?? '',
       guest_gender:         r.guest_gender         ?? '',
@@ -873,12 +883,12 @@ export default function CalendarPage() {
       // Fecha entrada
       if (!form.check_in)
         { setFormError('La fecha de entrada es obligatoria.'); return; }
-      // N° noches (ambos flows)
-      if (form.num_nights < 1)
+      // N° noches (no aplica para estadía corta)
+      if (form.arrival_type !== 'hora' && form.num_nights < 1)
         { setFormError('El número de noches es obligatorio.'); return; }
       // Precio
       if (!form.price_per_night || parseFloat(form.price_per_night) <= 0)
-        { setFormError('El precio por noche es obligatorio.'); return; }
+        { setFormError(form.arrival_type === 'hora' ? 'El precio por uso es obligatorio.' : 'El precio por noche es obligatorio.'); return; }
     } else {
       if (!resolvedName) { setFormError('El nombre es obligatorio.'); return; }
       if (!form.check_in || !form.check_out) { setFormError('Las fechas son obligatorias.'); return; }
@@ -900,8 +910,10 @@ export default function CalendarPage() {
         : form.guest_name.trim(),
       num_guests:      form.num_guests,
       check_in:        form.check_in,
-      check_out:       isSalon ? (form.check_out || form.check_in) : form.check_out,
-      status:          form.status,
+      check_out:       form.arrival_type === 'hora'
+                         ? form.check_in   // estadía corta: same day
+                         : isSalon ? (form.check_out || form.check_in) : form.check_out,
+      status:          form.arrival_type === 'hora' ? 'ocupado' : form.status,
       room_subtype:    !isSalon && form.room_subtype ? form.room_subtype : null,
       arrival_time:    !isSalon && form.arrival_time   ? form.arrival_time   : null,
       departure_time:  !isSalon && form.departure_time ? form.departure_time : null,
@@ -1765,6 +1777,14 @@ export default function CalendarPage() {
             <span className="text-[10px] md:text-xs text-gray-600">{cfg.label}</span>
           </div>
         ))}
+        <div className="flex items-center gap-1">
+          <div className="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-orange-500" />
+          <span className="text-[10px] md:text-xs text-gray-600">Estadía Corta</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-violet-500" />
+          <span className="text-[10px] md:text-xs text-gray-600">Cambiado</span>
+        </div>
       </div>
 
       {/* Calendar grid */}
@@ -1837,10 +1857,13 @@ export default function CalendarPage() {
                     const res = cellMap[room.id]?.[d];
                     const isNota = res?.guest_name?.startsWith('📝');
                     const isRoomChange = !isNota && !!((res as any)?.notes?.includes('__room_change'));
+                    const isHora = !isNota && !isRoomChange && !!res && res.check_in === res.check_out && res.status === 'ocupado';
                     const cfg = isNota
                       ? { bg: 'bg-red-500',    text: 'text-white', border: 'border-red-600',    label: 'Nota',     dot: 'bg-red-500' }
                       : isRoomChange
                       ? { bg: 'bg-violet-500', text: 'text-white', border: 'border-violet-600', label: 'Cambiado', dot: 'bg-violet-500' }
+                      : isHora
+                      ? { bg: 'bg-orange-500', text: 'text-white', border: 'border-orange-600', label: 'Estadía Corta', dot: 'bg-orange-500' }
                       : res ? STATUS_CONFIG[res.status] : null;
                     // Parse room-change metadata for badge display
                     let roomChangeMeta: { from_room?: string; changed_by_name?: string; reason?: string } = {};
@@ -1904,7 +1927,9 @@ export default function CalendarPage() {
                           >
                             {isMobile ? (
                               /* ── Mobile: minimal — just guest count on check-in ── */
-                              isCheckIn && !isNota && res.status !== 'mantenimiento' && res.status !== 'habilitacion' ? (
+                              isHora ? (
+                                <span className="text-[9px]">⏱️</span>
+                              ) : isCheckIn && !isNota && res.status !== 'mantenimiento' && res.status !== 'habilitacion' ? (
                                 <span className="text-[9px] font-bold leading-none opacity-90">{res.num_guests}p</span>
                               ) : isNota ? (
                                 <span className="text-[9px]">📝</span>
@@ -1916,6 +1941,25 @@ export default function CalendarPage() {
                             ) : isNota ? (
                               <div className="text-[10px] font-bold leading-tight break-words">
                                 📝 {(res as any).notes || 'Nota'}
+                              </div>
+                            ) : isHora ? (
+                              <div className="flex flex-col h-full">
+                                <div className="text-[10px] font-bold leading-tight line-clamp-2">
+                                  ⏱️ {res.guest_name}
+                                </div>
+                                <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                  <span className="text-[9px] opacity-90 font-semibold">{res.num_guests}p</span>
+                                  {(res as any).arrival_time && (
+                                    <span className="text-[9px] font-bold bg-white/30 rounded px-0.5 leading-none">
+                                      {(res as any).arrival_time.slice(0,5)}
+                                    </span>
+                                  )}
+                                  {(res as any).departure_time && (
+                                    <span className="text-[9px] font-bold bg-white/30 rounded px-0.5 leading-none">
+                                      →{(res as any).departure_time.slice(0,5)}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             ) : res.status === 'mantenimiento' ? (
                               <div className="text-xs font-bold leading-tight break-words">
@@ -2358,25 +2402,27 @@ export default function CalendarPage() {
                   {/* ── Tipo de llegada ── */}
                   <div>
                     <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Tipo de llegada</label>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
                       {([
                         ['reserva', '📅', 'Es Reserva',       'bg-amber-400 text-gray-900 border-amber-400', 'border-gray-200 text-gray-500 hover:border-amber-300 hover:text-gray-700'],
                         ['directo', '🚶', 'Llegó de la nada', 'bg-blue-500 text-white border-blue-500',       'border-gray-200 text-gray-500 hover:border-blue-300 hover:text-gray-700'],
+                        ['hora',    '⏱️', 'Estadía Corta',    'bg-orange-500 text-white border-orange-500',   'border-gray-200 text-gray-500 hover:border-orange-300 hover:text-gray-700'],
                       ] as [string, string, string, string, string][]).map(([type, emoji, label, activeClass, inactiveClass]) => (
                         <button
                           key={type}
                           type="button"
                           onClick={() => setForm(f => ({
                             ...f,
-                            arrival_type: type as 'reserva' | 'directo',
+                            arrival_type: type as 'reserva' | 'directo' | 'hora',
                             status: type === 'reserva' ? 'reserva' : 'ocupado',
+                            ...(type === 'hora' ? { num_nights: 0, check_out: f.check_in } : {}),
                           }))}
                           className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-all select-none ${
                             form.arrival_type === type ? activeClass : inactiveClass
                           }`}
                         >
                           <span>{emoji}</span>
-                          <span>{label}</span>
+                          <span className="text-xs">{label}</span>
                         </button>
                       ))}
                     </div>
@@ -2508,6 +2554,114 @@ export default function CalendarPage() {
                         <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
                           rows={2} placeholder="Requerimientos, preferencias..."
                           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none" />
+                      </div>
+                    </>
+                  )}
+
+                  {/* ══ ESTADÍA CORTA / LATE CHECKOUT ══ */}
+                  {form.arrival_type === 'hora' && (
+                    <>
+                      <div className="rounded-xl border border-orange-200 bg-orange-50/40 p-3 space-y-3">
+                        <p className="text-xs font-bold text-orange-700 uppercase tracking-wider">⏱️ Estadía Corta — Solo hacen hora</p>
+
+                        {/* Nombre + N° personas */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Nombre <span className="text-red-400">*</span></label>
+                            <input type="text" value={form.guest_name}
+                              onChange={e => setForm(f => ({ ...f, guest_name: e.target.value }))}
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                              placeholder="Ej: García López" autoFocus />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">N° personas</label>
+                            <input type="number" min={1} max={10} value={form.num_guests}
+                              onChange={e => setForm(f => ({ ...f, num_guests: parseInt(e.target.value) || 1 }))}
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                          </div>
+                        </div>
+
+                        {/* Fecha + hora entrada */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Fecha</label>
+                            <DatePicker value={form.check_in}
+                              onChange={v => setForm(f => ({ ...f, check_in: v, check_out: v }))}
+                              placeholder="Fecha" />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Hora entrada</label>
+                            <TimePicker value={form.arrival_time} onChange={v => setForm(f => ({ ...f, arrival_time: v }))} placeholder="-- : --" emoji="🛬" />
+                          </div>
+                        </div>
+
+                        {/* Hora salida + precio */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Hora salida</label>
+                            <TimePicker value={form.departure_time} onChange={v => setForm(f => ({ ...f, departure_time: v }))} placeholder="-- : --" emoji="🛫" />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Precio por uso (Bs.) <span className="text-red-400">*</span></label>
+                            <input type="number" min={0} step={0.5} value={form.price_per_night}
+                              onChange={e => setForm(f => ({ ...f, price_per_night: e.target.value }))}
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                              placeholder="0.00" />
+                          </div>
+                        </div>
+
+                        {/* Pago inmediato */}
+                        <div className="rounded-xl border border-green-200 bg-green-50 p-3 space-y-2">
+                          <label className="block text-sm font-semibold text-green-800">💵 Pago (opcional)</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="number" min={0} step={0.01}
+                              value={form.adelanto}
+                              onChange={e => setForm(f => ({ ...f, adelanto: e.target.value }))}
+                              className="w-full border border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 bg-white"
+                              placeholder="0.00"
+                            />
+                            <select
+                              value={form.adelanto_caja}
+                              onChange={e => setForm(f => ({ ...f, adelanto_caja: e.target.value }))}
+                              className="w-full border border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 bg-white"
+                            >
+                              <option value="CAJA MAYOR">Efectivo</option>
+                              <option value="CUENTA BNB">QR</option>
+                              <option value="TARJETA">Tarjeta</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Huéspedes adicionales */}
+                        {additionalGuests.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Huéspedes adicionales</p>
+                            {additionalGuests.map((ag, idx) => (
+                              <div key={idx} className="border border-orange-100 rounded-lg p-2 bg-white space-y-2">
+                                <p className="text-[11px] font-semibold text-orange-700 uppercase tracking-wide">Persona {idx + 2}</p>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <input type="text" placeholder="Nombre y apellidos" value={ag.name}
+                                    onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, name: e.target.value } : g))}
+                                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                                  <input type="text" placeholder="CI / Pasaporte"
+                                    value={ag.document}
+                                    onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, document: e.target.value } : g))}
+                                    onBlur={e => lookupAdditionalGuest(e.target.value, 'guest_document', idx)}
+                                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Notas */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Notas</label>
+                          <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                            rows={2} placeholder="Observaciones..."
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 resize-none" />
+                        </div>
                       </div>
                     </>
                   )}
