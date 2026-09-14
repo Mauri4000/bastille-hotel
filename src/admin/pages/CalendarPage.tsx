@@ -261,20 +261,22 @@ export default function CalendarPage() {
     fetchData();
   }
 
-  // Quick nota modal (from empty cell — creates a 1-day placeholder)
-  const [quickNotaModal, setQuickNotaModal] = useState<{ roomId: string; day: number; text: string } | null>(null);
+  // Quick nota modal (from empty cell — creates a multi-day placeholder)
+  const [quickNotaModal, setQuickNotaModal] = useState<{ roomId: string; day: number; text: string; numDays: number } | null>(null);
   const [quickNotaError, setQuickNotaError] = useState('');
   async function handleSaveQuickNota() {
     if (!quickNotaModal) return;
     setQuickNotaError('');
     const date = toDateStr(new Date(year, month, quickNotaModal.day));
-    const next = toDateStr(new Date(year, month, quickNotaModal.day + 1));
+    const endDate = new Date(year, month, quickNotaModal.day);
+    endDate.setDate(endDate.getDate() + Math.max(1, quickNotaModal.numDays));
+    const checkOut = toDateStr(endDate);
     const { error } = await supabase.from('reservations').insert({
       room_id:    quickNotaModal.roomId,
       guest_name: '📝 Nota',
       num_guests: 0,
       check_in:   date,
-      check_out:  next,
+      check_out:  checkOut,
       status:     'reserva' as ReservationStatus,
       notes:      quickNotaModal.text,
     });
@@ -4098,6 +4100,32 @@ export default function CalendarPage() {
               maxHeight: Math.min(400, window.innerHeight - cardMenu.y - 16),
             }}
           >
+            {/* ── Nota card: simplified menu ── */}
+            {cardMenu.res.guest_name?.startsWith('📝') ? (
+              <>
+                <button onClick={() => { setNotaModal({ res: cardMenu.res, text: (cardMenu.res as any).notes ?? '' }); setCardMenu(null); }}
+                  className="w-full text-left px-4 py-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50">
+                  📝 Editar nota
+                </button>
+                <button onClick={() => {
+                  const id = cardMenu.res.id;
+                  setCardMenu(null);
+                  setConfirmDialog({
+                    open: true,
+                    title: 'Borrar nota',
+                    body: '¿Seguro que quieres borrar esta nota?',
+                    onConfirm: async () => {
+                      await supabase.from('transactions').delete().eq('reservation_id', id);
+                      const { error } = await supabase.from('reservations').delete().eq('id', id);
+                      if (error) { alert('Error al borrar nota: ' + error.message); return; }
+                      fetchData();
+                    },
+                  });
+                }} className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50">
+                  🗑 Borrar nota
+                </button>
+              </>
+            ) : (<>
             {cardMenu.res.status === 'reserva' && (
               <button onClick={async e => {
                 setCardMenu(null);
@@ -4220,6 +4248,7 @@ export default function CalendarPage() {
                 🗑 Borrar
               </button>
             )}
+            </>)}
           </div>
         </>
       )}
@@ -4267,7 +4296,7 @@ export default function CalendarPage() {
               </button>
             </>)}
             <div className="border-t border-gray-100 my-1" />
-            <button onClick={() => { setQuickNotaModal({ roomId: quickMenu.roomId, day: quickMenu.day, text: '' }); setQuickMenu(null); }}
+            <button onClick={() => { setQuickNotaModal({ roomId: quickMenu.roomId, day: quickMenu.day, text: '', numDays: 1 }); setQuickMenu(null); }}
               className="w-full text-left px-4 py-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50">
               📝 Agregar nota
             </button>
@@ -4283,7 +4312,7 @@ export default function CalendarPage() {
               <h3 className="font-bold text-gray-900">📝 Agregar nota — {quickNotaModal.roomId}</h3>
               <button onClick={() => setQuickNotaModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
             </div>
-            <div className="px-6 py-5 space-y-2">
+            <div className="px-6 py-5 space-y-3">
               <textarea
                 autoFocus
                 value={quickNotaModal.text}
@@ -4292,6 +4321,24 @@ export default function CalendarPage() {
                 placeholder="Escribe una nota para este día..."
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
               />
+              <div className="flex items-center gap-3">
+                <label className="text-sm font-medium text-gray-700 whitespace-nowrap">N° de días:</label>
+                <input
+                  type="number" min={1} max={30}
+                  value={quickNotaModal.numDays}
+                  onChange={e => setQuickNotaModal(n => n ? { ...n, numDays: Math.max(1, parseInt(e.target.value) || 1) } : n)}
+                  className="w-20 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+                {quickNotaModal.numDays > 1 && (() => {
+                  const start = new Date(year, month, quickNotaModal.day);
+                  const end   = new Date(year, month, quickNotaModal.day + quickNotaModal.numDays - 1);
+                  return (
+                    <span className="text-xs text-indigo-600 font-medium">
+                      hasta {end.getDate()}/{end.getMonth() + 1}
+                    </span>
+                  );
+                })()}
+              </div>
               {quickNotaError && <p className="text-red-500 text-xs">{quickNotaError}</p>}
             </div>
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100">
