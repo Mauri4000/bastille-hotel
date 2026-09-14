@@ -4330,8 +4330,7 @@ export default function CalendarPage() {
                   className="w-20 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
                 />
                 {quickNotaModal.numDays > 1 && (() => {
-                  const start = new Date(year, month, quickNotaModal.day);
-                  const end   = new Date(year, month, quickNotaModal.day + quickNotaModal.numDays - 1);
+                  const end = new Date(year, month, quickNotaModal.day + quickNotaModal.numDays - 1);
                   return (
                     <span className="text-xs text-indigo-600 font-medium">
                       hasta {end.getDate()}/{end.getMonth() + 1}
