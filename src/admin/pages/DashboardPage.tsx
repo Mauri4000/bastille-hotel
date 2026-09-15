@@ -1,8 +1,22 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Droplets, AlertTriangle, Building2, PawPrint, RefreshCw } from 'lucide-react';
+import { Droplets, AlertTriangle, Building2, PawPrint, RefreshCw, BedDouble } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Reservation } from '../types';
+
+interface HabUrgente {
+  hab: Reservation;         // habilitación activa
+  nextRes: Reservation | null; // siguiente reserva en esa habitación
+}
+
+function arrivalPriority(arrivalTime: string | null): 'alta' | 'media' | 'baja' {
+  if (!arrivalTime) return 'baja';
+  const [h, m] = arrivalTime.split(':').map(Number);
+  const mins = h * 60 + m;
+  if (mins < 8 * 60) return 'alta';
+  if (mins < 12 * 60) return 'media';
+  return 'baja';
+}
 
 interface AguaState {
   is_closed: boolean;
@@ -37,7 +51,10 @@ export default function DashboardPage() {
   const [aguaLoading, setAguaLoading] = useState(false);
   const [empresas,    setEmpresas]    = useState<Reservation[]>([]);
   const [perros,      setPerros]      = useState<Reservation[]>([]);
+  const [habUrgentes, setHabUrgentes] = useState<HabUrgente[]>([]);
   const [loading,     setLoading]     = useState(true);
+
+  const isTuesday = today.getDay() === 2;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,6 +74,42 @@ export default function DashboardPage() {
       .lte('check_in', in14Str).gt('check_out', todayStr)
       .eq('has_pet', true).in('status', ['ocupado', 'reserva']).order('check_in');
     setPerros(petData ?? []);
+
+    // Habilitaciones activas hoy
+    const { data: habData } = await supabase
+      .from('reservations').select('*')
+      .eq('status', 'habilitacion')
+      .lte('check_in', todayStr).gt('check_out', todayStr);
+    const habs = (habData ?? []) as Reservation[];
+
+    if (habs.length > 0) {
+      const tomorrowStr = new Date(new Date(todayStr + 'T00:00:00').getTime() + 86400000)
+        .toISOString().split('T')[0];
+      const roomIds = habs.map(h => h.room_id);
+      // Fetch next reservations for those rooms (arriving tomorrow or after)
+      const { data: nextData } = await supabase
+        .from('reservations')
+        .select('*')
+        .in('room_id', roomIds)
+        .in('status', ['reserva', 'ocupado'])
+        .gte('check_in', tomorrowStr)
+        .order('check_in');
+      const nextMap: Record<string, Reservation> = {};
+      for (const r of (nextData ?? []) as Reservation[]) {
+        if (!nextMap[r.room_id]) nextMap[r.room_id] = r;
+      }
+      const urgentes: HabUrgente[] = habs.map(h => ({ hab: h, nextRes: nextMap[h.room_id] ?? null }));
+      // Sort: alta → media → baja
+      const order = { alta: 0, media: 1, baja: 2 };
+      urgentes.sort((a, b) => {
+        const pa = order[arrivalPriority((a.nextRes as any)?.arrival_time ?? null)];
+        const pb = order[arrivalPriority((b.nextRes as any)?.arrival_time ?? null)];
+        return pa - pb;
+      });
+      setHabUrgentes(urgentes);
+    } else {
+      setHabUrgentes([]);
+    }
 
     setLoading(false);
   }, []); // eslint-disable-line
@@ -101,6 +154,63 @@ export default function DashboardPage() {
           <RefreshCw size={12} /> Actualizar
         </button>
       </div>
+
+      {/* ── MARTES: Imprimir partes diarias ── */}
+      {isTuesday && (
+        <div className="flex items-center gap-4 bg-red-600 text-white rounded-xl px-5 py-4 shadow-lg animate-pulse">
+          <span className="text-2xl">🚨</span>
+          <div className="flex-1">
+            <p className="font-extrabold text-base tracking-wide">IMPRIMIR PARTES DIARIAS</p>
+            <p className="text-sm font-bold opacity-90 mt-0.5">🔔 AVISAR A LIZZ QUE IMPRIMA 🔔</p>
+          </div>
+          <span className="text-2xl">🚨</span>
+        </div>
+      )}
+
+      {/* ── Habilitaciones urgentes ── */}
+      {!isMarketing && habUrgentes.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-8 h-8 rounded-lg bg-cyan-100 flex items-center justify-center">
+              <BedDouble size={16} className="text-cyan-600" />
+            </div>
+            <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Habilitaciones pendientes</span>
+            <span className="ml-auto bg-cyan-100 text-cyan-700 text-xs font-bold px-2 py-0.5 rounded-full">{habUrgentes.length}</span>
+          </div>
+          <div className="space-y-2">
+            {habUrgentes.map(({ hab, nextRes }) => {
+              const arrTime = (nextRes as any)?.arrival_time ?? null;
+              const prio = arrivalPriority(arrTime);
+              const prioCfg = {
+                alta:  { bg: 'bg-red-50 border-red-300',    badge: 'bg-red-500 text-white',      label: '🔴 URGENTE',    icon: '⚡' },
+                media: { bg: 'bg-amber-50 border-amber-300', badge: 'bg-amber-400 text-white',    label: '🟡 PRIORITARIO', icon: '⏰' },
+                baja:  { bg: 'bg-gray-50 border-gray-200',   badge: 'bg-gray-400 text-white',     label: '🟢 NORMAL',      icon: '🧹' },
+              }[prio];
+              return (
+                <div key={hab.id} className={`rounded-lg px-3 py-2.5 border ${prioCfg.bg}`}>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${prioCfg.badge}`}>{hab.room_id}</span>
+                    <span className="text-xs font-bold text-gray-700">{prioCfg.label}</span>
+                    {arrTime && (
+                      <span className="ml-auto text-xs font-bold text-gray-600">
+                        {prioCfg.icon} próx. llegada {arrTime.slice(0, 5)}
+                      </span>
+                    )}
+                  </div>
+                  {nextRes && (
+                    <p className="text-xs text-gray-500 mt-1 truncate">
+                      {nextRes.guest_name} · entra {new Date(nextRes.check_in + 'T12:00:00').toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short' })}
+                    </p>
+                  )}
+                  {!nextRes && (
+                    <p className="text-xs text-gray-400 mt-1">Sin reserva próxima registrada</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Tank alert ── */}
       {!isMarketing && tankAlert && (
