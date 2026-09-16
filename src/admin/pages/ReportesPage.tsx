@@ -147,6 +147,7 @@ export default function ReportesPage() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
+  const [mensualResponsable, setMensualResponsable] = useState('Guido Dávalos');
   const [mensualLoad, setMensualLoad]   = useState(false);
   const [mensualError, setMensualError] = useState<string | null>(null);
 
@@ -323,7 +324,7 @@ export default function ReportesPage() {
       const logoDer = await imgToBase64(`${base}/escudo-chuquisaca.jpg`).catch(() =>
                       imgToBase64(`${base}/escudo-chuquisaca.png`).catch(() => ''));
 
-      // Column widths: 1 day + 27*2 nat cols + 1 total (no I/P split)
+      // Column widths (original — do not inflate; page height is 595pt landscape)
       const DAY_W = 18;
       const COL_W = 11;
       const TOT_W = 16;
@@ -425,129 +426,146 @@ export default function ReportesPage() {
       const docDef: any = {
         pageSize: 'A4',
         pageOrientation: 'landscape',
-        pageMargins: [8, 6, 8, 6],
+        pageMargins: [8, 3, 8, 3],
         content: [
           // ── TOP HEADER ────────────────────────────────────────────────────
           {
             table: {
-              widths: [58, '*', 95],
+              widths: ['*', 100, 215],
               body: [[
-                // Left: logo + viceministerio
+                // Col 1: ESTADÍSTICAS HOTELERAS
                 {
-                  stack: [
-                    logoIzq ? { image: logoIzq, fit: [38, 32], alignment: 'center' } : { text: '' },
-                    c7b('VICEMINISTERIO\nDE TURISMO', { alignment: 'center', margin: [0, 2, 0, 0], lineHeight: 1.1 }),
-                  ],
-                  border: [true, true, true, true],
-                  margin: [2, 4, 2, 2],
+                  text: 'ESTADÍSTICAS HOTELERAS',
+                  fontSize: 16, bold: true, decoration: 'underline',
+                  alignment: 'center', margin: [0, 6, 0, 0],
                 },
-                // Center: big title
+                // Col 2: PARTE MENSUAL / FORM N°6
                 {
                   stack: [
-                    c7b('ESTADISTICAS HOTELERAS', { fontSize: 13, alignment: 'center', margin: [0, 4, 0, 0] }),
-                    {
-                      columns: [
-                        { text: '', width: '*' },
-                        c7b('PARTE MENSUAL', { width: 'auto', margin: [0, 2, 30, 0] }),
-                        c7b('FORM. N° 6', { width: 'auto', margin: [0, 2, 0, 0] }),
-                      ],
-                    },
+                    { text: 'PARTE MENSUAL', fontSize: 8, bold: true, alignment: 'center', margin: [0, 2, 0, 2] },
+                    { text: 'FORM. N° 6', fontSize: 8, bold: true, alignment: 'center' },
                   ],
-                  border: [true, true, true, true],
+                  margin: [2, 2, 2, 2],
                 },
-                // Right: gobierno text + logo
+                // Col 3: GOBIERNO AUTÓNOMO + logo grande
                 {
                   stack: [
-                    c7b('GOBIERNO AUTÓNOMO DE CHUQUISACA', { alignment: 'center' }),
-                    c7('DIRECCIÓN DE TURISMO', { alignment: 'center' }),
-                    logoDer ? { image: logoDer, fit: [36, 30], alignment: 'center', margin: [0, 2, 0, 0] } : { text: '' },
+                    { text: 'GOBIERNO AUTÓNOMO DE CHUQUISACA', fontSize: 7, bold: true, alignment: 'center', margin: [0, 10, 0, 1] },
+                    { text: 'DIRECCIÓN DE TURISMO', fontSize: 7, alignment: 'center' },
+                    logoDer ? { image: logoDer, fit: [58, 50], alignment: 'center', margin: [0, 3, 0, 0] } : { text: '' },
                   ],
-                  border: [true, true, true, true],
                   margin: [2, 2, 2, 2],
                 },
               ]],
             },
-            layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => '#555', vLineColor: () => '#555', paddingTop: () => 2, paddingBottom: () => 2, paddingLeft: () => 3, paddingRight: () => 3 },
+            layout: { hLineWidth: () => 0, vLineWidth: () => 0, paddingTop: () => 1, paddingBottom: () => 1, paddingLeft: () => 3, paddingRight: () => 3 },
             margin: [0, 0, 0, 0],
           },
-          // ── INFO SECTION (A / B / rooms) ──────────────────────────────────
+          // ── INFO SECTION (A / B) ─────────────────────────────────────────
+          // Outer widths: 16(A) + 205(SectionA) + 16(B) + 588(SectionB) = 825
           {
             table: {
-              widths: [10, 120, 5, 80, 100, 60, 50, '*'],
+              widths: [16, 205, 16, 588],
               body: [[
-                // A label
-                { text: 'A', fontSize: 8, bold: true, rowSpan: 3, alignment: 'center', margin: [0, 10, 0, 0] },
-                // A data
+                // ── A label ──
+                { text: 'A', fontSize: 9, bold: true, alignment: 'center', margin: [0, 46, 0, 0] },
+
+                // ── Section A: Viceministerio libre + tablita Mes/Año + tabla ciudad ──
                 {
+                  margin: [0, 0, 0, 0],
                   stack: [
-                    { columns: [c7b('Mes  '), c7(monthName.toUpperCase()), c7b('   Año  '), c7(String(year))], margin: [0, 0, 0, 1] },
-                    { columns: [c7b('Ciudad o Localid.  '), c7('SUCRE')], margin: [0, 0, 0, 1] },
-                    { columns: [c7b('Establecimiento  '), c7('HOTEL BASTILLE')], margin: [0, 0, 0, 1] },
-                  ],
-                  rowSpan: 3,
-                },
-                // B label
-                { text: 'B', fontSize: 8, bold: true, rowSpan: 3, alignment: 'center', margin: [0, 10, 0, 0] },
-                // B data
-                {
-                  stack: [
-                    { columns: [c7('Empleados Permanentes  '), c7b('3')], margin: [0, 0, 0, 1] },
-                    { columns: [c7('Empleados Eventuales  '), c7b('3')], margin: [0, 0, 0, 1] },
-                    { columns: [c7('Total Número Empleados  '), c7b('6')], margin: [0, 0, 0, 1] },
-                  ],
-                  rowSpan: 3,
-                },
-                // Hab types
-                {
-                  stack: [
-                    c7('Hab. Matrimonial', { margin: [0, 0, 0, 1] }),
-                    c7('Hab. Simples', { margin: [0, 0, 0, 1] }),
-                    c7('Hab. Dobles', { margin: [0, 0, 0, 1] }),
-                  ],
-                  rowSpan: 3,
-                },
-                // Hab counts
-                {
-                  stack: [
-                    c7b('', { margin: [0, 0, 0, 1] }),
-                    c7b('', { margin: [0, 0, 0, 1] }),
-                    c7b('', { margin: [0, 0, 0, 1] }),
-                  ],
-                  rowSpan: 3,
-                },
-                // Totals
-                {
-                  stack: [
-                    { columns: [c7b('Total N° Hab.  '), c7b('21')], margin: [0, 0, 0, 1] },
-                    { columns: [c7b('Total N° Plazas.  '), c7b('34')], margin: [0, 0, 0, 1] },
-                  ],
-                  rowSpan: 3,
-                },
-                // FRR
-                { text: 'FRR 03', fontSize: 8, bold: true, alignment: 'center', rowSpan: 3, margin: [0, 10, 0, 0] },
-              ], [
-                {}, {}, {}, {}, {}, {}, {}, {},
-              ], [
-                { text: '', border: [true, false, false, true] },
-                {
-                  stack: [
-                    { columns: [c7b('Categoría  '), c7('****')], margin: [0, 0, 0, 1] },
-                    { columns: [c7b('Dirección  '), c7('A. Arce 247')], margin: [0, 0, 0, 1] },
+                    // VICEMINISTERIO DE TURISMO — al aire libre, arriba de Mes
+                    {
+                      stack: [
+                        logoIzq ? { image: logoIzq, fit: [22, 18], alignment: 'left' } : { text: '' },
+                        { text: 'VICEMINISTERIO DE TURISMO', fontSize: 6, bold: true, alignment: 'left', margin: [0, 1, 0, 1] },
+                      ],
+                    },
+                    // Tablita 1: Mes | val | Año | val — muy compacta
+                    {
+                      table: {
+                        widths: [18, 62, 18, 30],
+                        body: [[c7b('Mes'), c7(monthName.toUpperCase()), c7b('Año'), c7(String(year))]],
+                      },
+                      layout: { hLineWidth: () => 0.45, vLineWidth: () => 0.45, hLineColor: () => '#555', vLineColor: () => '#555', paddingTop: () => 2, paddingBottom: () => 2, paddingLeft: () => 2, paddingRight: () => 2 },
+                    },
+                    // Tabla ciudad/hotel: cada campo en su fila
+                    {
+                      table: {
+                        widths: [80, 105],
+                        body: [
+                          [c7b('Ciudad o Localidad'), c7('SUCRE')],
+                          [c7b('Establecimiento'),    c7('HOTEL BASTILLE')],
+                          [c7b('Categoría'),          c7('***')],
+                          [c7b('Dirección'),          c7('A. Arce 247')],
+                        ],
+                      },
+                      layout: { hLineWidth: () => 0.45, vLineWidth: () => 0.45, hLineColor: () => '#555', vLineColor: () => '#555', paddingTop: () => 2, paddingBottom: () => 2, paddingLeft: () => 2, paddingRight: () => 2 },
+                    },
                   ],
                 },
-                { text: '', border: [true, false, false, true] },
-                { text: '', border: [false, false, true, true] },
-                { text: '', border: [true, false, false, true] },
-                { text: '', border: [true, false, false, true] },
-                { text: '', border: [true, false, false, true] },
-                { text: '', border: [true, false, false, true] },
+
+                // ── B label ──
+                { text: 'B', fontSize: 9, bold: true, alignment: 'center', margin: [0, 46, 0, 0] },
+
+                // ── Section B: 3 tablitas + FRR 03 debajo de Empleados ──
+                {
+                  margin: [0, 0, 0, 0],
+                  columns: [
+                    // Tablita 2: Empleados + FRR 03 debajo
+                    {
+                      width: 'auto',
+                      stack: [
+                        {
+                          table: {
+                            widths: [100, 14],
+                            body: [
+                              [c7b('Empleados Permanentes'), c7b('3')],
+                              [c7b('Empleados Eventuales'),  c7b('3')],
+                              [c7b('Total Numero Empleados'), c7b('6')],
+                            ],
+                          },
+                          layout: { hLineWidth: () => 0.45, vLineWidth: () => 0.45, hLineColor: () => '#555', vLineColor: () => '#555', paddingTop: () => 2, paddingBottom: () => 2, paddingLeft: () => 2, paddingRight: () => 2 },
+                        },
+                        { text: 'FRR 03', fontSize: 8, bold: true, alignment: 'center', margin: [0, 3, 0, 0] },
+                      ],
+                    },
+                    // Tablita 3: Habitaciones
+                    {
+                      width: 'auto',
+                      margin: [8, 0, 0, 0],
+                      table: {
+                        widths: [80, 14],
+                        body: [
+                          [c7b('Hab. Matrimonial'), c7('')],
+                          [c7b('Hab. Simples'),     c7('')],
+                          [c7b('Hab. Dobles'),      c7('')],
+                          [c7b('Hab. Triples'),     c7('')],
+                        ],
+                      },
+                      layout: { hLineWidth: () => 0.45, vLineWidth: () => 0.45, hLineColor: () => '#555', vLineColor: () => '#555', paddingTop: () => 2, paddingBottom: () => 2, paddingLeft: () => 2, paddingRight: () => 2 },
+                    },
+                    // Tablita 4: Total Hab / Total Plazas
+                    {
+                      width: 'auto',
+                      margin: [8, 0, 0, 0],
+                      table: {
+                        widths: [60, 16],
+                        body: [
+                          [c7b('Total N° Hab.'),    c7b('21')],
+                          [c7b('Total N° Plazas.'), c7b('34')],
+                        ],
+                      },
+                      layout: { hLineWidth: () => 0.45, vLineWidth: () => 0.45, hLineColor: () => '#555', vLineColor: () => '#555', paddingTop: () => 2, paddingBottom: () => 2, paddingLeft: () => 2, paddingRight: () => 2 },
+                    },
+                  ],
+                },
               ]],
             },
             layout: {
-              hLineWidth: () => 0.4, vLineWidth: () => 0.4,
-              hLineColor: () => '#666', vLineColor: () => '#666',
-              paddingTop: () => 2, paddingBottom: () => 2,
-              paddingLeft: () => 3, paddingRight: () => 3,
+              hLineWidth: () => 0, vLineWidth: () => 0,
+              paddingTop: () => 0, paddingBottom: () => 0,
+              paddingLeft: () => 0, paddingRight: () => 0,
             },
             margin: [0, 0, 0, 0],
           },
@@ -573,82 +591,89 @@ export default function ReportesPage() {
             margin: [0, 0, 0, 4],
           },
           // ── FOOTER ────────────────────────────────────────────────────────
+          // Línea 1: Referencia: I: / P:
           {
             columns: [
-              // Referencia
-              {
-                width: 120,
-                stack: [
-                  c7b('Referencia:'),
-                  c7('I: Ingreso (Entradas)'),
-                  c7('P: Permanentes (Pernoctación)'),
-                ],
-                margin: [0, 2, 0, 0],
-              },
-              // Nota
+              { width: 'auto', text: 'Referencia: ', fontSize: 8, bold: true },
               {
                 width: '*',
                 stack: [
-                  { text: 'Nota: Este Formulario debe ser entregado a la\nrepresentación regional de la secretaria Nacional\nde Turismo antes del día 8 del mes siguiente.', fontSize: 6, color: '#444' },
+                  { text: 'I: Ingreso (Entradas)',         fontSize: 8, bold: true },
+                  { text: 'P: Permanentes (Pernoctación)', fontSize: 8, bold: true },
                 ],
-                margin: [4, 2, 4, 0],
               },
-              // Sello
+            ],
+            margin: [0, 4, 0, 0],
+          },
+          // Línea 2: "Nota" — con salto de línea debajo de P:
+          { text: 'Nota', fontSize: 8, bold: true, margin: [0, 4, 0, 2] },
+          // Línea 3: contenido Nota | Sello | Persona | Fecha | Resumen — mismo nivel
+          {
+            columns: [
+              // Nota
               {
-                width: 80,
-                stack: [
-                  c7('Sello del Establecimiento', { alignment: 'center' }),
-                  { text: '\n\n', fontSize: 14 },
-                ],
-                margin: [0, 2, 0, 0],
+                width: 235,
+                text: 'Este Formulario debe ser entregado a la\nrepresentación regional de la secretaria Nacional\nde Turismo antes del día 8 del mes siguiente.',
+                fontSize: 8, bold: true, color: '#222', alignment: 'center',
               },
-              // Persona responsable
+              // Sello — label arriba (mismo nivel que Fecha), espacio abajo para el sello
               {
-                width: 85,
+                width: 110,
                 stack: [
-                  c7('Persona responsable', { alignment: 'center' }),
-                  c7('Nombre', { alignment: 'center', color: '#888' }),
-                  c7b('Guido Dávalos', { alignment: 'center' }),
+                  { text: 'Sello del Establecimiento', fontSize: 7, alignment: 'center' },
+                  { text: '\n\n\n', fontSize: 10 },
                 ],
-                margin: [0, 2, 0, 0],
+                margin: [10, 0, 8, 0],
               },
-              // Fecha
+              // Persona responsable — label arriba (mismo nivel), línea y nombre abajo
               {
-                width: 80,
+                width: 110,
                 stack: [
-                  c7b('FECHA DE RECEPCION Y SELLO', { alignment: 'center', fontSize: 6 }),
+                  { text: 'Persona responsable', fontSize: 7, alignment: 'center' },
+                  { text: '______________________', fontSize: 7, alignment: 'center', color: '#555', margin: [0, 3, 0, 0] },
+                  { text: 'Nombre', fontSize: 7, alignment: 'center', color: '#555' },
+                  { text: mensualResponsable, fontSize: 8, bold: true, alignment: 'center' },
                 ],
-                margin: [0, 2, 4, 0],
+                margin: [0, 0, 8, 0],
               },
-              // Summary table
+              // Fecha de recepción
+              {
+                width: 90,
+                stack: [
+                  { text: 'FECHA DE RECEPCION Y SELLO', fontSize: 7, bold: true, alignment: 'center' },
+                  { text: '\n\n\n', fontSize: 10 },
+                ],
+                margin: [0, 0, 8, 0],
+              },
+              // Resumen
               {
                 width: 'auto',
                 table: {
                   widths: [42, 22, 22, 28],
                   body: [
                     [
-                      c7b('Resumen', { fillColor: '#e0e0e0' }),
-                      c7b('Nals', { alignment: 'center', fillColor: '#e0e0e0' }),
-                      c7b('Extr', { alignment: 'center', fillColor: '#e0e0e0' }),
-                      c7b('Total', { alignment: 'center', fillColor: '#e0e0e0' }),
+                      { text: 'Resumen',  fontSize: 8, bold: true, fillColor: '#e0e0e0' },
+                      { text: 'Nals',     fontSize: 8, bold: true, alignment: 'center', fillColor: '#e0e0e0' },
+                      { text: 'Extr',     fontSize: 8, bold: true, alignment: 'center', fillColor: '#e0e0e0' },
+                      { text: 'Total',    fontSize: 8, bold: true, alignment: 'center', fillColor: '#e0e0e0' },
                     ],
                     [
-                      c7('Ingreso'),
-                      { text: nals.sI || '', fontSize: 7, alignment: 'center' },
-                      { text: extr.sI || '', fontSize: 7, alignment: 'center' },
-                      { text: total.sI || '', fontSize: 7, alignment: 'center' },
+                      { text: 'Ingreso',      fontSize: 8 },
+                      { text: nals.sI || '',  fontSize: 8, alignment: 'center' },
+                      { text: extr.sI || '',  fontSize: 8, alignment: 'center' },
+                      { text: total.sI || '', fontSize: 8, alignment: 'center' },
                     ],
                     [
-                      c7('Permanen.'),
-                      { text: nals.sP || '', fontSize: 7, alignment: 'center' },
-                      { text: extr.sP || '', fontSize: 7, alignment: 'center' },
-                      { text: total.sP || '', fontSize: 7, alignment: 'center' },
+                      { text: 'Permanen.',    fontSize: 8 },
+                      { text: nals.sP || '',  fontSize: 8, alignment: 'center' },
+                      { text: extr.sP || '',  fontSize: 8, alignment: 'center' },
+                      { text: total.sP || '', fontSize: 8, alignment: 'center' },
                     ],
                     [
-                      c7b('Total', { fillColor: '#e8e8e8' }),
-                      { text: nals.tot || '', fontSize: 7, bold: true, alignment: 'center', fillColor: '#e8e8e8' },
-                      { text: extr.tot || '', fontSize: 7, bold: true, alignment: 'center', fillColor: '#e8e8e8' },
-                      { text: total.tot || '', fontSize: 7, bold: true, alignment: 'center', fillColor: '#e8e8e8' },
+                      { text: 'Total',         fontSize: 8, bold: true, fillColor: '#e8e8e8' },
+                      { text: nals.tot || '',  fontSize: 8, bold: true, alignment: 'center', fillColor: '#e8e8e8' },
+                      { text: extr.tot || '',  fontSize: 8, bold: true, alignment: 'center', fillColor: '#e8e8e8' },
+                      { text: total.tot || '', fontSize: 8, bold: true, alignment: 'center', fillColor: '#e8e8e8' },
                     ],
                   ],
                 },
@@ -656,7 +681,7 @@ export default function ReportesPage() {
                   hLineWidth: () => 0.4, vLineWidth: () => 0.4,
                   hLineColor: () => '#888', vLineColor: () => '#888',
                   paddingLeft: () => 2, paddingRight: () => 2,
-                  paddingTop: () => 1, paddingBottom: () => 1,
+                  paddingTop: () => 2, paddingBottom: () => 2,
                 },
               },
             ],
@@ -1731,6 +1756,16 @@ ${mktTop3.map((p:any,i:number)=>`<div class="top3-card" style="border-top-color:
               value={mensualMonth}
               onChange={e => setMensualMonth(e.target.value)}
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Persona responsable</label>
+            <input
+              type="text"
+              value={mensualResponsable}
+              onChange={e => setMensualResponsable(e.target.value)}
+              placeholder="Nombre completo"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 w-52"
             />
           </div>
           <button
