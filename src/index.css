@@ -3,3 +3,11 @@
 html {
   scroll-behavior: smooth;
 }
+
+@keyframes hab-urgente {
+  0%, 100% { box-shadow: 0 0 0 2px #ef4444; background-color: #fef08a; }
+  50%       { box-shadow: 0 0 0 4px #dc2626, 0 0 12px #ef4444; background-color: #fca5a5; }
+}
+.anim-hab-urgente {
+  animation: hab-urgente 1s ease-in-out infinite;
+}

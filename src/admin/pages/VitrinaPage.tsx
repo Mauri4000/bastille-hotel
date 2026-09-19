@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import type { FormEvent, DragEvent } from 'react';
 import { Plus, Minus, Search, Package, RefreshCw, Trash2, X, UploadCloud, Pencil, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
@@ -82,6 +83,11 @@ function LocationPicker({ value, onChange }: { value: Location | ''; onChange: (
 
 export default function VitrinaPage() {
   const { profile } = useAuth();
+  const location = useLocation();
+  const highlightId: string | undefined = (location.state as any)?.highlightId;
+  const [highlightActive, setHighlightActive] = useState<string | null>(highlightId ?? null);
+  const highlightRef = useRef<HTMLDivElement | null>(null);
+
   const [products,   setProducts]   = useState<VitrinaProduct[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState('');
@@ -131,6 +137,16 @@ export default function VitrinaPage() {
   }, []);
 
   useEffect(() => { fetchProducts(); }, [fetchProducts]);
+
+  // Scroll to highlighted product after load
+  useEffect(() => {
+    if (!highlightActive || !highlightRef.current) return;
+    const timer = setTimeout(() => {
+      highlightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+    const clear = setTimeout(() => setHighlightActive(null), 3000);
+    return () => { clearTimeout(timer); clearTimeout(clear); };
+  }, [highlightActive, products]);
 
   function qtyFor(p: VitrinaProduct) {
     return pending[p.id] !== undefined ? pending[p.id] : p.quantity;
@@ -344,10 +360,14 @@ export default function VitrinaPage() {
             const isDirty  = pending[p.id] !== undefined && pending[p.id] !== p.quantity;
             const isSaving = saving[p.id];
             const expiryDays = p.expiration_date ? daysUntil(p.expiration_date) : null;
+            const isHighlighted = highlightActive === p.id;
             return (
-              <div key={p.id} className={`bg-white rounded-2xl shadow-sm border transition-all ${
-                isDirty ? 'border-amber-400 ring-2 ring-amber-100' : 'border-gray-200'
-              }`}>
+              <div key={p.id}
+                ref={isHighlighted ? highlightRef : null}
+                className={`bg-white rounded-2xl shadow-sm border transition-all ${
+                  isHighlighted  ? 'border-red-400 ring-4 ring-red-200 scale-105' :
+                  isDirty        ? 'border-amber-400 ring-2 ring-amber-100' : 'border-gray-200'
+                }`}>
                 <div className="relative">
                   <img src={imageSrc(p.image_filename)} alt={p.name}
                     className="w-full h-32 object-cover rounded-t-2xl bg-gray-100"

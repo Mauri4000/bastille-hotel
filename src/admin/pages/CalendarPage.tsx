@@ -613,7 +613,7 @@ export default function CalendarPage() {
   // Quick action menu for empty cells
   const [quickMenu, setQuickMenu] = useState<{ roomId: string; day: number; x: number; y: number } | null>(null);
   // Context menu when clicking a filled card
-  const [cardMenu, setCardMenu] = useState<{ res: Reservation; x: number; y: number } | null>(null);
+  const [cardMenu, setCardMenu] = useState<{ res: Reservation; x: number; y: number; isUrgente?: boolean } | null>(null);
   // Multi-room reservation modal
   const [multiRoomModal, setMultiRoomModal] = useState<{
     checkIn: string; checkOut: string; guestName: string; numGuests: number;
@@ -762,6 +762,54 @@ export default function CalendarPage() {
       }
       cur.setDate(cur.getDate() + 1);
     } while (!isOneDay && cur < end);
+  }
+
+  // ── habilitaciones urgentes ──
+  // Una reserva/ocupado es URGENTE cuando:
+  //   A) Hay una habilitación activa para esa habitación cuyo check_out = check_in de la reserva
+  //      (hab.check_out = reserva.check_in → "limpian hoy, llega mañana")
+  //   O
+  //   B) Otro stay termina el mismo día que arranca esta reserva (pre-aviso, aún sin hab)
+  //      PERO solo si la fecha es HOY o futura.
+  // DESACTIVAR: al borrar el card azul de habilitación el titileo desaparece (caso A).
+  const todayStr = toDateStr(today);
+
+  // Maps auxiliares
+  const habCheckOutByRoom = new Map<string, Set<string>>(); // roomId → hab.check_out dates
+  const habStartByRoom    = new Map<string, Set<string>>(); // roomId → hab.check_in dates
+  const stayEndByRoom     = new Map<string, Set<string>>(); // roomId → check_out de cualquier stay
+
+  for (const res of reservations) {
+    if (res.status === 'habilitacion') {
+      if (!habCheckOutByRoom.has(res.room_id)) habCheckOutByRoom.set(res.room_id, new Set());
+      habCheckOutByRoom.get(res.room_id)!.add(res.check_out);
+      if (!habStartByRoom.has(res.room_id)) habStartByRoom.set(res.room_id, new Set());
+      habStartByRoom.get(res.room_id)!.add(res.check_in);
+    } else if (!res.guest_name?.startsWith('📝')) {
+      if (!stayEndByRoom.has(res.room_id)) stayEndByRoom.set(res.room_id, new Set());
+      stayEndByRoom.get(res.room_id)!.add(res.check_out);
+    }
+  }
+
+  const habUrgenteSet = new Set<string>();
+  for (const res of reservations) {
+    if (res.status === 'reserva' || res.status === 'ocupado') {
+      const startD = toLocalDate(res.check_in);
+      if (startD.getFullYear() === year && startD.getMonth() === month && res.check_in >= todayStr) {
+        const key = `${res.room_id}-${startD.getDate()}`;
+        // Caso A: hab existe y termina justo cuando llega este huésped → titila hasta borrar la hab
+        const habEnds   = habCheckOutByRoom.get(res.room_id);
+        const habStarts = habStartByRoom.get(res.room_id);
+        if ((habEnds && habEnds.has(res.check_in)) || (habStarts && habStarts.has(res.check_in)))
+          habUrgenteSet.add(key);
+        // Caso B: sin hab todavía, pero otro huésped sale ese mismo día (pre-aviso)
+        else {
+          const prevEnds = stayEndByRoom.get(res.room_id);
+          if (prevEnds && prevEnds.has(res.check_in))
+            habUrgenteSet.add(key);
+        }
+      }
+    }
   }
 
   // ── navigation ──
@@ -1193,7 +1241,8 @@ export default function CalendarPage() {
       if (notesStr.includes('__room_change')) {
         const parsed = JSON.parse(notesStr);
         if (parsed.__room_change && parsed.parent_id) {
-          const prevNights = Math.max(1, Math.round(
+          // Math.max(0,...) — si el cambio fue el mismo día (0 noches), no cobrar el cuarto anterior
+          const prevNights = Math.max(0, Math.round(
             (new Date(parsed.from_checkout + 'T00:00:00').getTime() - new Date(parsed.from_checkin + 'T00:00:00').getTime()) / 86400000
           ));
           const { data: parentTxs } = await supabase
@@ -1886,6 +1935,10 @@ export default function CalendarPage() {
                     const arrivalTime   = (res as any)?.arrival_time   ? (res as any).arrival_time.slice(0,5)   : null;
                     const departureTime = (res as any)?.departure_time ? (res as any).departure_time.slice(0,5) : null;
 
+                    // Habilitación urgente: hab y reserva coinciden en mismo día/habitación
+                    const cellKey = `${room.id}-${d}`;
+                    const isHabUrgente = habUrgenteSet.has(cellKey) && !isNota;
+
                     return (
                       <td
                         key={d}
@@ -1915,9 +1968,9 @@ export default function CalendarPage() {
                           <button
                             onClick={e => {
                               if (selectMode) { toggleCellSelect(res); return; }
-                              setCardMenu({ res, x: e.clientX, y: e.clientY });
+                              setCardMenu({ res, x: e.clientX, y: e.clientY, isUrgente: isHabUrgente });
                             }}
-                            className={`w-full h-full rounded-sm md:rounded-lg ${isMobile ? 'px-0.5 py-0.5' : 'px-2 py-1'} text-left transition-all ${cfg?.bg ?? 'bg-gray-400'} ${cfg?.text ?? 'text-white'} ${
+                            className={`w-full h-full rounded-sm md:rounded-lg ${isMobile ? 'px-0.5 py-0.5' : 'px-2 py-1'} text-left transition-all ${cfg?.bg ?? 'bg-gray-400'} ${cfg?.text ?? 'text-white'} ${isHabUrgente ? 'anim-hab-urgente' : ''} ${
                               selectMode
                                 ? selectedIds.has(res.id)
                                   ? 'ring-2 ring-white ring-offset-1 ring-offset-transparent brightness-110'
@@ -1938,7 +1991,7 @@ export default function CalendarPage() {
                               ) : res.status === 'mantenimiento' ? (
                                 <span className="text-[9px]">🔧</span>
                               ) : res.status === 'habilitacion' ? (
-                                <span className="text-[9px]">🧹</span>
+                                <span className="text-[9px]">{isHabUrgente ? '🚨' : '🧹'}</span>
                               ) : null
                             ) : isNota ? (
                               <div className="text-[10px] font-bold leading-tight break-words">
@@ -1969,12 +2022,27 @@ export default function CalendarPage() {
                               </div>
                             ) : res.status === 'habilitacion' ? (
                               <div className="flex flex-col items-center justify-center h-full text-center">
-                                <div className="text-base leading-none">🧹</div>
-                                <div className="text-[10px] font-bold mt-0.5 opacity-90">Habilitación</div>
+                                {isHabUrgente ? (
+                                  <>
+                                    <div className="text-base leading-none">🚨</div>
+                                    <div className="text-[9px] font-extrabold mt-0.5 text-red-900 leading-tight">HABILITAR</div>
+                                    <div className="text-[9px] font-extrabold text-red-900 leading-tight">URGENTE</div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className="text-base leading-none">🧹</div>
+                                    <div className="text-[10px] font-bold mt-0.5 opacity-90">Habilitación</div>
+                                  </>
+                                )}
                               </div>
                             ) : isCheckIn ? (
                               /* ── First day: full name + flags + both times ── */
                               <>
+                                {isHabUrgente && (
+                                  <div className="text-[9px] font-extrabold text-red-900 bg-red-200/80 rounded px-1 py-px mb-0.5 leading-tight text-center">
+                                    🚨 HABILITAR URGENTE
+                                  </div>
+                                )}
                                 <div className="text-xs font-bold leading-tight line-clamp-2">
                                   {res.is_empresa && (res as any).empresa_name ? (res as any).empresa_name : res.guest_name}
                                 </div>
@@ -3450,7 +3518,7 @@ export default function CalendarPage() {
                       <div className="px-4 py-3 space-y-1 text-sm">
 
                         {/* Previous room section (room change) */}
-                        {prev && (
+                        {prev && prev.nights > 0 && (
                           <div className="bg-white border border-gray-200 rounded-lg px-3 py-2 mb-2 space-y-0.5">
                             <div className="flex justify-between text-xs font-bold text-gray-700">
                               <span>🏠 {prev.room} <span className="font-normal text-gray-400">({prev.checkin} → {prev.checkout})</span></span>
@@ -3472,6 +3540,12 @@ export default function CalendarPage() {
                                 <span>Bs. {(prevTotal - prev.paid).toFixed(2)}</span>
                               </div>
                             )}
+                          </div>
+                        )}
+                        {/* Cuarto anterior mismo día (0 noches) — solo informativo, sin cobro */}
+                        {prev && prev.nights === 0 && (
+                          <div className="bg-gray-50 border border-dashed border-gray-300 rounded-lg px-3 py-1.5 mb-2">
+                            <span className="text-xs text-gray-400">🔄 Cambio desde {prev.room} ({prev.checkin}) — sin cobro</span>
                           </div>
                         )}
 
@@ -4126,6 +4200,22 @@ export default function CalendarPage() {
                 </button>
               </>
             ) : (<>
+            {/* ── Marcar como habilitado (solo cards urgentes) ── */}
+            {cardMenu.isUrgente && (
+              <button onClick={async () => {
+                const roomId    = cardMenu.res.room_id;
+                const checkIn   = cardMenu.res.check_in;
+                setCardMenu(null);
+                // Borrar la habilitación oculta: la que empieza o termina el mismo día que llega este huésped
+                await supabase.from('reservations').delete()
+                  .eq('room_id', roomId)
+                  .eq('status', 'habilitacion')
+                  .or(`check_in.eq.${checkIn},check_out.eq.${checkIn}`);
+                fetchData();
+              }} className="w-full text-left px-4 py-2 text-sm font-bold text-green-700 hover:bg-green-50 border-b border-gray-100">
+                ✅ Marcar como habilitado
+              </button>
+            )}
             {cardMenu.res.status === 'reserva' && (
               <button onClick={async e => {
                 setCardMenu(null);

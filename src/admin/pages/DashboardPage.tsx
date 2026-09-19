@@ -1,21 +1,16 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Droplets, AlertTriangle, Building2, PawPrint, RefreshCw, BedDouble } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Droplets, AlertTriangle, Building2, PawPrint, RefreshCw, ShoppingBag } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Reservation } from '../types';
 
-interface HabUrgente {
-  hab: Reservation;         // habilitación activa
-  nextRes: Reservation | null; // siguiente reserva en esa habitación
-}
-
-function arrivalPriority(arrivalTime: string | null): 'alta' | 'media' | 'baja' {
-  if (!arrivalTime) return 'baja';
-  const [h, m] = arrivalTime.split(':').map(Number);
-  const mins = h * 60 + m;
-  if (mins < 8 * 60) return 'alta';
-  if (mins < 12 * 60) return 'media';
-  return 'baja';
+interface VitrinaProduct {
+  id: string;
+  name: string;
+  quantity: number;
+  expiration_date: string | null;
+  expiry_notes: string | null;
 }
 
 interface AguaState {
@@ -41,6 +36,7 @@ function shortDate(iso: string) {
 export default function DashboardPage() {
   const { profile } = useAuth();
   const isMarketing = profile?.role === 'marketing';
+  const navigate = useNavigate();
 
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
@@ -51,7 +47,7 @@ export default function DashboardPage() {
   const [aguaLoading, setAguaLoading] = useState(false);
   const [empresas,    setEmpresas]    = useState<Reservation[]>([]);
   const [perros,      setPerros]      = useState<Reservation[]>([]);
-  const [habUrgentes, setHabUrgentes] = useState<HabUrgente[]>([]);
+  const [vitAlerts,   setVitAlerts]   = useState<{ lowStock: VitrinaProduct[]; expiring: VitrinaProduct[] }>({ lowStock: [], expiring: [] });
   const [loading,     setLoading]     = useState(true);
 
   const isTuesday = today.getDay() === 2;
@@ -75,41 +71,16 @@ export default function DashboardPage() {
       .eq('has_pet', true).in('status', ['ocupado', 'reserva']).order('check_in');
     setPerros(petData ?? []);
 
-    // Habilitaciones activas hoy
-    const { data: habData } = await supabase
-      .from('reservations').select('*')
-      .eq('status', 'habilitacion')
-      .lte('check_in', todayStr).gt('check_out', todayStr);
-    const habs = (habData ?? []) as Reservation[];
-
-    if (habs.length > 0) {
-      const tomorrowStr = new Date(new Date(todayStr + 'T00:00:00').getTime() + 86400000)
-        .toISOString().split('T')[0];
-      const roomIds = habs.map(h => h.room_id);
-      // Fetch next reservations for those rooms (arriving tomorrow or after)
-      const { data: nextData } = await supabase
-        .from('reservations')
-        .select('*')
-        .in('room_id', roomIds)
-        .in('status', ['reserva', 'ocupado'])
-        .gte('check_in', tomorrowStr)
-        .order('check_in');
-      const nextMap: Record<string, Reservation> = {};
-      for (const r of (nextData ?? []) as Reservation[]) {
-        if (!nextMap[r.room_id]) nextMap[r.room_id] = r;
-      }
-      const urgentes: HabUrgente[] = habs.map(h => ({ hab: h, nextRes: nextMap[h.room_id] ?? null }));
-      // Sort: alta → media → baja
-      const order = { alta: 0, media: 1, baja: 2 };
-      urgentes.sort((a, b) => {
-        const pa = order[arrivalPriority((a.nextRes as any)?.arrival_time ?? null)];
-        const pb = order[arrivalPriority((b.nextRes as any)?.arrival_time ?? null)];
-        return pa - pb;
-      });
-      setHabUrgentes(urgentes);
-    } else {
-      setHabUrgentes([]);
-    }
+    // Vitrina alerts: stock bajo (≤ 3) y vencimiento próximo (≤ 30 días)
+    const { data: vitData } = await supabase
+      .from('vitrina_products').select('id,name,quantity,expiration_date,expiry_notes').order('name');
+    const vits = (vitData ?? []) as VitrinaProduct[];
+    const in30 = new Date(today); in30.setDate(in30.getDate() + 30);
+    const in30Str = in30.toISOString().split('T')[0];
+    setVitAlerts({
+      lowStock: vits.filter(v => v.quantity === 0),
+      expiring: vits.filter(v => v.expiration_date && v.expiration_date <= in30Str),
+    });
 
     setLoading(false);
   }, []); // eslint-disable-line
@@ -121,7 +92,10 @@ export default function DashboardPage() {
     const newState: AguaState = agua.is_closed
       ? { is_closed: false, closed_at: null }
       : { is_closed: true, closed_at: new Date().toISOString() };
-    await supabase.from('hotel_settings').upsert({ key: 'agua_comercial', value: newState, updated_at: new Date().toISOString() });
+    await supabase.from('hotel_settings').upsert(
+      { key: 'agua_comercial', value: newState, updated_at: new Date().toISOString() },
+      { onConflict: 'key' }
+    );
     setAgua(newState);
     setAguaLoading(false);
   }
@@ -167,50 +141,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ── Habilitaciones urgentes ── */}
-      {!isMarketing && habUrgentes.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 rounded-lg bg-cyan-100 flex items-center justify-center">
-              <BedDouble size={16} className="text-cyan-600" />
-            </div>
-            <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Habilitaciones pendientes</span>
-            <span className="ml-auto bg-cyan-100 text-cyan-700 text-xs font-bold px-2 py-0.5 rounded-full">{habUrgentes.length}</span>
-          </div>
-          <div className="space-y-2">
-            {habUrgentes.map(({ hab, nextRes }) => {
-              const arrTime = (nextRes as any)?.arrival_time ?? null;
-              const prio = arrivalPriority(arrTime);
-              const prioCfg = {
-                alta:  { bg: 'bg-red-50 border-red-300',    badge: 'bg-red-500 text-white',      label: '🔴 URGENTE',    icon: '⚡' },
-                media: { bg: 'bg-amber-50 border-amber-300', badge: 'bg-amber-400 text-white',    label: '🟡 PRIORITARIO', icon: '⏰' },
-                baja:  { bg: 'bg-gray-50 border-gray-200',   badge: 'bg-gray-400 text-white',     label: '🟢 NORMAL',      icon: '🧹' },
-              }[prio];
-              return (
-                <div key={hab.id} className={`rounded-lg px-3 py-2.5 border ${prioCfg.bg}`}>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${prioCfg.badge}`}>{hab.room_id}</span>
-                    <span className="text-xs font-bold text-gray-700">{prioCfg.label}</span>
-                    {arrTime && (
-                      <span className="ml-auto text-xs font-bold text-gray-600">
-                        {prioCfg.icon} próx. llegada {arrTime.slice(0, 5)}
-                      </span>
-                    )}
-                  </div>
-                  {nextRes && (
-                    <p className="text-xs text-gray-500 mt-1 truncate">
-                      {nextRes.guest_name} · entra {new Date(nextRes.check_in + 'T12:00:00').toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short' })}
-                    </p>
-                  )}
-                  {!nextRes && (
-                    <p className="text-xs text-gray-400 mt-1">Sin reserva próxima registrada</p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* ── Tank alert ── */}
       {!isMarketing && tankAlert && (
@@ -218,6 +148,66 @@ export default function DashboardPage() {
           <AlertTriangle size={22} className="flex-shrink-0" />
           <span className="font-bold">⚠️ REVISAR NIVEL DEL TANQUE DE AGUA!</span>
           <span className="ml-auto text-sm opacity-90">{daysClosed} días sin agua comercial</span>
+        </div>
+      )}
+
+      {/* ── Vitrina alerts ── */}
+      {!isMarketing && (vitAlerts.lowStock.length > 0 || vitAlerts.expiring.length > 0) && (
+        <div className="bg-white rounded-xl border border-orange-200 shadow-sm p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
+              <ShoppingBag size={16} className="text-orange-500" />
+            </div>
+            <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Vitrina — Alertas</span>
+            <span className="ml-auto bg-orange-100 text-orange-700 text-xs font-bold px-2 py-0.5 rounded-full">
+              {vitAlerts.lowStock.length + vitAlerts.expiring.length}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Stock agotado */}
+            {vitAlerts.lowStock.length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold text-red-500 uppercase tracking-wider mb-1.5">🔴 Agotados</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {vitAlerts.lowStock.map(p => (
+                    <button key={p.id} onClick={() => navigate('/admin/vitrina', { state: { highlightId: p.id } })}
+                      className="anim-hab-urgente text-[11px] font-bold text-red-900 rounded-full px-2.5 py-0.5 border border-red-300 whitespace-nowrap cursor-pointer hover:scale-105 transition-transform">
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Vencimiento próximo */}
+            {vitAlerts.expiring.length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-1.5">🟡 Vencimiento próximo (30 días)</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {vitAlerts.expiring.map(p => {
+                    const daysLeft = Math.ceil((new Date(p.expiration_date! + 'T12:00:00').getTime() - today.getTime()) / 86400000);
+                    const isVeryClose = daysLeft <= 7;
+                    return (
+                      <button key={p.id} onClick={() => navigate('/admin/vitrina', { state: { highlightId: p.id } })}
+                        className={`text-[11px] font-bold rounded-full px-2.5 py-0.5 border whitespace-nowrap cursor-pointer hover:scale-105 transition-transform ${isVeryClose ? 'anim-hab-urgente border-amber-400 text-red-900' : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
+                        {p.name} {daysLeft <= 0 ? '· VENCIDO' : `· ${daysLeft}d`}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Marketing: TikTok reminder when empresas exist ── */}
+      {isMarketing && empresas.length > 0 && (
+        <div className="flex items-center justify-center gap-3 bg-red-600 text-white rounded-xl px-5 py-3 shadow-lg animate-pulse">
+          <span className="text-xl">🚨</span>
+          <p className="font-extrabold text-sm tracking-wide text-center">
+            Lau, no olvides gestionar los TikToks con los huéspedes empresas
+          </p>
+          <span className="text-xl">🚨</span>
         </div>
       )}
 
@@ -271,24 +261,24 @@ export default function DashboardPage() {
           {empresas.length === 0 ? (
             <p className="text-sm text-gray-400">Ninguna en los próximos 14 días.</p>
           ) : (
-            <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
               {empresas.map(res => {
                 const isHoy = res.check_in <= todayStr && res.check_out > todayStr;
                 const entra = shortDate(res.check_in);
                 const sale  = shortDate(res.check_out);
                 return (
-                  <div key={res.id} className={`rounded-lg px-3 py-2.5 ${isHoy ? 'bg-indigo-50 border border-indigo-200' : 'bg-gray-50 border border-gray-100'}`}>
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${isHoy ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
+                  <div key={res.id} className={`rounded-lg px-2.5 py-2 ${isHoy ? 'bg-indigo-50 border border-indigo-200' : 'bg-gray-50 border border-gray-100'}`}>
+                    <div className="flex items-center gap-1 mb-0.5 flex-wrap">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isHoy ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
                       {isHoy
-                        ? <span className="text-[10px] font-bold text-indigo-600">HOSPEDADO HOY</span>
-                        : <span className="text-[10px] text-gray-400">llega {entra} · sale {sale}</span>
+                        ? <span className="text-[9px] font-bold text-indigo-600">HOY</span>
+                        : <span className="text-[9px] text-gray-400">{entra}→{sale}</span>
                       }
                     </div>
                     {(res as any).empresa_name && (
-                      <p className="text-sm font-bold text-indigo-900 truncate">{(res as any).empresa_name}</p>
+                      <p className="text-xs font-bold text-indigo-900 truncate leading-tight">{(res as any).empresa_name}</p>
                     )}
-                    <p className="text-xs text-gray-500 truncate">{res.guest_name}</p>
+                    <p className="text-[10px] text-gray-500 truncate">{res.guest_name}</p>
                   </div>
                 );
               })}

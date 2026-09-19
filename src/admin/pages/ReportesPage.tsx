@@ -129,6 +129,7 @@ function mapNatIdx(nat: string): number {
 export default function ReportesPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
+  const isLizz  = profile?.name?.toLowerCase() === 'lizz';
   const [fromDate,  setFromDate]  = useState(mondayStr());
   const [toDate,    setToDate]    = useState(todayStr());
   const [rows,      setRows]      = useState<GuestRow[] | null>(null);
@@ -447,12 +448,11 @@ export default function ReportesPage() {
                   ],
                   margin: [2, 2, 2, 2],
                 },
-                // Col 3: GOBIERNO AUTÓNOMO + logo grande
+                // Col 3: GOBIERNO AUTÓNOMO — solo texto, logo va abajo en info section
                 {
                   stack: [
-                    { text: 'GOBIERNO AUTÓNOMO DE CHUQUISACA', fontSize: 7, bold: true, alignment: 'center', margin: [0, 10, 0, 1] },
+                    { text: 'GOBIERNO AUTÓNOMO DE CHUQUISACA', fontSize: 7, bold: true, alignment: 'center', margin: [0, 2, 0, 1] },
                     { text: 'DIRECCIÓN DE TURISMO', fontSize: 7, alignment: 'center' },
-                    logoDer ? { image: logoDer, fit: [58, 50], alignment: 'center', margin: [0, 3, 0, 0] } : { text: '' },
                   ],
                   margin: [2, 2, 2, 2],
                 },
@@ -462,10 +462,10 @@ export default function ReportesPage() {
             margin: [0, 0, 0, 0],
           },
           // ── INFO SECTION (A / B) ─────────────────────────────────────────
-          // Outer widths: 16(A) + 205(SectionA) + 16(B) + 588(SectionB) = 825
+          // Outer widths: 16(A) + 205(SectionA) + 16(B) + 498(SectionB) + 90(Logo) = 825
           {
             table: {
-              widths: [16, 205, 16, 588],
+              widths: [16, 205, 16, 498, 90],
               body: [[
                 // ── A label ──
                 { text: 'A', fontSize: 9, bold: true, alignment: 'center', margin: [0, 46, 0, 0] },
@@ -560,6 +560,11 @@ export default function ReportesPage() {
                     },
                   ],
                 },
+
+                // ── Logo derecha — al mismo nivel que las tablitas ──
+                logoDer
+                  ? { image: logoDer, fit: [68, 60], alignment: 'center', margin: [0, 4, 0, 0] }
+                  : { text: '' },
               ]],
             },
             layout: {
@@ -1787,7 +1792,7 @@ ${mktTop3.map((p:any,i:number)=>`<div class="top3-card" style="border-top-color:
       </div>
 
       {/* ── Reporte Familiar — admin only ────────────────────────────────────── */}
-      {isAdmin && <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+      {isAdmin && !isLizz && <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100">
           <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
             <FileText size={18} className="text-amber-600" />

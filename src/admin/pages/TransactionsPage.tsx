@@ -46,11 +46,13 @@ export default function TransactionsPage() {
   const [siaatMap, setSiaatMap] = useState<Record<string, string>>({});
 
   const isAdmin = profile?.role === 'admin';
+  const isLizz  = profile?.name?.toLowerCase() === 'lizz';
+  const canSeeAllTab = isAdmin && !isLizz;
   const [activeTab, setActiveTab] = useState<Tab>('mayor');
   const tableBodyRef = useRef<HTMLTableSectionElement>(null);
   useEffect(() => {
-    if (isAdmin) setActiveTab(t => t === 'mayor' ? 'all' : t);
-  }, [isAdmin]);
+    if (canSeeAllTab) setActiveTab(t => t === 'mayor' ? 'all' : t);
+  }, [canSeeAllTab]);
 
   // ── Manual "sticky" header (title/tabs/balance) via IntersectionObserver + fixed positioning.
   // CSS position:sticky was fighting with the admin layout's scroll container, so this pins the
@@ -447,7 +449,7 @@ export default function TransactionsPage() {
         {/* ── Tabs ── */}
         <div className="flex items-center border-b-2 border-gray-200 overflow-x-auto scrollbar-none">
           {([
-            ...(isAdmin ? [{ id: 'all' as Tab, emoji: '📊', label: `${MONTH_NAMES[month]} ${year}` }] : []),
+            ...(canSeeAllTab ? [{ id: 'all' as Tab, emoji: '📊', label: `${MONTH_NAMES[month]} ${year}` }] : []),
             { id: 'mayor' as Tab, emoji: '💵', label: 'Caja Mayor' },
             { id: 'chica' as Tab, emoji: '🪙', label: 'Caja Chica' },
             { id: 'bnb_eg' as Tab, emoji: '💳', label: 'Egresos BNB' },
@@ -535,7 +537,8 @@ export default function TransactionsPage() {
         </div>
       </div>
 
-      {/* Filters */}
+      {/* Filters + Table — hidden on 'all' (resumen) tab */}
+      {activeTab !== 'all' && <>
       <div className="flex flex-wrap gap-3 bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
         <div className="flex items-center gap-2">
           <Filter size={14} className="text-gray-400" />
@@ -544,11 +547,9 @@ export default function TransactionsPage() {
         <CustomSelect size="sm" value={filterType} onChange={v => setFilterType(v as any)}
           options={[{ value:'all', label:'Todos' },{ value:'ingreso', label:'Ingresos' },{ value:'egreso', label:'Egresos' }]}
           placeholder="Todos" />
-        {activeTab === 'all' && (
-          <CustomSelect size="sm" value={filterCaja} onChange={v => setFilterCaja(v as any)}
-            options={[{ value:'all', label:'Todas las cajas' }, ...CAJAS.map(c => ({ value: c, label: CAJA_LABEL[c] }))]}
-            placeholder="Todas las cajas" />
-        )}
+        <CustomSelect size="sm" value={filterCaja} onChange={v => setFilterCaja(v as any)}
+          options={[{ value:'all', label:'Todas las cajas' }, ...CAJAS.map(c => ({ value: c, label: CAJA_LABEL[c] }))]}
+          placeholder="Todas las cajas" />
         <CustomSelect size="sm" value={filterCat} onChange={v => { setFilterCat(v); setFilterB03Sub(''); }}
           options={[
             { value:'all', label:'Todas las categorías' },
@@ -793,6 +794,7 @@ export default function TransactionsPage() {
           </div>
         );
       })()}
+      </>}
 
       {/* ── Modal ── */}
       {modalOpen && (
