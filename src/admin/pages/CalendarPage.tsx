@@ -93,6 +93,7 @@ const emptyForm = {
   is_blacklist:      false,
   is_empresa:        false,
   has_pet:           false,
+  pet_name:          '',
   wants_invoice:     false,
   price_per_night:   '',
   notes:             '',
@@ -102,6 +103,8 @@ const emptyForm = {
   num_nights:        1,
   // Empresa
   empresa_name:      '',
+  empresa_nit:       '',
+  billing_nit:       '',
   // Adelanto
   adelanto:          '',
   adelanto_caja:     'CAJA MAYOR' as string,
@@ -163,7 +166,7 @@ export default function CalendarPage() {
   // Checkout modal
   const [checkoutModal, setCheckoutModal] = useState({
     open: false, res: null as Reservation | null, departure_time: '',
-    is_invoice: false, siaat_number: '', invoice_number: '', is_blacklist: false,
+    is_invoice: false, siaat_number: '', invoice_number: '', billing_nit: '', is_blacklist: false,
     // hospedaje already paid (fetched on open)
     checkoutPaid:       0,
     checkoutPaidList:   [] as { id: string; amount: number; date: string; description: string | null }[],
@@ -874,6 +877,7 @@ export default function CalendarPage() {
       is_blacklist:      r.is_blacklist ?? false,
       is_empresa:        res.is_empresa,
       has_pet:           res.has_pet,
+      pet_name:          (res as any).pet_name ?? '',
       wants_invoice:     res.wants_invoice,
       price_per_night:   res.price_per_night?.toString() ?? '',
       notes:             res.notes ?? '',
@@ -890,6 +894,8 @@ export default function CalendarPage() {
                               ? Math.max(1, Math.round((new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000))
                               : (res.check_in === res.check_out ? 0 : 1),
       empresa_name:         r.empresa_name         ?? '',
+      empresa_nit:          (r as any).empresa_nit  ?? '',
+      billing_nit:          (r as any).billing_nit  ?? '',
       guest_phone:          r.guest_phone          ?? '',
       guest_gender:         r.guest_gender         ?? '',
       guest_birthdate:      r.guest_birthdate      ?? '',
@@ -972,6 +978,7 @@ export default function CalendarPage() {
       is_blacklist:    !isSalon ? form.is_blacklist    : false,
       is_empresa:      form.is_empresa,
       has_pet:         isSalon ? false : form.has_pet,
+      pet_name:        (!isSalon && form.has_pet) ? (form.pet_name || null) : null,
       wants_invoice:   form.wants_invoice,
       price_per_night: form.price_per_night ? parseFloat(form.price_per_night) : null,
       notes:           form.notes || null,
@@ -980,6 +987,8 @@ export default function CalendarPage() {
       catering:        isSalon ? (cateringParts.join(',') || null) : null,
       // Empresa
       empresa_name:         form.is_empresa ? (form.empresa_name || null) : null,
+      empresa_nit:          form.is_empresa ? (form.empresa_nit || null) : null,
+      billing_nit:          form.wants_invoice ? (form.billing_nit || null) : null,
       // Parte Diario fields (always saved for regular rooms)
       guest_phone:          !isSalon ? (form.guest_phone || null)           : null,
       guest_purpose:        !isSalon ? (form.guest_purpose || null) : null,
@@ -1281,6 +1290,7 @@ export default function CalendarPage() {
       is_invoice: wantInv,
       siaat_number:   siaat,
       invoice_number: invoice,
+      billing_nit:    (res as any).billing_nit ?? '',
       is_blacklist:   (res as any).is_blacklist ?? false,
       checkoutPaid:        alreadyPaid,
       checkoutPaidList:    paidList,
@@ -1341,6 +1351,7 @@ export default function CalendarPage() {
       wants_invoice:   checkoutModal.is_invoice,
       siaat_number:    checkoutModal.is_invoice ? (checkoutModal.siaat_number   || null) : null,
       invoice_number:  checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
+      billing_nit:     checkoutModal.is_invoice ? (checkoutModal.billing_nit    || null) : null,
       is_blacklist:    checkoutModal.is_blacklist,
       night_prices:    checkoutModal.checkoutNightPrices.length > 0 ? checkoutModal.checkoutNightPrices : null,
       updated_at:      new Date().toISOString(),
@@ -1373,6 +1384,7 @@ export default function CalendarPage() {
       wants_invoice:   checkoutModal.is_invoice,
       siaat_number:    checkoutModal.is_invoice ? (checkoutModal.siaat_number   || null) : null,
       invoice_number:  checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
+      billing_nit:     checkoutModal.is_invoice ? (checkoutModal.billing_nit    || null) : null,
       is_blacklist:    checkoutModal.is_blacklist,
       night_prices:    checkoutModal.checkoutNightPrices.length > 0 ? checkoutModal.checkoutNightPrices : null,
       vitrina_cart:    [],
@@ -2523,6 +2535,11 @@ export default function CalendarPage() {
                             <datalist id="empresas-list">
                               {empresas.map((name, i) => <option key={i} value={name} />)}
                             </datalist>
+                            <label className="block text-xs font-medium text-gray-500 mt-1">NIT de la empresa</label>
+                            <input type="text" value={form.empresa_nit}
+                              onChange={e => setForm(f => ({ ...f, empresa_nit: e.target.value }))}
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 font-mono"
+                              placeholder="NIT empresa (para factura SIN)" />
                             <label className="block text-xs font-medium text-gray-500 mt-1">Nombre del huésped</label>
                             <input type="text" value={form.guest_name}
                               onChange={e => setForm(f => ({ ...f, guest_name: e.target.value }))}
@@ -2608,15 +2625,26 @@ export default function CalendarPage() {
                       </div>
 
                       {/* Mascota */}
-                      <button type="button"
-                        onClick={() => setForm(f => ({ ...f, has_pet: !f.has_pet }))}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-all select-none ${
-                          form.has_pet
-                            ? 'bg-orange-50 border-orange-400 text-orange-700'
-                            : 'bg-white border-gray-200 text-gray-500 hover:border-orange-300'
-                        }`}>
-                        <span>🐾</span><span>Mascota</span>
-                      </button>
+                      <div className="space-y-2">
+                        <button type="button"
+                          onClick={() => setForm(f => ({ ...f, has_pet: !f.has_pet, pet_name: f.has_pet ? '' : f.pet_name }))}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-all select-none ${
+                            form.has_pet
+                              ? 'bg-orange-50 border-orange-400 text-orange-700'
+                              : 'bg-white border-gray-200 text-gray-500 hover:border-orange-300'
+                          }`}>
+                          <span>🐾</span><span>Mascota</span>
+                        </button>
+                        {form.has_pet && (
+                          <input
+                            type="text"
+                            value={form.pet_name}
+                            onChange={e => setForm(f => ({ ...f, pet_name: e.target.value }))}
+                            placeholder="Nombre de la mascota (para TikTok 🎵)"
+                            className="w-full border border-orange-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300 bg-orange-50"
+                          />
+                        )}
+                      </div>
 
                       {/* Notas */}
                       <div>
@@ -2853,6 +2881,11 @@ export default function CalendarPage() {
                             <datalist id="empresas-list2">
                               {empresas.map((name, i) => <option key={i} value={name} />)}
                             </datalist>
+                            <label className="block text-xs font-medium text-gray-500 mt-1">NIT de la empresa</label>
+                            <input type="text" value={form.empresa_nit}
+                              onChange={e => setForm(f => ({ ...f, empresa_nit: e.target.value }))}
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 font-mono"
+                              placeholder="NIT empresa (para factura SIN)" />
                           </>
                         )}
                       </div>

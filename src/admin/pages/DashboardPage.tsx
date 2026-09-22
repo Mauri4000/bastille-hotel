@@ -316,6 +316,11 @@ export default function DashboardPage() {
                       }
                     </div>
                     <p className="text-sm font-semibold text-gray-800 truncate">{res.guest_name}</p>
+                    {(res as any).pet_name ? (
+                      <p className="text-xs font-bold text-orange-600 mt-0.5">🐾 {(res as any).pet_name}</p>
+                    ) : (
+                      <p className="text-[10px] text-red-400 italic mt-0.5 animate-pulse">Preguntar nombre de mascota para TikTok 🎵</p>
+                    )}
                   </div>
                 );
               })}

@@ -152,6 +152,140 @@ export default function ReportesPage() {
   const [mensualLoad, setMensualLoad]   = useState(false);
   const [mensualError, setMensualError] = useState<string | null>(null);
 
+  // Tabla SIN (Facturas)
+  const HOTEL_NIT  = '7503036010';
+  const HOTEL_NAME = 'BASTILLE HOTEL';
+  const HOTEL_NAT  = 'BOLIVIANO';
+  const HOTEL_CUF  = '20160E9159A56CFA90679109B6747A56E5B3D26F04809F50C4A9FBAF74';
+  const [sinDesde,   setSinDesde]   = useState('');
+  const [sinHasta,   setSinHasta]   = useState('');
+  const [sinLoad,    setSinLoad]    = useState(false);
+  const [sinError,   setSinError]   = useState<string | null>(null);
+  const [sinPreview, setSinPreview] = useState<{ _gap?: boolean; ci: string; nitCI: string; fechaE: string; fechaS: string; num: string; obs: string }[] | null>(null);
+
+  type SinRow = { _gap?: boolean; ci: string; nitCI: string; fechaE: string; fechaS: string; num: string; obs: string };
+
+  async function fetchSinRows(): Promise<{ rows: SinRow[]; rawData: any[] } | null> {
+    const desde = parseInt(sinDesde);
+    const hasta = parseInt(sinHasta);
+    if (!desde || !hasta || desde > hasta) {
+      setSinError('Ingresa un rango válido de números SIAAT.');
+      return null;
+    }
+    setSinError(null);
+
+    const { data, error: err } = await supabase
+      .from('reservations')
+      .select('check_in,check_out,guest_document,guest_country,is_empresa,empresa_name,empresa_nit,billing_nit,invoice_number,siaat_number,wants_invoice')
+      .eq('wants_invoice', true)
+      .not('siaat_number', 'is', null)
+      .gte('siaat_number', String(desde))
+      .lte('siaat_number', String(hasta))
+      .order('siaat_number', { ascending: true });
+
+    if (err) { setSinError(err.message); return null; }
+
+    const rawData = (data ?? []).filter(r => {
+      const n = parseInt(r.siaat_number ?? '');
+      return n >= desde && n <= hasta;
+    });
+
+    if (rawData.length === 0) { setSinError('No hay facturas en ese rango de SIAAT.'); return null; }
+
+    // Build rows with gap detection
+    const rows: SinRow[] = [];
+    for (let i = 0; i < rawData.length; i++) {
+      const r = rawData[i];
+      const currN = parseInt(r.siaat_number);
+      // Insert gap markers
+      const prevN = i === 0 ? desde - 1 : parseInt(rawData[i - 1].siaat_number);
+      for (let g = prevN + 1; g < currN; g++) {
+        rows.push({ _gap: true, ci: '', nitCI: '', fechaE: '', fechaS: '', num: String(g), obs: '' });
+      }
+      const nitCI = (r as any).invoice_number || r.billing_nit || r.empresa_nit || r.guest_document || '';
+      rows.push({ ci: r.guest_document ?? '', nitCI, fechaE: fmt(r.check_in), fechaS: fmt(r.check_out), num: r.siaat_number ?? '', obs: '' });
+    }
+    // Gaps at the end
+    if (rawData.length > 0) {
+      const lastN = parseInt(rawData[rawData.length - 1].siaat_number);
+      for (let g = lastN + 1; g <= hasta; g++) {
+        rows.push({ _gap: true, ci: '', nitCI: '', fechaE: '', fechaS: '', num: String(g), obs: '' });
+      }
+    }
+
+    return { rows, rawData };
+  }
+
+  async function handleSinPreview() {
+    setSinLoad(true); setSinPreview(null);
+    const result = await fetchSinRows();
+    if (result) setSinPreview(result.rows);
+    setSinLoad(false);
+  }
+
+  async function handleSinExcel() {
+    setSinLoad(true);
+    try {
+      const result = await fetchSinRows();
+      if (!result) { setSinLoad(false); return; }
+
+      const XLSX = await loadXLSX();
+      const sheetData: any[][] = [
+        [`Facturas Nº ${sinDesde} — ${sinHasta}`],
+        ['NIT','CASA MATRIZ','C.I.','NACIONALIDAD','FECHA','FECHA','Nº','CUF O Nº DE AUTORIZACIÓN','OBS','NIT o C.I.'],
+        ...result.rawData.map(r => {
+          const nitCI = (r as any).invoice_number || r.billing_nit || r.empresa_nit || r.guest_document || '';
+          return [HOTEL_NIT, HOTEL_NAME, r.guest_document ?? '', HOTEL_NAT, fmt(r.check_in), fmt(r.check_out), r.siaat_number ?? '', HOTEL_CUF, '', nitCI];
+        }),
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(sheetData);
+      ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } }];
+      ws['!cols'] = [12,16,12,14,10,10,6,44,8,14].map(w => ({ wch: w }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, `Facturas`);
+      XLSX.writeFile(wb, `SIN_Facturas_${sinDesde}-${sinHasta}.xlsx`);
+    } catch (e: any) {
+      setSinError(e.message ?? 'Error al generar');
+    }
+    setSinLoad(false);
+  }
+
+  // Empresa NIT registry
+  const [empNitMap,    setEmpNitMap]    = useState<Record<string, string>>({});
+  const [empNitLoaded, setEmpNitLoaded] = useState(false);
+  const [empNitNew,    setEmpNitNew]    = useState({ name: '', nit: '' });
+  const [empNitSaving, setEmpNitSaving] = useState(false);
+  const [showEmpNit,   setShowEmpNit]   = useState(false);
+
+  async function loadEmpNitMap() {
+    const { data } = await supabase.from('hotel_settings').select('value').eq('key', 'empresa_nit_map').maybeSingle();
+    const map = (data?.value ?? {}) as Record<string, string>;
+    setEmpNitMap(map);
+    setEmpNitLoaded(true);
+  }
+  async function saveEmpNitMap(map: Record<string, string>) {
+    setEmpNitSaving(true);
+    await supabase.from('hotel_settings').upsert(
+      { key: 'empresa_nit_map', value: map, updated_at: new Date().toISOString() },
+      { onConflict: 'key' }
+    );
+    setEmpNitMap(map);
+    setEmpNitSaving(false);
+  }
+  function addEmpNit() {
+    const name = empNitNew.name.trim();
+    const nit  = empNitNew.nit.trim();
+    if (!name || !nit) return;
+    const updated = { ...empNitMap, [name]: nit };
+    saveEmpNitMap(updated);
+    setEmpNitNew({ name: '', nit: '' });
+  }
+  function removeEmpNit(name: string) {
+    const updated = { ...empNitMap };
+    delete updated[name];
+    saveEmpNitMap(updated);
+  }
+
   async function handleGenerar() {
     setLoading(true); setError(null); setRows(null); setRawRes([]);
     try {
@@ -1835,6 +1969,150 @@ ${mktTop3.map((p:any,i:number)=>`<div class="top3-card" style="border-top-color:
           {familiarError && (
             <div className="flex items-center gap-2 text-red-600 text-sm">
               <AlertCircle size={14} /> {familiarError}
+            </div>
+          )}
+        </div>
+      </div>}
+
+      {/* ── Tabla SIN / Facturas ────────────────────────────────────────────── */}
+      {(isAdmin || profile?.role === 'recepcion') && <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100">
+          <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center">
+            <FileText size={18} className="text-blue-600" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Tabla SIN — Facturas</h2>
+            <p className="text-xs text-gray-400">Excel para el Viceministerio · Formato SIN por mes</p>
+          </div>
+        </div>
+        <div className="px-6 py-4 flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Nº SIAAT Desde</label>
+            <input type="number" value={sinDesde} onChange={e => setSinDesde(e.target.value)}
+              placeholder="556" min="1"
+              className="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Nº SIAAT Hasta</label>
+            <input type="number" value={sinHasta} onChange={e => setSinHasta(e.target.value)}
+              placeholder="610" min="1"
+              className="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <button onClick={handleSinPreview} disabled={sinLoad || !sinDesde || !sinHasta}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors">
+            {sinLoad ? <RefreshCw size={14} className="animate-spin" /> : <span>🔍</span>}
+            {sinLoad ? 'Cargando…' : 'Vista Previa'}
+          </button>
+          {sinPreview && (
+            <button onClick={handleSinExcel} disabled={sinLoad}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors">
+              {sinLoad ? <RefreshCw size={14} className="animate-spin" /> : <Download size={14} />}
+              {sinLoad ? 'Generando…' : 'Descargar Excel'}
+            </button>
+          )}
+          {sinError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm">
+              <AlertCircle size={14} /> {sinError}
+            </div>
+          )}
+        </div>
+        <div className="px-6 pb-3 text-xs text-gray-400">
+          NIT Bastille: <span className="font-mono font-semibold text-gray-600">7503036010</span> · Solo incluye reservas con factura emitida en ese rango de Nº SIAAT
+        </div>
+
+        {/* Preview table */}
+        {sinPreview && (
+          <div className="px-6 pb-6 overflow-x-auto">
+            <div className="flex items-center gap-3 mb-3">
+              <h4 className="text-sm font-bold text-gray-700">Vista Previa — Facturas {sinDesde}–{sinHasta}</h4>
+              <span className="text-xs bg-gray-100 text-gray-500 rounded-full px-2 py-0.5">
+                {sinPreview.filter(r => !r._gap).length} registros · {sinPreview.filter(r => r._gap).length} pendientes
+              </span>
+            </div>
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-gray-100 text-gray-600 text-left">
+                  <th className="px-2 py-1.5 border border-gray-200 font-semibold">NIT</th>
+                  <th className="px-2 py-1.5 border border-gray-200 font-semibold">CASA MATRIZ</th>
+                  <th className="px-2 py-1.5 border border-gray-200 font-semibold">C.I.</th>
+                  <th className="px-2 py-1.5 border border-gray-200 font-semibold">NACION.</th>
+                  <th className="px-2 py-1.5 border border-gray-200 font-semibold">F. ENTRADA</th>
+                  <th className="px-2 py-1.5 border border-gray-200 font-semibold">F. SALIDA</th>
+                  <th className="px-2 py-1.5 border border-gray-200 font-semibold">Nº SIAAT</th>
+                  <th className="px-2 py-1.5 border border-gray-200 font-semibold">OBS</th>
+                  <th className="px-2 py-1.5 border border-gray-200 font-semibold">NIT o C.I.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sinPreview.map((row, i) =>
+                  row._gap ? (
+                    <tr key={`gap-${i}`} className="bg-red-50">
+                      <td colSpan={8} className="px-3 py-1.5 border border-red-200 text-red-600 font-bold italic text-center">
+                        ⚠ {row.num} — REVISAR PENDIENTE
+                      </td>
+                      <td className="border border-red-200 bg-red-50" />
+                    </tr>
+                  ) : (
+                    <tr key={`row-${i}`} className="hover:bg-gray-50">
+                      <td className="px-2 py-1 border border-gray-200 font-mono text-gray-500">{HOTEL_NIT}</td>
+                      <td className="px-2 py-1 border border-gray-200 text-gray-700">{HOTEL_NAME}</td>
+                      <td className="px-2 py-1 border border-gray-200 font-mono">{row.ci}</td>
+                      <td className="px-2 py-1 border border-gray-200 text-gray-500">{HOTEL_NAT}</td>
+                      <td className="px-2 py-1 border border-gray-200 font-mono">{row.fechaE}</td>
+                      <td className="px-2 py-1 border border-gray-200 font-mono">{row.fechaS}</td>
+                      <td className="px-2 py-1 border border-gray-200 font-mono font-bold text-blue-700">{row.num}</td>
+                      <td className="px-2 py-1 border border-gray-200">{row.obs}</td>
+                      <td className="px-2 py-1 border border-gray-200 font-mono font-semibold text-gray-800">{row.nitCI}</td>
+                    </tr>
+                  )
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Empresa NIT registry */}
+        <div className="border-t border-gray-100 px-6 py-3">
+          <button onClick={() => { setShowEmpNit(v => !v); if (!empNitLoaded) loadEmpNitMap(); }}
+            className="flex items-center gap-2 text-xs font-semibold text-blue-600 hover:text-blue-800">
+            <span>{showEmpNit ? '▲' : '▼'}</span> NITs de empresas ({Object.keys(empNitMap).length} registradas)
+          </button>
+          {showEmpNit && (
+            <div className="mt-3 space-y-3">
+              {/* Existing entries */}
+              {Object.entries(empNitMap).length > 0 && (
+                <div className="space-y-1.5">
+                  {Object.entries(empNitMap).map(([name, nit]) => (
+                    <div key={name} className="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2">
+                      <span className="text-sm font-semibold text-gray-800 flex-1 truncate">{name}</span>
+                      <span className="text-sm font-mono text-blue-700">{nit}</span>
+                      <button onClick={() => removeEmpNit(name)}
+                        className="text-red-400 hover:text-red-600 text-xs font-bold ml-2">✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Add new */}
+              <div className="flex gap-2 items-end">
+                <div className="flex-1">
+                  <label className="block text-[10px] font-medium text-gray-500 mb-1">Nombre empresa</label>
+                  <input type="text" value={empNitNew.name}
+                    onChange={e => setEmpNitNew(v => ({ ...v, name: e.target.value }))}
+                    placeholder="Robin Rico"
+                    className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+                </div>
+                <div className="w-40">
+                  <label className="block text-[10px] font-medium text-gray-500 mb-1">NIT</label>
+                  <input type="text" value={empNitNew.nit}
+                    onChange={e => setEmpNitNew(v => ({ ...v, nit: e.target.value }))}
+                    placeholder="1097160014"
+                    className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300" />
+                </div>
+                <button onClick={addEmpNit} disabled={empNitSaving || !empNitNew.name || !empNitNew.nit}
+                  className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">
+                  {empNitSaving ? '…' : '+ Agregar'}
+                </button>
+              </div>
             </div>
           )}
         </div>
