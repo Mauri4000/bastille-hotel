@@ -164,11 +164,17 @@ export default function CalendarPage() {
   const [numBabies,        setNumBabies]        = useState(0);
   const [empresas,         setEmpresas]         = useState<string[]>([]);
   const [menuOpenId,       setMenuOpenId]       = useState<string | null>(null);
-  // Urgencias confirmadas manualmente (roomId-YYYY-MM-DD) → suprimir titileo sin reload completo
+  // Urgencias confirmadas manualmente (roomId-YYYY-MM-DD) → persiste en localStorage
   const [ackedUrgencias, setAckedUrgencias] = useState<Set<string>>(() => {
     try {
-      const saved = sessionStorage.getItem('ackedUrgencias');
-      return saved ? new Set<string>(JSON.parse(saved)) : new Set<string>();
+      const saved = localStorage.getItem('ackedUrgencias');
+      if (!saved) return new Set<string>();
+      // Limpiar entradas viejas (> 14 días) para no acumular basura
+      const today14 = new Date(); today14.setDate(today14.getDate() - 14);
+      const cutoff  = today14.toISOString().split('T')[0];
+      const parsed  = JSON.parse(saved) as string[];
+      const fresh   = parsed.filter(k => k.split('-').slice(1).join('-') >= cutoff);
+      return new Set<string>(fresh);
     } catch { return new Set<string>(); }
   });
   const [guestAutoFilled,  setGuestAutoFilled]  = useState(false);
@@ -4392,7 +4398,7 @@ export default function CalendarPage() {
                 const ackedKey = `${roomId}-${checkIn}`;
                 setAckedUrgencias(prev => {
                   const next = new Set([...prev, ackedKey]);
-                  try { sessionStorage.setItem('ackedUrgencias', JSON.stringify([...next])); } catch {}
+                  try { localStorage.setItem('ackedUrgencias', JSON.stringify([...next])); } catch {}
                   return next;
                 });
                 setCardMenu(null);
