@@ -220,7 +220,7 @@ export default function TransactionsPage() {
   const isShiftRef = (t: Transaction) =>
     t.description === 'INICIO DE CAJA' || t.description === 'FINAL DE CAJA';
 
-  const { filtered, filteredCash, totalIncome, totalExpense, balance, monthBalances } = useMemo(() => {
+  const { filtered, totalIncome, totalExpense, balance, monthBalances } = useMemo(() => {
     const filt = transactions.filter(t => {
       if (activeTab === 'all'   && isShiftRef(t))                                                   return false;
       if (activeTab === 'mayor' && t.caja === 'CAJA CHICA')                                        return false;

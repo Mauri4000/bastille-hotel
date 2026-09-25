@@ -77,8 +77,8 @@ export default function DashboardPage() {
     ]);
 
     if (aguaRow?.value) setAgua(aguaRow.value as AguaState);
-    setEmpresas(empData ?? []);
-    setPerros(petData ?? []);
+    setEmpresas((empData ?? []) as unknown as Reservation[]);
+    setPerros((petData ?? []) as unknown as Reservation[]);
 
     const vits = (vitData ?? []) as VitrinaProduct[];
     setVitAlerts({

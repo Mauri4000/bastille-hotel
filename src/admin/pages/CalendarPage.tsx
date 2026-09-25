@@ -202,7 +202,7 @@ export default function CalendarPage() {
           .order('check_in', { ascending: false }).limit(500),
       ]);
 
-      const byAdditional = (allRecent ?? []).filter(r => {
+      const byAdditional = (allRecent ?? []).filter((r: any) => {
         const guests = (r.additional_guests ?? []) as any[];
         return guests.some((g: any) => (g.name ?? '').toLowerCase().includes(qLow));
       });
