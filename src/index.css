@@ -11,3 +11,11 @@ html {
 .anim-hab-urgente {
   animation: hab-urgente 1s ease-in-out infinite;
 }
+
+@keyframes cell-highlight {
+  0%, 100% { box-shadow: 0 0 0 3px #f59e0b; background-color: inherit; }
+  50%       { box-shadow: 0 0 0 5px #d97706, 0 0 16px #fbbf24; background-color: #fef3c7; }
+}
+.anim-cell-highlight {
+  animation: cell-highlight 0.6s ease-in-out 7;
+}

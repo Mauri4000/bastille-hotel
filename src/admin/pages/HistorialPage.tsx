@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
+import { Navigate } from 'react-router-dom';
 import { History, ChevronLeft, ChevronRight, CalendarDays, ArrowLeftRight, ShoppingBag, BarChart2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 
 interface LogEntry {
   id: string;
@@ -55,6 +57,9 @@ function timeAgo(iso: string) {
 const PAGE_SIZE = 30;
 
 export default function HistorialPage() {
+  const { profile } = useAuth();
+  if (profile && profile.role !== 'admin') return <Navigate to="/admin" replace />;
+
   const [logs,    setLogs]    = useState<LogEntry[]>([]);
   const [total,   setTotal]   = useState(0);
   const [page,    setPage]    = useState(0);

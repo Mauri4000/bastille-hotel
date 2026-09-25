@@ -29,3 +29,6 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Scripts with credentials — never commit
+scripts/

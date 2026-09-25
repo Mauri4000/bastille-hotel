@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { ChevronLeft, ChevronRight, X, Plus, ExternalLink, Loader2, Lightbulb, CheckCircle2, Circle, Trash2 } from 'lucide-react';
@@ -166,7 +166,7 @@ export default function MarketingCalendarPage() {
 
   const loadIdeas = useCallback(async () => {
     setIdeasLoading(true);
-    const { data } = await supabase.from('marketing_ideas').select('*').order('created_at', { ascending: false });
+    const { data } = await supabase.from('marketing_ideas').select('*').order('created_at', { ascending: false }).limit(200);
     setIdeas((data ?? []) as MarketingIdea[]);
     setIdeasLoading(false);
   }, []);
@@ -250,11 +250,11 @@ export default function MarketingCalendarPage() {
     setSaving(false);
   }
 
-  const filteredIdeas = ideas.filter(i => {
+  const filteredIdeas = useMemo(() => ideas.filter(i => {
     const byUsed = filterUsed === 'all' ? true : filterUsed === 'pending' ? !i.used : i.used;
     const byAccount = filterAccount === 'all' ? true : i.account_name === filterAccount;
     return byUsed && byAccount;
-  });
+  }), [ideas, filterUsed, filterAccount]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (

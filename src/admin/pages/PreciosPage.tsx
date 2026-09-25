@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Navigate } from 'react-router-dom';
 import { TrendingUp, Users, Building2, Baby, PawPrint, Star, RefreshCw, Info, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 
 // ── Precios actuales ─────────────────────────────────────────────────────────
 const PRECIOS_ACTUALES: Record<string, number> = {
@@ -70,6 +72,9 @@ const MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto
 const SYSTEM_NAMES = ['📝 Nota', '🏠 Habilitación', 'Habilitación', '⚠️'];
 
 export default function PreciosPage() {
+  const { profile } = useAuth();
+  if (profile && profile.role !== 'admin') return <Navigate to="/admin" replace />;
+
   const today = new Date();
   const [periodMonths, setPeriodMonths] = useState(6);
   const [stats,        setStats]        = useState<RoomStat[]>([]);

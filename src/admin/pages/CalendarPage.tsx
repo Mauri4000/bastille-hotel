@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Plus, Minus, X, Building2, Trash2, Receipt, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -130,10 +131,22 @@ const emptyForm = {
 
 export default function CalendarPage() {
   const { profile } = useAuth();
+  const location = useLocation();
   const today = new Date();
 
   const [year,  setYear]  = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth()); // 0-indexed
+
+  // Highlight a specific cell navigated from TransactionsPage
+  const [highlightCell, setHighlightCell] = useState<{ roomId: string; date: string } | null>(null);
+
+  // Jump to year/month passed via navigation state (e.g. from TransactionsPage)
+  useEffect(() => {
+    const state = location.state as { year?: number; month?: number; roomId?: string; date?: string } | null;
+    if (state?.year) setYear(state.year);
+    if (state?.month !== undefined) setMonth(state.month);
+    if (state?.roomId && state?.date) setHighlightCell({ roomId: state.roomId, date: state.date });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [rooms,        setRooms]        = useState<Room[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
@@ -151,6 +164,8 @@ export default function CalendarPage() {
   const [numBabies,        setNumBabies]        = useState(0);
   const [empresas,         setEmpresas]         = useState<string[]>([]);
   const [menuOpenId,       setMenuOpenId]       = useState<string | null>(null);
+  // Urgencias confirmadas manualmente (roomId-YYYY-MM-DD) → suprimir titileo sin reload completo
+  const [ackedUrgencias,  setAckedUrgencias]  = useState<Set<string>>(new Set());
   const [guestAutoFilled,  setGuestAutoFilled]  = useState(false);
 
   // Guest search
@@ -158,75 +173,58 @@ export default function CalendarPage() {
   const [searchResults, setSearchResults] = useState<Reservation[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchOpen,    setSearchOpen]    = useState(false);
-  const searchRef = useRef<HTMLDivElement>(null);
+  const searchRef     = useRef<HTMLDivElement>(null);
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  async function handleSearch(q: string) {
+  function handleSearch(q: string) {
     setSearchQuery(q);
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
     if (q.trim().length < 2) { setSearchResults([]); setSearchOpen(false); return; }
     setSearchLoading(true); setSearchOpen(true);
-    const qLow = q.trim().toLowerCase();
+    searchDebounce.current = setTimeout(async () => {
+      const qLow = q.trim().toLowerCase();
+      const twoYearsAgo = `${today.getFullYear() - 2}-01-01`;
+      const FIELDS = 'id,guest_name,guest_document,room_id,check_in,check_out,status,num_guests,additional_guests';
+      const EXCLUDE = (qb: any) => qb
+        .not('guest_name', 'ilike', '📝%')
+        .not('guest_name', 'ilike', '🏠%')
+        .not('guest_name', 'ilike', '⚠️%');
 
-    // Search by main guest name OR by document
-    const { data: byName } = await supabase
-      .from('reservations')
-      .select('id,guest_name,guest_document,room_id,check_in,check_out,status,num_guests,additional_guests')
-      .ilike('guest_name', `%${q.trim()}%`)
-      .not('guest_name', 'ilike', '📝%')
-      .not('guest_name', 'ilike', '🏠%')
-      .not('guest_name', 'ilike', '⚠️%')
-      .order('check_in', { ascending: false })
-      .limit(20);
+      // All 3 queries in parallel
+      const [{ data: byName }, { data: byDoc }, { data: allRecent }] = await Promise.all([
+        EXCLUDE(supabase.from('reservations').select(FIELDS).ilike('guest_name', `%${q.trim()}%`))
+          .order('check_in', { ascending: false }).limit(20),
+        EXCLUDE(supabase.from('reservations').select(FIELDS).ilike('guest_document', `%${q.trim()}%`))
+          .order('check_in', { ascending: false }).limit(20),
+        EXCLUDE(supabase.from('reservations').select(FIELDS))
+          .gte('check_in', twoYearsAgo)
+          .not('additional_guests', 'is', null)
+          .order('check_in', { ascending: false }).limit(500),
+      ]);
 
-    // Also search by document number
-    const { data: byDoc } = await supabase
-      .from('reservations')
-      .select('id,guest_name,guest_document,room_id,check_in,check_out,status,num_guests,additional_guests')
-      .ilike('guest_document', `%${q.trim()}%`)
-      .not('guest_name', 'ilike', '📝%')
-      .not('guest_name', 'ilike', '🏠%')
-      .not('guest_name', 'ilike', '⚠️%')
-      .order('check_in', { ascending: false })
-      .limit(20);
-
-    // Fetch a broader set to search inside additional_guests (last 2 years)
-    const twoYearsAgo = `${today.getFullYear() - 2}-01-01`;
-    const { data: allRecent } = await supabase
-      .from('reservations')
-      .select('id,guest_name,guest_document,room_id,check_in,check_out,status,num_guests,additional_guests')
-      .not('guest_name', 'ilike', '📝%')
-      .not('guest_name', 'ilike', '🏠%')
-      .not('guest_name', 'ilike', '⚠️%')
-      .gte('check_in', twoYearsAgo)
-      .not('additional_guests', 'is', null)
-      .order('check_in', { ascending: false })
-      .limit(500);
-
-    // Filter allRecent by additional_guests name match
-    const byAdditional = (allRecent ?? []).filter(r => {
-      const guests = (r.additional_guests ?? []) as any[];
-      return guests.some((g: any) => (g.name ?? '').toLowerCase().includes(qLow));
-    });
-
-    // Merge, deduplicate by id
-    const merged = new Map<string, any>();
-    for (const r of [...(byName ?? []), ...(byDoc ?? []), ...byAdditional]) {
-      if (!merged.has(r.id)) merged.set(r.id, r);
-    }
-
-    // Sort by check_in desc, limit 10
-    const results = Array.from(merged.values())
-      .sort((a, b) => b.check_in.localeCompare(a.check_in))
-      .slice(0, 10);
-
-    // Add match info for display
-    setSearchResults(results.map(r => ({
-      ...r,
-      _matchedGuest: (() => {
+      const byAdditional = (allRecent ?? []).filter(r => {
         const guests = (r.additional_guests ?? []) as any[];
-        return guests.find((g: any) => (g.name ?? '').toLowerCase().includes(qLow));
-      })(),
-    })));
-    setSearchLoading(false);
+        return guests.some((g: any) => (g.name ?? '').toLowerCase().includes(qLow));
+      });
+
+      const merged = new Map<string, any>();
+      for (const r of [...(byName ?? []), ...(byDoc ?? []), ...byAdditional]) {
+        if (!merged.has(r.id)) merged.set(r.id, r);
+      }
+
+      const results = Array.from(merged.values())
+        .sort((a, b) => b.check_in.localeCompare(a.check_in))
+        .slice(0, 10);
+
+      setSearchResults(results.map(r => ({
+        ...r,
+        _matchedGuest: (() => {
+          const guests = (r.additional_guests ?? []) as any[];
+          return guests.find((g: any) => (g.name ?? '').toLowerCase().includes(qLow));
+        })(),
+      })));
+      setSearchLoading(false);
+    }, 300);
   }
 
   function jumpToReservation(res: Reservation) {
@@ -728,6 +726,23 @@ export default function CalendarPage() {
     }
   }, [loading, month, year]); // eslint-disable-line
 
+  // Scroll to and blink the highlighted cell after navigation from TransactionsPage
+  useEffect(() => {
+    if (loading || !highlightCell) return;
+    const timer = setTimeout(() => {
+      const el = scrollRef.current?.querySelector<HTMLElement>(
+        `[data-cell-id="${highlightCell.roomId}-${highlightCell.date}"]`
+      );
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      }
+      // Clear after animation completes (7 × 0.6s = 4.2s)
+      const clear = setTimeout(() => setHighlightCell(null), 4300);
+      return () => clearTimeout(clear);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [loading, highlightCell]);
+
   // ── fetch data ──
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -766,6 +781,7 @@ export default function CalendarPage() {
   // Load past empresa names for autocomplete
   useEffect(() => {
     supabase.from('reservations').select('empresa_name').eq('is_empresa', true).not('empresa_name', 'is', null)
+      .order('check_in', { ascending: false }).limit(200)
       .then(({ data }) => {
         const names = [...new Set((data ?? []).map((r: any) => r.empresa_name).filter(Boolean))] as string[];
         setEmpresas(names);
@@ -831,71 +847,66 @@ export default function CalendarPage() {
     );
   }, [form.guest_phone, form.guest_purpose, form.guest_origin, form.guest_next_dest, form.guest_transport]); // eslint-disable-line
 
-  // ── build cell map: cellMap[roomId][day] = Reservation ──
-  const cellMap: Record<string, Record<number, Reservation>> = {};
-  for (const res of reservations) {
-    const start = toLocalDate(res.check_in);
-    const end   = toLocalDate(res.check_out);
-    // Same-day events (SALON): show on check_in day
-    const isOneDay = start.getTime() >= end.getTime();
-    const cur = new Date(start);
-    do {
-      if (cur.getFullYear() === year && cur.getMonth() === month) {
-        const day = cur.getDate();
-        if (!cellMap[res.room_id]) cellMap[res.room_id] = {};
-        cellMap[res.room_id][day] = res;
-      }
-      cur.setDate(cur.getDate() + 1);
-    } while (!isOneDay && cur < end);
-  }
-
-  // ── habilitaciones urgentes ──
-  // Una reserva/ocupado es URGENTE cuando:
-  //   A) Hay una habilitación activa para esa habitación cuyo check_out = check_in de la reserva
-  //      (hab.check_out = reserva.check_in → "limpian hoy, llega mañana")
-  //   O
-  //   B) Otro stay termina el mismo día que arranca esta reserva (pre-aviso, aún sin hab)
-  //      PERO solo si la fecha es HOY o futura.
-  // DESACTIVAR: al borrar el card azul de habilitación el titileo desaparece (caso A).
   const todayStr = toDateStr(today);
 
-  // Maps auxiliares
-  const habCheckOutByRoom = new Map<string, Set<string>>(); // roomId → hab.check_out dates
-  const habStartByRoom    = new Map<string, Set<string>>(); // roomId → hab.check_in dates
-  const stayEndByRoom     = new Map<string, Set<string>>(); // roomId → check_out de cualquier stay
-
-  for (const res of reservations) {
-    if (res.status === 'habilitacion') {
-      if (!habCheckOutByRoom.has(res.room_id)) habCheckOutByRoom.set(res.room_id, new Set());
-      habCheckOutByRoom.get(res.room_id)!.add(res.check_out);
-      if (!habStartByRoom.has(res.room_id)) habStartByRoom.set(res.room_id, new Set());
-      habStartByRoom.get(res.room_id)!.add(res.check_in);
-    } else if (!res.guest_name?.startsWith('📝')) {
-      if (!stayEndByRoom.has(res.room_id)) stayEndByRoom.set(res.room_id, new Set());
-      stayEndByRoom.get(res.room_id)!.add(res.check_out);
+  // ── build cell map: cellMap[roomId][day] = Reservation ──
+  const { cellMap, habUrgenteSet } = useMemo(() => {
+    const cm: Record<string, Record<number, Reservation>> = {};
+    for (const res of reservations) {
+      const start = toLocalDate(res.check_in);
+      const end   = toLocalDate(res.check_out);
+      const isOneDay = start.getTime() >= end.getTime();
+      const cur = new Date(start);
+      do {
+        if (cur.getFullYear() === year && cur.getMonth() === month) {
+          const day = cur.getDate();
+          if (!cm[res.room_id]) cm[res.room_id] = {};
+          cm[res.room_id][day] = res;
+        }
+        cur.setDate(cur.getDate() + 1);
+      } while (!isOneDay && cur < end);
     }
-  }
 
-  const habUrgenteSet = new Set<string>();
-  for (const res of reservations) {
-    if (res.status === 'reserva' || res.status === 'ocupado') {
-      const startD = toLocalDate(res.check_in);
-      if (startD.getFullYear() === year && startD.getMonth() === month && res.check_in >= todayStr) {
-        const key = `${res.room_id}-${startD.getDate()}`;
-        // Caso A: hab existe y termina justo cuando llega este huésped → titila hasta borrar la hab
-        const habEnds   = habCheckOutByRoom.get(res.room_id);
-        const habStarts = habStartByRoom.get(res.room_id);
-        if ((habEnds && habEnds.has(res.check_in)) || (habStarts && habStarts.has(res.check_in)))
-          habUrgenteSet.add(key);
-        // Caso B: sin hab todavía, pero otro huésped sale ese mismo día (pre-aviso)
-        else {
-          const prevEnds = stayEndByRoom.get(res.room_id);
-          if (prevEnds && prevEnds.has(res.check_in))
-            habUrgenteSet.add(key);
+    // ── habilitaciones urgentes ──
+    const habCheckOutByRoom = new Map<string, Set<string>>();
+    const habStartByRoom    = new Map<string, Set<string>>();
+    const stayEndByRoom     = new Map<string, Set<string>>();
+
+    for (const res of reservations) {
+      if (res.status === 'habilitacion') {
+        if (!habCheckOutByRoom.has(res.room_id)) habCheckOutByRoom.set(res.room_id, new Set());
+        habCheckOutByRoom.get(res.room_id)!.add(res.check_out);
+        if (!habStartByRoom.has(res.room_id)) habStartByRoom.set(res.room_id, new Set());
+        habStartByRoom.get(res.room_id)!.add(res.check_in);
+      } else if (!res.guest_name?.startsWith('📝')) {
+        if (!stayEndByRoom.has(res.room_id)) stayEndByRoom.set(res.room_id, new Set());
+        stayEndByRoom.get(res.room_id)!.add(res.check_out);
+      }
+    }
+
+    const hus = new Set<string>();
+    for (const res of reservations) {
+      if (res.status === 'reserva' || res.status === 'ocupado') {
+        const startD = toLocalDate(res.check_in);
+        if (startD.getFullYear() === year && startD.getMonth() === month && res.check_in >= todayStr) {
+          const key = `${res.room_id}-${startD.getDate()}`;
+          const habEnds   = habCheckOutByRoom.get(res.room_id);
+          const habStarts = habStartByRoom.get(res.room_id);
+          const ackedKey  = `${res.room_id}-${res.check_in}`;
+          if (!ackedUrgencias.has(ackedKey)) {
+            if ((habEnds && habEnds.has(res.check_in)) || (habStarts && habStarts.has(res.check_in)))
+              hus.add(key);
+            else {
+              const prevEnds = stayEndByRoom.get(res.room_id);
+              if (prevEnds && prevEnds.has(res.check_in)) hus.add(key);
+            }
+          }
         }
       }
     }
-  }
+
+    return { cellMap: cm, habUrgenteSet: hus };
+  }, [reservations, year, month, todayStr, ackedUrgencias]);
 
   // ── navigation ──
   function prevMonth() {
@@ -1282,39 +1293,36 @@ export default function CalendarPage() {
       if (data?.[0]?.siaat_number) { siaat = data[0].siaat_number; wantInv = true; }
     }
 
-    // Fetch hospedaje already paid for this reservation
-    const { data: paidTxs } = await supabase
-      .from('transactions').select('id, amount, date, description')
-      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H01-HOSPEDAJE')
-      .order('date', { ascending: true });
-    const paidList = (paidTxs ?? []) as { id: string; amount: number; date: string; description: string | null }[];
+    // Fetch all transaction data in parallel
+    const [
+      { data: paidTxs },
+      { data: lateTxs },
+      { data: earlyTxs },
+      { data: mascotaTxs },
+      { data: desayunoTxs },
+    ] = await Promise.all([
+      supabase.from('transactions').select('id, amount, date, description')
+        .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H01-HOSPEDAJE')
+        .order('date', { ascending: true }),
+      supabase.from('transactions').select('amount')
+        .eq('room_id', res.room_id).eq('type', 'ingreso').eq('category', 'H02-LATE CHECKOUT')
+        .gte('date', res.check_in),
+      supabase.from('transactions').select('amount')
+        .eq('room_id', res.room_id).eq('type', 'ingreso').eq('category', 'H04-EARLY CHECK-IN')
+        .gte('date', res.check_in),
+      supabase.from('transactions').select('amount')
+        .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H05-MASCOTAS'),
+      supabase.from('transactions').select('amount')
+        .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H06-DESAYUNO'),
+    ]);
+
+    const paidList    = (paidTxs    ?? []) as { id: string; amount: number; date: string; description: string | null }[];
     const alreadyPaid = paidList.reduce((s, t) => s + t.amount, 0);
-
-    // Fetch late checkout transactions for this room (by room_id + category)
-    const { data: lateTxs } = await supabase
-      .from('transactions').select('amount')
-      .eq('room_id', res.room_id).eq('type', 'ingreso').eq('category', 'H02-LATE CHECKOUT')
-      .gte('date', res.check_in);
-    const latePaid  = (lateTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
-    const lateTotal = latePaid; // already paid from late checkout popup; show it
-
-    // Fetch early check-in transactions
-    const { data: earlyTxs } = await supabase
-      .from('transactions').select('amount')
-      .eq('room_id', res.room_id).eq('type', 'ingreso').eq('category', 'H04-EARLY CHECK-IN')
-      .gte('date', res.check_in);
-    const earlyPaid = (earlyTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
-
-    // Fetch mascota transactions
-    const { data: mascotaTxs } = await supabase
-      .from('transactions').select('amount')
-      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H05-MASCOTAS');
+    const latePaid    = (lateTxs    ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+    const lateTotal   = latePaid;
+    const earlyPaid   = (earlyTxs   ?? []).reduce((s: number, t: any) => s + t.amount, 0);
     const mascotaPaid = (mascotaTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
-
-    const { data: desayunoTxs } = await supabase
-      .from('transactions').select('amount')
-      .eq('reservation_id', res.id).eq('type', 'ingreso').eq('category', 'H06-DESAYUNO');
-    const desayunoPaid = (desayunoTxs ?? []).reduce((s: number, t: any) => s + t.amount, 0);
+    const desayunoPaid= (desayunoTxs?? []).reduce((s: number, t: any) => s + t.amount, 0);
 
     const nights = Math.max(1, Math.round(
       (new Date(res.check_out + 'T00:00:00').getTime() - new Date(res.check_in + 'T00:00:00').getTime()) / 86400000
@@ -1835,7 +1843,7 @@ export default function CalendarPage() {
 
   // ── days array ──
   const numDays = daysInMonth(year, month);
-  const days = Array.from({ length: numDays }, (_, i) => i + 1);
+  const days = useMemo(() => Array.from({ length: numDays }, (_, i) => i + 1), [numDays]);
 
   // ── responsive ──
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
@@ -2090,6 +2098,7 @@ export default function CalendarPage() {
                     return (
                       <td
                         key={d}
+                        data-cell-id={`${room.id}-${dateStr}`}
                         className={`border-r border-b border-gray-300 p-0.5 md:p-1 ${CELL_H} align-top transition-colors ${
                           hoveredCell?.roomId === room.id && hoveredCell?.day === d
                             ? 'bg-amber-100/60'
@@ -2118,7 +2127,7 @@ export default function CalendarPage() {
                               if (selectMode) { toggleCellSelect(res); return; }
                               setCardMenu({ res, x: e.clientX, y: e.clientY, isUrgente: isHabUrgente });
                             }}
-                            className={`w-full h-full rounded-sm md:rounded-lg ${isMobile ? 'px-0.5 py-0.5' : 'px-2 py-1'} text-left transition-all ${cfg?.bg ?? 'bg-gray-400'} ${cfg?.text ?? 'text-white'} ${isHabUrgente ? 'anim-hab-urgente' : ''} ${
+                            className={`w-full h-full rounded-sm md:rounded-lg ${isMobile ? 'px-0.5 py-0.5' : 'px-2 py-1'} text-left transition-all ${cfg?.bg ?? 'bg-gray-400'} ${cfg?.text ?? 'text-white'} ${isHabUrgente ? 'anim-hab-urgente' : highlightCell?.roomId === room.id && highlightCell?.date === dateStr ? 'anim-cell-highlight' : ''} ${
                               selectMode
                                 ? selectedIds.has(res.id)
                                   ? 'ring-2 ring-white ring-offset-1 ring-offset-transparent brightness-110'
@@ -4372,10 +4381,13 @@ export default function CalendarPage() {
             {/* ── Marcar como habilitado (solo cards urgentes) ── */}
             {cardMenu.isUrgente && (
               <button onClick={async () => {
-                const roomId    = cardMenu.res.room_id;
-                const checkIn   = cardMenu.res.check_in;
+                const roomId  = cardMenu.res.room_id;
+                const checkIn = cardMenu.res.check_in;
+                // 1. Suprimir urgencia inmediatamente en estado local (funciona para Caso A y B)
+                const ackedKey = `${roomId}-${checkIn}`;
+                setAckedUrgencias(prev => new Set([...prev, ackedKey]));
                 setCardMenu(null);
-                // Borrar la habilitación oculta: la que empieza o termina el mismo día que llega este huésped
+                // 2. Borrar la habilitación si existe (Caso A)
                 await supabase.from('reservations').delete()
                   .eq('room_id', roomId)
                   .eq('status', 'habilitacion')

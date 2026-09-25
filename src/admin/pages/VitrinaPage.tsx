@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { FormEvent, DragEvent } from 'react';
 import { Plus, Minus, Search, Package, RefreshCw, Trash2, X, UploadCloud, Pencil, AlertTriangle } from 'lucide-react';
@@ -280,22 +280,28 @@ export default function VitrinaPage() {
     setShowAddModal(false);
   }
 
-  const filtered = products
-    .filter(p =>
-      tab === 'todos'       ? true :
-      tab === 'sin_asignar' ? !p.location :
-      p.location === tab
-    )
-    .filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+  const { filtered, totalItems, totalValue, tabCounts } = useMemo(() => {
+    const filt = products
+      .filter(p =>
+        tab === 'todos'       ? true :
+        tab === 'sin_asignar' ? !p.location :
+        p.location === tab
+      )
+      .filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+    const counts: Record<string, number> = {
+      todos: products.length,
+      sin_asignar: products.filter(p => !p.location).length,
+    };
+    for (const loc of LOCATIONS) counts[loc.value] = products.filter(p => p.location === loc.value).length;
+    return {
+      filtered:   filt,
+      totalItems: filt.reduce((s, p) => s + p.quantity, 0),
+      totalValue: filt.reduce((s, p) => s + p.price * p.quantity, 0),
+      tabCounts:  counts,
+    };
+  }, [products, tab, search]);
 
-  const hasPending  = Object.keys(pending).length > 0;
-  const totalItems  = filtered.reduce((s, p) => s + p.quantity, 0);
-  const totalValue  = filtered.reduce((s, p) => s + p.price * p.quantity, 0);
-  const tabCounts: Record<string, number> = {
-    todos: products.length,
-    sin_asignar: products.filter(p => !p.location).length,
-  };
-  for (const loc of LOCATIONS) tabCounts[loc.value] = products.filter(p => p.location === loc.value).length;
+  const hasPending = Object.keys(pending).length > 0;
 
   // Max expiry count based on current quantity in edit form
   const maxExpiryCount = Math.max(1, parseInt(editForm.quantity, 10) || 1);

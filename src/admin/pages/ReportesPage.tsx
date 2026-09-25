@@ -44,8 +44,11 @@ async function loadXLSX() {
   return (window as any).XLSX;
 }
 async function loadPdfMake() {
-  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js');
-  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js');
+  // Load pdfmake core + fonts in parallel
+  await Promise.all([
+    loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js'),
+    loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js'),
+  ]);
   return (window as any).pdfMake;
 }
 async function imgToBase64(url: string): Promise<string> {

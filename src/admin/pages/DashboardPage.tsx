@@ -55,28 +55,32 @@ export default function DashboardPage() {
   const load = useCallback(async () => {
     setLoading(true);
 
-    const { data: aguaRow } = await supabase
-      .from('hotel_settings').select('value').eq('key', 'agua_comercial').maybeSingle();
-    if (aguaRow?.value) setAgua(aguaRow.value as AguaState);
-
-    const { data: empData } = await supabase
-      .from('reservations').select('*, empresa_name')
-      .lte('check_in', in14Str).gt('check_out', todayStr)
-      .eq('is_empresa', true).in('status', ['ocupado', 'reserva']).order('check_in');
-    setEmpresas(empData ?? []);
-
-    const { data: petData } = await supabase
-      .from('reservations').select('*')
-      .lte('check_in', in14Str).gt('check_out', todayStr)
-      .eq('has_pet', true).in('status', ['ocupado', 'reserva']).order('check_in');
-    setPerros(petData ?? []);
-
-    // Vitrina alerts: stock bajo (≤ 3) y vencimiento próximo (≤ 30 días)
-    const { data: vitData } = await supabase
-      .from('vitrina_products').select('id,name,quantity,expiration_date,expiry_notes').order('name');
-    const vits = (vitData ?? []) as VitrinaProduct[];
     const in30 = new Date(today); in30.setDate(in30.getDate() + 30);
     const in30Str = in30.toISOString().split('T')[0];
+
+    const [
+      { data: aguaRow },
+      { data: empData },
+      { data: petData },
+      { data: vitData },
+    ] = await Promise.all([
+      supabase.from('hotel_settings').select('value').eq('key', 'agua_comercial').maybeSingle(),
+      supabase.from('reservations')
+        .select('id,room_id,guest_name,check_in,check_out,status,is_empresa,empresa_name,num_guests')
+        .lte('check_in', in14Str).gt('check_out', todayStr)
+        .eq('is_empresa', true).in('status', ['ocupado', 'reserva']).order('check_in'),
+      supabase.from('reservations')
+        .select('id,room_id,guest_name,check_in,check_out,status,has_pet,num_guests')
+        .lte('check_in', in14Str).gt('check_out', todayStr)
+        .eq('has_pet', true).in('status', ['ocupado', 'reserva']).order('check_in'),
+      supabase.from('vitrina_products').select('id,name,quantity,expiration_date,expiry_notes').order('name'),
+    ]);
+
+    if (aguaRow?.value) setAgua(aguaRow.value as AguaState);
+    setEmpresas(empData ?? []);
+    setPerros(petData ?? []);
+
+    const vits = (vitData ?? []) as VitrinaProduct[];
     setVitAlerts({
       lowStock: vits.filter(v => v.quantity === 0),
       expiring: vits.filter(v => v.expiration_date && v.expiration_date <= in30Str),

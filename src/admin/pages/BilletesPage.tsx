@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Plus, Trash2, X, Pencil } from 'lucide-react';
@@ -131,15 +131,19 @@ export default function BilletesPage() {
   }
 
   // ── Grouping ──
-  const grouped: Record<string, Billete[]> = {};
-  for (const b of billetes) {
-    if (!grouped[b.date]) grouped[b.date] = [];
-    grouped[b.date].push(b);
-  }
-  const sortedDates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
-
-  const totalBOB = billetes.filter(b => b.currency !== 'USD').reduce((s, b) => s + b.amount, 0);
-  const totalUSD = billetes.filter(b => b.currency === 'USD').reduce((s, b) => s + b.amount, 0);
+  const { grouped, sortedDates, totalBOB, totalUSD } = useMemo(() => {
+    const grp: Record<string, Billete[]> = {};
+    for (const b of billetes) {
+      if (!grp[b.date]) grp[b.date] = [];
+      grp[b.date].push(b);
+    }
+    return {
+      grouped:     grp,
+      sortedDates: Object.keys(grp).sort((a, b) => b.localeCompare(a)),
+      totalBOB:    billetes.filter(b => b.currency !== 'USD').reduce((s, b) => s + b.amount, 0),
+      totalUSD:    billetes.filter(b => b.currency === 'USD').reduce((s, b) => s + b.amount, 0),
+    };
+  }, [billetes]);
 
   function fmtDate(d: string) {
     const [y, m, day] = d.split('-').map(Number);

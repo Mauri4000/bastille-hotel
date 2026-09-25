@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { Plus, X, TrendingUp, TrendingDown, DollarSign, Filter, Trash2, Pencil } from 'lucide-react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, X, TrendingUp, TrendingDown, DollarSign, Filter, Trash2, Pencil, CalendarDays } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Transaction, TransactionType, CajaType } from '../types';
@@ -34,6 +35,7 @@ const emptyForm = {
 
 export default function TransactionsPage() {
   const { profile } = useAuth();
+  const navigate = useNavigate();
   const today = new Date();
 
   const [year,  setYear]  = useState(today.getFullYear());
@@ -173,14 +175,16 @@ export default function TransactionsPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Real-time sync
+  // Real-time sync — use ref so channel never needs to re-subscribe when month changes
+  const fetchDataRef = useRef(fetchData);
+  useEffect(() => { fetchDataRef.current = fetchData; }, [fetchData]);
   useEffect(() => {
     const channel = supabase
       .channel('transactions-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => { fetchData(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => { fetchDataRef.current(); })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [fetchData]);
+  }, []); // eslint-disable-line
 
   // Fetch occupied/reserved rooms when HOSPEDAJE is selected
   useEffect(() => {
@@ -194,12 +198,13 @@ export default function TransactionsPage() {
       .then(({ data }) => setOccupiedRooms(data ?? []));
   }, [form.category]);
 
-  // All-time caja running balances
+  // All-time caja running balances (desde apertura del hotel)
   useEffect(() => {
     async function fetchBalances() {
       const { data } = await supabase
         .from('transactions')
-        .select('type, amount, caja');
+        .select('type, amount, caja')
+        .gte('date', '2024-01-01');
       if (!data) return;
       const totals: Record<CajaType, number> = { 'CAJA MAYOR': 0, 'CAJA CHICA': 0, 'CUENTA BNB': 0, 'TARJETA': 0 };
       for (const t of data) {
@@ -212,56 +217,61 @@ export default function TransactionsPage() {
   }, []);
 
   // ── computed ──
-  // Shift-reference rows (Guardar Inicial / Final from ShiftPage) — shown only in mayor/chica tabs,
-  // displayed in SALDO column as a reference value, excluded from all totals and running balance.
   const isShiftRef = (t: Transaction) =>
     t.description === 'INICIO DE CAJA' || t.description === 'FINAL DE CAJA';
 
-  // mayor tab: shows Efectivo + QR + Tarjeta (excludes Caja Chica)
-  // chica tab: shows only Caja Chica
-  // all tab:   shows everything (with dropdown caja filter), excluding shift-ref rows
-  const filtered = transactions.filter(t => {
-    if (activeTab === 'all'   && isShiftRef(t))                                                   return false;
-    if (activeTab === 'mayor' && t.caja === 'CAJA CHICA')                                        return false;
-    if (activeTab === 'chica' && t.caja !== 'CAJA CHICA')                                        return false;
-    if (activeTab === 'bnb'   && t.caja !== 'CUENTA BNB')                                        return false;
-    // Egresos BNB (staff-visible): CUENTA BNB egresos excluding payroll
-    if (activeTab === 'bnb_eg' && (t.caja !== 'CUENTA BNB' || t.type !== 'egreso' || t.category === 'B05-SUELDOS Y SALARIOS')) return false;
-    // Personal BNB (admin-only): CUENTA BNB payroll egresos only
-    if (activeTab === 'bnb_personal' && (t.caja !== 'CUENTA BNB' || t.type !== 'egreso' || t.category !== 'B05-SUELDOS Y SALARIOS')) return false;
-    // CUENTA BNB egresos only appear in BNB tabs — never in Caja Mayor / Agosto 2026
-    if (activeTab !== 'bnb' && activeTab !== 'bnb_eg' && t.caja === 'CUENTA BNB' && t.type === 'egreso') return false;
-    // Hide balance-forward SALDO QR entries from receptionists (admin-only reference rows)
-    if (!isAdmin && t.category === 'SALDO QR')                                                    return false;
-    // CUENTA BNB payroll is admin-only (handled by bnb_personal tab) — receptionists see all cash payroll
-    if (filterType !== 'all' && t.type !== filterType)                                            return false;
-    if (activeTab === 'all' && filterCaja !== 'all' && t.caja !== filterCaja)      return false;
-    if (filterCat  !== 'all' && t.category !== filterCat)                          return false;
-    if (filterCat === 'B03-SERVICIOS BÁSICOS' && filterB03Sub && !t.description?.includes(filterB03Sub)) return false;
-    return true;
-  });
+  const { filtered, filteredCash, totalIncome, totalExpense, balance, monthBalances } = useMemo(() => {
+    const filt = transactions.filter(t => {
+      if (activeTab === 'all'   && isShiftRef(t))                                                   return false;
+      if (activeTab === 'mayor' && t.caja === 'CAJA CHICA')                                        return false;
+      if (activeTab === 'chica' && t.caja !== 'CAJA CHICA')                                        return false;
+      if (activeTab === 'bnb'   && t.caja !== 'CUENTA BNB')                                        return false;
+      if (activeTab === 'bnb_eg' && (t.caja !== 'CUENTA BNB' || t.type !== 'egreso' || t.category === 'B05-SUELDOS Y SALARIOS')) return false;
+      if (activeTab === 'bnb_personal' && (t.caja !== 'CUENTA BNB' || t.type !== 'egreso' || t.category !== 'B05-SUELDOS Y SALARIOS')) return false;
+      if (activeTab !== 'bnb' && activeTab !== 'bnb_eg' && t.caja === 'CUENTA BNB' && t.type === 'egreso') return false;
+      if (!isAdmin && t.category === 'SALDO QR')                                                    return false;
+      if (filterType !== 'all' && t.type !== filterType)                                            return false;
+      if (activeTab === 'all' && filterCaja !== 'all' && t.caja !== filterCaja)      return false;
+      if (filterCat  !== 'all' && t.category !== filterCat)                          return false;
+      if (filterCat === 'B03-SERVICIOS BÁSICOS' && filterB03Sub && !t.description?.includes(filterB03Sub)) return false;
+      return true;
+    });
 
-  // Balance card: mayor→CAJA MAYOR only; bnb→CUENTA BNB only; others→all — shift-ref excluded
-  const filteredCash = (activeTab === 'mayor'
-    ? filtered.filter(t => t.caja === 'CAJA MAYOR')
-    : filtered
-  ).filter(t => !isShiftRef(t));
+    const filtCash = (activeTab === 'mayor'
+      ? filt.filter(t => t.caja === 'CAJA MAYOR')
+      : filt
+    ).filter(t => !isShiftRef(t));
 
-  // Traspasos only cancel out when viewing all cajas together (both legs — the egreso from
-  // the origin caja and the ingreso to the destination caja — are present, netting to zero).
-  // In a single-caja view (mayor/chica) only one leg appears, so it's real cash movement
-  // for that register and must be counted.
-  const excludeTraspaso = activeTab === 'all';
-  const totalIncome  = filteredCash.filter(t => t.type === 'ingreso' && (!excludeTraspaso || t.category !== 'TRASPASO DE CAJA')).reduce((s, t) => s + t.amount, 0);
-  const totalExpense = filteredCash.filter(t => t.type === 'egreso'  && (!excludeTraspaso || t.category !== 'TRASPASO DE CAJA')).reduce((s, t) => s + t.amount, 0);
-  const balance      = totalIncome - totalExpense;
+    const excTraspaso = activeTab === 'all';
+    const inc  = filtCash.filter(t => t.type === 'ingreso' && (!excTraspaso || t.category !== 'TRASPASO DE CAJA')).reduce((s, t) => s + t.amount, 0);
+    const exp  = filtCash.filter(t => t.type === 'egreso'  && (!excTraspaso || t.category !== 'TRASPASO DE CAJA')).reduce((s, t) => s + t.amount, 0);
 
-  // Per-caja monthly balances (using already-loaded month transactions, no all-time fetch needed)
-  const monthBalances = CAJAS.reduce((acc, caja) => {
-    const cajaTxs = transactions.filter(t => t.caja === caja && !isShiftRef(t));
-    acc[caja] = cajaTxs.reduce((s, t) => s + (t.type === 'ingreso' ? t.amount : -t.amount), 0);
-    return acc;
-  }, {} as Record<CajaType, number>);
+    const mb = CAJAS.reduce((acc, caja) => {
+      const cajaTxs = transactions.filter(t => t.caja === caja && !isShiftRef(t));
+      acc[caja] = cajaTxs.reduce((s, t) => s + (t.type === 'ingreso' ? t.amount : -t.amount), 0);
+      return acc;
+    }, {} as Record<CajaType, number>);
+
+    return { filtered: filt, filteredCash: filtCash, totalIncome: inc, totalExpense: exp, balance: inc - exp, monthBalances: mb };
+  }, [transactions, activeTab, isAdmin, filterType, filterCaja, filterCat, filterB03Sub]); // eslint-disable-line
+
+  // Running balance map — memoized so it doesn't recompute on unrelated state changes
+  const balanceMap = useMemo(() => {
+    const sortedAsc = [...filtered].sort((a, b) => {
+      const da = a.date + (a.time ?? '');
+      const db = b.date + (b.time ?? '');
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+    let run = 0;
+    const bm: Record<string, number> = {};
+    for (const t of sortedAsc) {
+      if (!isShiftRef(t) && (activeTab === 'bnb' || activeTab === 'bnb_eg' || activeTab === 'bnb_personal' || (t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA'))) {
+        run += t.type === 'ingreso' ? t.amount : -t.amount;
+      }
+      bm[t.id] = run;
+    }
+    return bm;
+  }, [filtered, activeTab]); // eslint-disable-line
 
   const categories = form.type === 'ingreso' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
 
@@ -595,23 +605,6 @@ export default function TransactionsPage() {
 
       {/* Table */}
       {(() => {
-        // Running balance oldest → newest
-        const sortedAsc = [...filtered].sort((a, b) => {
-          const da = a.date + (a.time ?? '');
-          const db = b.date + (b.time ?? '');
-          return da < db ? -1 : da > db ? 1 : 0;
-        });
-        let run = 0;
-        const balanceMap: Record<string, number> = {};
-        for (const t of sortedAsc) {
-          // Shift-ref rows don't affect running saldo
-          // On BNB/bnb_eg tabs, include CUENTA BNB in the running balance; otherwise skip QR/Tarjeta
-          if (!isShiftRef(t) && (activeTab === 'bnb' || activeTab === 'bnb_eg' || activeTab === 'bnb_personal' || (t.caja !== 'CUENTA BNB' && t.caja !== 'TARJETA'))) {
-            run += t.type === 'ingreso' ? t.amount : -t.amount;
-          }
-          balanceMap[t.id] = run;
-        }
-
         const thCls = 'px-3 py-3 text-xs font-semibold uppercase text-gray-500 tracking-wider whitespace-nowrap border-r border-gray-200 last:border-r-0';
         const tdCls = 'px-3 py-2.5 whitespace-nowrap border-r border-gray-200 last:border-r-0';
 
@@ -720,8 +713,22 @@ export default function TransactionsPage() {
                             </td>
                           )}
                           {/* Descripción — wide */}
-                          <td className="px-3 py-2.5 text-gray-700 text-xs min-w-[260px] max-w-xs truncate border-r border-gray-200">
-                            {t.description || <span className="text-gray-300">—</span>}
+                          <td className="px-3 py-2.5 text-gray-700 text-xs min-w-[260px] max-w-xs border-r border-gray-200">
+                            <div className="flex items-center gap-1.5 truncate">
+                              <span className="truncate">{t.description || <span className="text-gray-300">—</span>}</span>
+                              {t.date && (
+                                <button
+                                  onClick={() => {
+                                    const [y, m] = t.date.split('-').map(Number);
+                                    navigate('/admin/calendar', { state: { year: y, month: m - 1, roomId: t.room_id ?? undefined, date: t.date } });
+                                  }}
+                                  className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded text-amber-500 hover:text-amber-700 hover:bg-amber-50 transition-all"
+                                  title={`Ver ${t.date} en calendario`}
+                                >
+                                  <CalendarDays size={13} />
+                                </button>
+                              )}
+                            </div>
                           </td>
                           {/* Actions */}
                           <td className="px-2 py-2.5 min-w-[72px]">

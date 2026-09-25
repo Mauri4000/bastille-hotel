@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import DatePicker from '../components/DatePicker';
@@ -311,21 +311,22 @@ export default function MarketingPage() {
   const prevMonth = () => { if (month === 0) { setMonth(11); setYear(y => y-1); } else setMonth(m => m-1); };
   const nextMonth = () => { if (month === 11) { setMonth(0); setYear(y => y+1); } else setMonth(m => m+1); };
 
-  const published = posts.filter(p => !p.pending);
-  const pending   = posts.filter(p => p.pending);
-
-  // Apply filters
-  function matchesFilter(p: MarketingPost) {
-    if (filterAccount !== 'all' && p.account_name !== filterAccount) return false;
-    if (filterCat !== 'all' && !(p.categories ?? []).includes(filterCat)) return false;
-    return true;
-  }
-  const filteredPublished = published.filter(matchesFilter);
-  const filteredPending   = pending.filter(matchesFilter);
-
-  const totalLikes    = published.reduce((s, p) => s + aggStats(p.network_stats ?? {}).likes, 0);
-  const totalComments = published.reduce((s, p) => s + aggStats(p.network_stats ?? {}).comments, 0);
-  const totalViews    = published.reduce((s, p) => s + aggStats(p.network_stats ?? {}).views, 0);
+  const { filteredPublished, filteredPending, totalLikes, totalComments, totalViews } = useMemo(() => {
+    const pub = posts.filter(p => !p.pending);
+    const pend = posts.filter(p => p.pending);
+    const matches = (p: MarketingPost) => {
+      if (filterAccount !== 'all' && p.account_name !== filterAccount) return false;
+      if (filterCat !== 'all' && !(p.categories ?? []).includes(filterCat)) return false;
+      return true;
+    };
+    return {
+      filteredPublished: pub.filter(matches),
+      filteredPending:   pend.filter(matches),
+      totalLikes:    pub.reduce((s, p) => s + aggStats(p.network_stats ?? {}).likes, 0),
+      totalComments: pub.reduce((s, p) => s + aggStats(p.network_stats ?? {}).comments, 0),
+      totalViews:    pub.reduce((s, p) => s + aggStats(p.network_stats ?? {}).views, 0),
+    };
+  }, [posts, filterAccount, filterCat]);
 
   // Analytics
   const paidPosts    = published.filter(p => p.paid_ads);
