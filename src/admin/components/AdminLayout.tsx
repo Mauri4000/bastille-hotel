@@ -23,6 +23,7 @@ const navItems: NavItem[] = [
   { to: '/admin/shift',        icon: ClipboardList,   label: 'Cambio de Turno' },
   { to: '/admin/billetes',     icon: ClipboardList,   label: 'Billetes' },
   { to: '/admin/reportes',     icon: BarChart2,       label: 'Reportes' },
+  { to: '/admin/precios',      icon: TrendingUp,      label: 'Precios',            adminOnly: true },
   { to: '/admin/historial',    icon: History,         label: 'Historial',          adminOnly: true },
   { to: '/admin/spanish',      icon: GraduationCap,   label: 'Spanish School' },
   // Marketing: visible only to admin and marketing role

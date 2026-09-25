@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, X, Copy, Check } from 'lucide-react';
 
 const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
@@ -54,7 +54,9 @@ function EntryModal({ entry, onClose, onSave }: {
   const [form, setForm] = useState<Omit<Entry,'id'>>(
     entry ? { ...empty(), ...entry } : empty()
   );
-  const [saving, setSaving] = useState(false);
+  const [saving,  setSaving]  = useState(false);
+  const [copied,  setCopied]  = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   function set<K extends keyof typeof form>(k: K, v: typeof form[K]) {
     setForm(f => {
@@ -217,6 +219,78 @@ function EntryModal({ entry, onClose, onSave }: {
             </div>
           </div>
         </div>
+
+        {/* WhatsApp message preview */}
+        {form.name.trim() && (
+          <div className="px-6 pb-4">
+            <div className="bg-[#075e54] rounded-t-xl px-4 py-2.5 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">💬</span>
+                <span className="text-white text-sm font-semibold">Mensaje para WhatsApp</span>
+              </div>
+              <button
+                onClick={() => {
+                  const txt = textareaRef.current?.value ?? '';
+                  navigator.clipboard.writeText(txt).then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  });
+                }}
+                className="flex items-center gap-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors">
+                {copied ? <Check size={13} /> : <Copy size={13} />}
+                {copied ? 'Copiado ✓' : 'Copiar'}
+              </button>
+            </div>
+            <textarea
+              ref={textareaRef}
+              readOnly
+              rows={12}
+              className="w-full bg-[#ece5dd] text-gray-800 text-sm px-4 py-3 rounded-b-xl font-mono resize-none focus:outline-none leading-relaxed"
+              value={(() => {
+                const firstName = form.name.trim().split(/\s+/)[0];
+                const mes = MONTH_NAMES[form.month - 1];
+                const lines: string[] = [];
+                lines.push(`Hola ${firstName} 👋`);
+                lines.push(`Aquí el resumen de tu planilla de *${mes} ${form.year}*:`);
+                lines.push('');
+
+                if (form.salary_type === 'por_mes') {
+                  lines.push(`📋 *Salario mensual:* Bs. ${fmtN(form.rate_main)}`);
+                  if (form.days_main !== 30)
+                    lines.push(`   Días trabajados: ${form.days_main} de 30`);
+                  if (form.rate_main * form.days_main !== form.rate_main)
+                    lines.push(`   Subtotal: Bs. ${fmtN(form.rate_main * form.days_main)}`);
+                } else {
+                  lines.push(`📋 *Días trabajados:* ${form.days_main} días × Bs. ${fmtN(form.rate_main)} = Bs. ${fmtN(form.rate_main * form.days_main)}`);
+                }
+
+                if (form.days_sunday > 0)
+                  lines.push(`🌞 *Domingos trabajados:* ${form.days_sunday} × Bs. ${fmtN(form.rate_sunday)} = Bs. ${fmtN(form.rate_sunday * form.days_sunday)}`);
+
+                if (form.days_extra > 0)
+                  lines.push(`🎉 *Extras / feriados:* ${form.days_extra} × Bs. ${fmtN(form.rate_extra)} = Bs. ${fmtN(form.rate_extra * form.days_extra)}`);
+
+                lines.push('');
+                lines.push(`💰 *Total ganado:* Bs. ${fmtN(form.total_earned)}`);
+
+                if (form.advances > 0)
+                  lines.push(`➖ *Adelantos descontados:* Bs. ${fmtN(form.advances)}`);
+
+                lines.push('');
+                lines.push(`✅ *Total a pagar: Bs. ${fmtN(form.total_to_pay)}*`);
+
+                if (form.notes.trim())
+                  lines.push(``, `📝 ${form.notes.trim()}`);
+
+                lines.push('');
+                lines.push('Por favor confirma si todo está correcto 🙏');
+                lines.push('_Bastille Hotel_');
+
+                return lines.join('\n');
+              })()}
+            />
+          </div>
+        )}
 
         <div className="px-6 pb-6 flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>

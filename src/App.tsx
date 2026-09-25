@@ -36,6 +36,7 @@ import MarketingPage from "./admin/pages/MarketingPage";
 import MarketingCalendarPage from "./admin/pages/MarketingCalendarPage";
 import PlanillasPage from "./admin/pages/PlanillasPage";
 import ImpuestosPage from "./admin/pages/ImpuestosPage";
+import PreciosPage from "./admin/pages/PreciosPage";
 
 const defaultFilters: BookingFilters = {
   checkIn: "",
@@ -78,6 +79,7 @@ function AdminApp() {
         <Route path="marketing-calendar"  element={<MarketingCalendarPage />} />
         <Route path="planillas"    element={<PlanillasPage />} />
         <Route path="impuestos"    element={<ImpuestosPage />} />
+        <Route path="precios"      element={<PreciosPage />} />
       </Routes>
     </AdminLayout>
   );

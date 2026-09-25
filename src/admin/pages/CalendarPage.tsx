@@ -153,6 +153,88 @@ export default function CalendarPage() {
   const [menuOpenId,       setMenuOpenId]       = useState<string | null>(null);
   const [guestAutoFilled,  setGuestAutoFilled]  = useState(false);
 
+  // Guest search
+  const [searchQuery,   setSearchQuery]   = useState('');
+  const [searchResults, setSearchResults] = useState<Reservation[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchOpen,    setSearchOpen]    = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
+
+  async function handleSearch(q: string) {
+    setSearchQuery(q);
+    if (q.trim().length < 2) { setSearchResults([]); setSearchOpen(false); return; }
+    setSearchLoading(true); setSearchOpen(true);
+    const qLow = q.trim().toLowerCase();
+
+    // Search by main guest name OR by document
+    const { data: byName } = await supabase
+      .from('reservations')
+      .select('id,guest_name,guest_document,room_id,check_in,check_out,status,num_guests,additional_guests')
+      .ilike('guest_name', `%${q.trim()}%`)
+      .not('guest_name', 'ilike', '📝%')
+      .not('guest_name', 'ilike', '🏠%')
+      .not('guest_name', 'ilike', '⚠️%')
+      .order('check_in', { ascending: false })
+      .limit(20);
+
+    // Also search by document number
+    const { data: byDoc } = await supabase
+      .from('reservations')
+      .select('id,guest_name,guest_document,room_id,check_in,check_out,status,num_guests,additional_guests')
+      .ilike('guest_document', `%${q.trim()}%`)
+      .not('guest_name', 'ilike', '📝%')
+      .not('guest_name', 'ilike', '🏠%')
+      .not('guest_name', 'ilike', '⚠️%')
+      .order('check_in', { ascending: false })
+      .limit(20);
+
+    // Fetch a broader set to search inside additional_guests (last 2 years)
+    const twoYearsAgo = `${today.getFullYear() - 2}-01-01`;
+    const { data: allRecent } = await supabase
+      .from('reservations')
+      .select('id,guest_name,guest_document,room_id,check_in,check_out,status,num_guests,additional_guests')
+      .not('guest_name', 'ilike', '📝%')
+      .not('guest_name', 'ilike', '🏠%')
+      .not('guest_name', 'ilike', '⚠️%')
+      .gte('check_in', twoYearsAgo)
+      .not('additional_guests', 'is', null)
+      .order('check_in', { ascending: false })
+      .limit(500);
+
+    // Filter allRecent by additional_guests name match
+    const byAdditional = (allRecent ?? []).filter(r => {
+      const guests = (r.additional_guests ?? []) as any[];
+      return guests.some((g: any) => (g.name ?? '').toLowerCase().includes(qLow));
+    });
+
+    // Merge, deduplicate by id
+    const merged = new Map<string, any>();
+    for (const r of [...(byName ?? []), ...(byDoc ?? []), ...byAdditional]) {
+      if (!merged.has(r.id)) merged.set(r.id, r);
+    }
+
+    // Sort by check_in desc, limit 10
+    const results = Array.from(merged.values())
+      .sort((a, b) => b.check_in.localeCompare(a.check_in))
+      .slice(0, 10);
+
+    // Add match info for display
+    setSearchResults(results.map(r => ({
+      ...r,
+      _matchedGuest: (() => {
+        const guests = (r.additional_guests ?? []) as any[];
+        return guests.find((g: any) => (g.name ?? '').toLowerCase().includes(qLow));
+      })(),
+    })));
+    setSearchLoading(false);
+  }
+
+  function jumpToReservation(res: Reservation) {
+    const [y, m] = res.check_in.split('-').map(Number);
+    setYear(y); setMonth(m - 1);
+    setSearchQuery(''); setSearchResults([]); setSearchOpen(false);
+  }
+
   // Confirm arrival modal
   const [confirmModal, setConfirmModal] = useState({
     open: false, res: null as Reservation | null,
@@ -1777,6 +1859,60 @@ export default function CalendarPage() {
           </p>
         </div>
         <div className="flex flex-col items-start md:items-end gap-2">
+
+          {/* Guest search */}
+          <div ref={searchRef} className="relative w-full md:w-72" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 py-2 bg-white shadow-sm focus-within:ring-2 focus-within:ring-amber-400">
+              <span className="text-gray-400 text-sm">🔍</span>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => handleSearch(e.target.value)}
+                onFocus={() => searchResults.length > 0 && setSearchOpen(true)}
+                placeholder="Buscar huésped..."
+                className="flex-1 text-sm outline-none bg-transparent text-gray-800 placeholder:text-gray-400"
+              />
+              {searchQuery && (
+                <button onClick={() => { setSearchQuery(''); setSearchResults([]); setSearchOpen(false); }}
+                  className="text-gray-400 hover:text-gray-600 text-xs font-bold">✕</button>
+              )}
+            </div>
+            {searchOpen && (
+              <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-xl shadow-2xl border border-gray-100 z-[200] overflow-hidden">
+                {searchLoading ? (
+                  <div className="px-4 py-3 text-sm text-gray-400">Buscando…</div>
+                ) : searchResults.length === 0 ? (
+                  <div className="px-4 py-3 text-sm text-gray-400">Sin resultados</div>
+                ) : (
+                  <ul>
+                    {searchResults.map((r: any) => {
+                      const room = rooms.find(rm => rm.id === r.room_id);
+                      const [, rm, rd] = r.check_in.split('-');
+                      const isAdditional = !!r._matchedGuest;
+                      return (
+                        <li key={r.id}>
+                          <button
+                            onClick={() => jumpToReservation(r)}
+                            className="w-full text-left px-4 py-2.5 hover:bg-amber-50 transition-colors border-b border-gray-50 last:border-0">
+                            <div className="font-semibold text-sm text-gray-900">{r.guest_name}</div>
+                            {isAdditional && (
+                              <div className="text-xs text-indigo-600 font-medium mt-0.5">
+                                👤 Huésped adicional: {r._matchedGuest.name}
+                              </div>
+                            )}
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {rd}/{rm} · {room?.name ?? r.room_id} · {r.num_guests} huésped{r.num_guests !== 1 ? 'es' : ''}
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Month navigation */}
           <div className="flex items-center gap-2">
             <button onClick={prevMonth} className="p-2 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors">
