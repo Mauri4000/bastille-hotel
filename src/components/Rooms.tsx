@@ -4,6 +4,7 @@ import { PawPrint } from "lucide-react";
 import RoomCard from "./RoomCard";
 import { rooms } from "../data/rooms";
 import type { BookingFilters } from "./BookingSearch";
+import { useAvailability } from "../hooks/useAvailability";
 
 const cardVariants = {
   hidden: { opacity: 0, y: 30 },
@@ -20,6 +21,7 @@ interface Props {
 
 export default function Rooms({ filters }: Props) {
   const { t } = useTranslation();
+  const { unavailableTypes } = useAvailability(filters.checkIn, filters.checkOut);
 
   // Max occupancy needed in any single booking room
   const maxPerRoom = Math.max(
@@ -68,7 +70,7 @@ export default function Rooms({ filters }: Props) {
                   viewport={{ once: true }}
                   variants={cardVariants}
                 >
-                  <RoomCard room={room} filters={filters} />
+                  <RoomCard room={room} filters={filters} unavailable={unavailableTypes.has(room.adminType)} />
                 </motion.div>
               ))}
             </div>
@@ -96,7 +98,7 @@ export default function Rooms({ filters }: Props) {
                   viewport={{ once: true }}
                   variants={cardVariants}
                 >
-                  <RoomCard room={room} filters={filters} />
+                  <RoomCard room={room} filters={filters} unavailable={unavailableTypes.has(room.adminType)} />
                 </motion.div>
               ))}
             </div>

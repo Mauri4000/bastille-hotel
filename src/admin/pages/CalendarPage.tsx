@@ -165,7 +165,12 @@ export default function CalendarPage() {
   const [empresas,         setEmpresas]         = useState<string[]>([]);
   const [menuOpenId,       setMenuOpenId]       = useState<string | null>(null);
   // Urgencias confirmadas manualmente (roomId-YYYY-MM-DD) → suprimir titileo sin reload completo
-  const [ackedUrgencias,  setAckedUrgencias]  = useState<Set<string>>(new Set());
+  const [ackedUrgencias, setAckedUrgencias] = useState<Set<string>>(() => {
+    try {
+      const saved = sessionStorage.getItem('ackedUrgencias');
+      return saved ? new Set<string>(JSON.parse(saved)) : new Set<string>();
+    } catch { return new Set<string>(); }
+  });
   const [guestAutoFilled,  setGuestAutoFilled]  = useState(false);
 
   // Guest search
@@ -4385,7 +4390,11 @@ export default function CalendarPage() {
                 const checkIn = cardMenu.res.check_in;
                 // 1. Suprimir urgencia inmediatamente en estado local (funciona para Caso A y B)
                 const ackedKey = `${roomId}-${checkIn}`;
-                setAckedUrgencias(prev => new Set([...prev, ackedKey]));
+                setAckedUrgencias(prev => {
+                  const next = new Set([...prev, ackedKey]);
+                  try { sessionStorage.setItem('ackedUrgencias', JSON.stringify([...next])); } catch {}
+                  return next;
+                });
                 setCardMenu(null);
                 // 2. Borrar la habilitación si existe (Caso A)
                 await supabase.from('reservations').delete()

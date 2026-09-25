@@ -36,6 +36,8 @@ export type AmenityKey =
 
 export interface Room {
   id: string;
+  /** Matches the `type` field in the admin `rooms` table — used for availability checks */
+  adminType: string;
   nameKey: string;
   category: RoomCategory;
   image: string;
@@ -49,6 +51,7 @@ export interface Room {
 export const rooms: Room[] = [
   {
     id: "simple",
+    adminType: "S/M",
     nameKey: "rooms.names.simple",
     category: "room",
     image: simpleImg,
@@ -78,6 +81,7 @@ export const rooms: Room[] = [
   },
   {
     id: "matrimonial",
+    adminType: "S/M",
     nameKey: "rooms.names.matrimonial",
     category: "room",
     image: simpleImg,
@@ -107,6 +111,7 @@ export const rooms: Room[] = [
   },
   {
     id: "double",
+    adminType: "DOBLE/FAM",
     nameKey: "rooms.names.double",
     category: "room",
     image: doubleImg,
@@ -130,6 +135,7 @@ export const rooms: Room[] = [
   },
   {
     id: "suite-simple",
+    adminType: "SUITE S/M/F",
     nameKey: "rooms.names.suiteSimple",
     category: "suite",
     image: suiteImg,
@@ -161,6 +167,7 @@ export const rooms: Room[] = [
   },
   {
     id: "suite-matrimonial",
+    adminType: "SUITE S/M/F",
     nameKey: "rooms.names.suiteMatrimonial",
     category: "suite",
     image: suiteImg,
@@ -192,6 +199,7 @@ export const rooms: Room[] = [
   },
   {
     id: "suite-double",
+    adminType: "SUITE S/M/F",
     nameKey: "rooms.names.suiteDouble",
     category: "suite",
     image: suiteImg,
@@ -223,6 +231,7 @@ export const rooms: Room[] = [
   },
   {
     id: "suite-triple",
+    adminType: "SUITE S/M/F (4)",
     nameKey: "rooms.names.suiteTriple",
     category: "suite",
     image: suiteTripleImg,

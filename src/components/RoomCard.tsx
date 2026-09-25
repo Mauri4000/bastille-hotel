@@ -41,9 +41,10 @@ const amenityIcons: Record<AmenityKey, React.ReactNode> = {
 interface RoomCardProps {
   room: Room;
   filters?: BookingFilters;
+  unavailable?: boolean;
 }
 
-export default function RoomCard({ room, filters }: RoomCardProps) {
+export default function RoomCard({ room, filters, unavailable = false }: RoomCardProps) {
   const { t } = useTranslation();
   const [current, setCurrent] = useState(0);
 
@@ -64,8 +65,16 @@ export default function RoomCard({ room, filters }: RoomCardProps) {
   return (
     <div
       data-testid={"room-card-" + room.id}
-      className="bg-white rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl transition-shadow duration-300 flex flex-col"
+      className={`bg-white rounded-2xl overflow-hidden shadow-lg transition-shadow duration-300 flex flex-col ${
+        unavailable ? "opacity-70" : "hover:shadow-2xl"
+      }`}
     >
+      {/* Unavailable banner */}
+      {unavailable && (
+        <div className="bg-red-500 text-white text-xs font-bold text-center py-1.5 tracking-wide uppercase">
+          {t("rooms.unavailable")}
+        </div>
+      )}
       {/* Carousel */}
       <div
         data-testid={"room-card-" + room.id + "-carousel"}
@@ -178,13 +187,19 @@ export default function RoomCard({ room, filters }: RoomCardProps) {
               ≈ {room.price} Bs
             </p>
           </div>
-          <Link
-            data-testid={"room-card-" + room.id + "-btn-book"}
-            to={bookingUrl}
-            className="bg-amber-400 hover:bg-amber-300 text-black font-semibold px-5 py-2 rounded-lg transition-colors"
-          >
-            {t("rooms.bookNow")}
-          </Link>
+          {unavailable ? (
+            <span className="bg-gray-200 text-gray-400 font-semibold px-5 py-2 rounded-lg cursor-not-allowed text-sm">
+              {t("rooms.unavailable")}
+            </span>
+          ) : (
+            <Link
+              data-testid={"room-card-" + room.id + "-btn-book"}
+              to={bookingUrl}
+              className="bg-amber-400 hover:bg-amber-300 text-black font-semibold px-5 py-2 rounded-lg transition-colors"
+            >
+              {t("rooms.bookNow")}
+            </Link>
+          )}
         </div>
       </div>
     </div>
