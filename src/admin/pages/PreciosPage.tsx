@@ -90,14 +90,14 @@ export default function PreciosPage() {
       const nowStr   = today.toISOString().slice(0, 10);
       const periodDays = Math.ceil((today.getTime() - since.getTime()) / 86400000);
 
-      // Fetch rooms
-      const { data: rooms } = await supabase.from('rooms').select('id, name, type');
+      // (rooms fetched for future use — currently subtype comes from reservations)
+      await supabase.from('rooms').select('id, name, type');
 
       // Fetch ALL reservations in period that have checked out (check_out in the past)
       // Status stays 'ocupado' after checkout, so we filter by check_out <= today
       const { data, error: resErr } = await supabase
         .from('reservations')
-        .select('id,room_id,check_in,check_out,status,price_per_night,room_subtype,is_empresa,has_pet,num_guests,additional_guests')
+        .select('id,room_id,guest_name,check_in,check_out,status,price_per_night,room_subtype,is_empresa,has_pet,num_guests,additional_guests')
         .gte('check_in', sinceStr)
         .lte('check_out', nowStr)          // already checked out
         .not('status', 'in', '("mantenimiento","habilitacion","limpieza")')
