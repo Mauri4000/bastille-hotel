@@ -52,6 +52,7 @@ export interface Reservation {
   wants_invoice: boolean;
   price_per_night: number | null;
   notes: string | null;
+  urgencia_acked: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;

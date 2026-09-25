@@ -904,7 +904,7 @@ export default function CalendarPage() {
           const habEnds   = habCheckOutByRoom.get(res.room_id);
           const habStarts = habStartByRoom.get(res.room_id);
           const ackedKey  = `${res.room_id}-${res.check_in}`;
-          if (!ackedUrgencias.has(ackedKey)) {
+          if (!ackedUrgencias.has(ackedKey) && !res.urgencia_acked) {
             if ((habEnds && habEnds.has(res.check_in)) || (habStarts && habStarts.has(res.check_in)))
               hus.add(key);
             else {
@@ -4402,7 +4402,9 @@ export default function CalendarPage() {
                   return next;
                 });
                 setCardMenu(null);
-                // 2. Borrar la habilitación si existe (Caso A)
+                // 2. Marcar en DB la reserva como urgencia resuelta (persiste en todos los dispositivos)
+                await supabase.from('reservations').update({ urgencia_acked: true }).eq('id', cardMenu.res.id);
+                // 3. Borrar la habilitación si existe (Caso A)
                 await supabase.from('reservations').delete()
                   .eq('room_id', roomId)
                   .eq('status', 'habilitacion')
