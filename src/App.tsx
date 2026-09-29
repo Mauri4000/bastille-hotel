@@ -12,6 +12,7 @@ import GalleryPage from "./pages/GalleryPage";
 import ConferencePage from "./pages/ConferencePage";
 import RooftopPage from "./pages/RooftopPage";
 import SpanishSchoolPage from "./pages/SpanishSchoolPage";
+import PrivacyPage from "./pages/PrivacyPage";
 import Footer from "./components/Footer";
 import type { BookingFilters } from "./components/BookingSearch";
 
@@ -110,6 +111,7 @@ export default function App() {
           <Route path="/conference"     element={<ConferencePage />} />
           <Route path="/rooftop"        element={<RooftopPage />} />
           <Route path="/spanish-school" element={<SpanishSchoolPage />} />
+          <Route path="/privacy"        element={<PrivacyPage />} />
 
           {/* Admin */}
           <Route path="/admin/login"  element={<LoginPage />} />

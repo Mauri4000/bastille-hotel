@@ -15,6 +15,10 @@ const navLinks = [
   { label: 'Contacto',       to: '/#contact' },
 ];
 
+const legalLinks = [
+  { label: 'Política de Privacidad', to: '/privacy' },
+];
+
 function WhatsAppIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
@@ -88,6 +92,19 @@ export default function Footer() {
             >
               <Icon />
             </a>
+          ))}
+        </div>
+
+        {/* Legal links */}
+        <div className="flex justify-center gap-6 mb-4">
+          {legalLinks.map(({ label, to }) => (
+            <Link
+              key={to}
+              to={to}
+              className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+            >
+              {label}
+            </Link>
           ))}
         </div>
 

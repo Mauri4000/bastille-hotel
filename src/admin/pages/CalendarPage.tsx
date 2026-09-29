@@ -2065,7 +2065,7 @@ export default function CalendarPage() {
                   }`}>
                     <div className={`font-bold text-xs md:text-sm transition-colors flex items-center gap-1 ${hoveredCell?.roomId === room.id ? 'text-amber-700' : 'text-gray-900'}`}>
                       {room.id}
-                      {/^A\d/.test(room.id) && <span title="Ducha eléctrica" className="text-[11px]">🚿⚡</span>}
+                      {['A1','A2','A3','A4','A9','B1','B2','B3','B4','B9'].includes(room.id) && <span title="Ducha eléctrica" className="text-[11px]">🚿⚡</span>}
                     </div>
                     <div className="hidden md:block text-xs text-gray-400 truncate mt-0.5">{room.type}</div>
                   </td>
