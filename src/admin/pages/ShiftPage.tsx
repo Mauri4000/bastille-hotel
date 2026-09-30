@@ -8,6 +8,21 @@ import CustomSelect from '../components/CustomSelect';
 
 const SHIFTS: ShiftType[] = ['MAÑANA', 'TARDE', 'NOCHE'];
 
+const LINEN_ITEMS = [
+  { key: 'linen_towels_large',  label: 'Toallas grandes',   emoji: '🛁' },
+  { key: 'linen_towels_small',  label: 'Toallas pequeñas',  emoji: '🧻' },
+  { key: 'linen_sheets_large',  label: 'Sábanas grandes',   emoji: '🛏️' },
+  { key: 'linen_sheets_small',  label: 'Sábanas pequeñas',  emoji: '🛏️' },
+  { key: 'linen_pillowcases',   label: 'Fundas',            emoji: '💤' },
+  { key: 'linen_tablecloths',   label: 'Manteles',          emoji: '🍽️' },
+  { key: 'linen_duvets',        label: 'Edredones',         emoji: '❄️' },
+] as const;
+
+function linenTotal(r: { linen_towels_large?: number; linen_towels_small?: number; linen_sheets_large?: number; linen_sheets_small?: number; linen_pillowcases?: number; linen_tablecloths?: number; linen_duvets?: number }): number {
+  return (r.linen_towels_large ?? 0) + (r.linen_towels_small ?? 0) + (r.linen_sheets_large ?? 0) +
+    (r.linen_sheets_small ?? 0) + (r.linen_pillowcases ?? 0) + (r.linen_tablecloths ?? 0) + (r.linen_duvets ?? 0);
+}
+
 const emptyForm = {
   date:                    '',
   shift:                   'MAÑANA' as ShiftType,
@@ -18,7 +33,13 @@ const emptyForm = {
   cash_register_final:     '0',
   petty_cash_initial:      '0',
   petty_cash_final:        '0',
-  observations:            '',
+  linen_towels_large:      '0',
+  linen_towels_small:      '0',
+  linen_sheets_large:      '0',
+  linen_sheets_small:      '0',
+  linen_pillowcases:       '0',
+  linen_tablecloths:       '0',
+  linen_duvets:            '0',
 };
 
 const emptyFinalForm = {
@@ -158,7 +179,13 @@ export default function ShiftPage() {
       cash_register_final:     String(r.cash_register_final),
       petty_cash_initial:      String(r.petty_cash_initial),
       petty_cash_final:        String(r.petty_cash_final),
-      observations:            r.observations ?? '',
+      linen_towels_large:      String(r.linen_towels_large ?? 0),
+      linen_towels_small:      String(r.linen_towels_small ?? 0),
+      linen_sheets_large:      String(r.linen_sheets_large ?? 0),
+      linen_sheets_small:      String(r.linen_sheets_small ?? 0),
+      linen_pillowcases:       String(r.linen_pillowcases ?? 0),
+      linen_tablecloths:       String(r.linen_tablecloths ?? 0),
+      linen_duvets:            String(r.linen_duvets ?? 0),
     });
     setFormError('');
     setInitialSaved(false);
@@ -170,12 +197,20 @@ export default function ShiftPage() {
     if (!deleteConfirm.row) return;
     const r = deleteConfirm.row;
     setDeleteConfirm({ open: false, row: null });
-    // Cascade: remove INICIO/FINAL DE CAJA transactions for this date
-    await supabase.from('transactions')
-      .delete()
-      .in('description', ['INICIO DE CAJA', 'FINAL DE CAJA'])
-      .eq('date', r.date);
+    // Delete the shift record first
     await supabase.from('shift_handover').delete().eq('id', r.id);
+    // Only cascade-remove INICIO/FINAL DE CAJA transactions if NO other
+    // shift_handover records remain for that same date (multi-shift days share them)
+    const { count } = await supabase
+      .from('shift_handover')
+      .select('id', { count: 'exact', head: true })
+      .eq('date', r.date);
+    if ((count ?? 0) === 0) {
+      await supabase.from('transactions')
+        .delete()
+        .in('description', ['INICIO DE CAJA', 'FINAL DE CAJA'])
+        .eq('date', r.date);
+    }
     fetchData();
   }
 
@@ -230,7 +265,13 @@ export default function ShiftPage() {
       cash_register_final:     n(form.cash_register_final),
       petty_cash_initial:      n(form.petty_cash_initial),
       petty_cash_final:        n(form.petty_cash_final),
-      observations:            form.observations || null,
+      linen_towels_large:      n(form.linen_towels_large),
+      linen_towels_small:      n(form.linen_towels_small),
+      linen_sheets_large:      n(form.linen_sheets_large),
+      linen_sheets_small:      n(form.linen_sheets_small),
+      linen_pillowcases:       n(form.linen_pillowcases),
+      linen_tablecloths:       n(form.linen_tablecloths),
+      linen_duvets:            n(form.linen_duvets),
     };
     const { error } = editId
       ? await supabase.from('shift_handover').update(payload).eq('id', editId)
@@ -298,6 +339,7 @@ export default function ShiftPage() {
           <span className="text-sm font-semibold text-gray-700 w-36 text-center">{MONTH_NAMES[month]} {year}</span>
           <button onClick={nextMonth} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-100">›</button>
           <button
+            data-testid="btn-registrar-turno"
             onClick={openNew}
             className="flex items-center gap-2 ml-2 bg-amber-400 hover:bg-amber-300 text-gray-900 font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
           >
@@ -306,6 +348,42 @@ export default function ShiftPage() {
           </button>
         </div>
       </div>
+
+      {/* Ranking mensual de ropa doblada */}
+      {rows.some(r => linenTotal(r) > 0) && (() => {
+        const ranking = Object.values(
+          rows.reduce<Record<string, { name: string; total: number; shifts: number }>>((acc, r) => {
+            const name = (r.profiles as any)?.name ?? 'Sin nombre';
+            const tot  = linenTotal(r);
+            if (tot === 0) return acc;
+            if (!acc[name]) acc[name] = { name, total: 0, shifts: 0 };
+            acc[name].total  += tot;
+            acc[name].shifts += 1;
+            return acc;
+          }, {})
+        ).sort((a, b) => b.total - a.total);
+
+        const medals = ['🥇', '🥈', '🥉'];
+        return (
+          <div data-testid="shift-ranking" className="bg-white rounded-xl border border-purple-100 shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-lg">🧺</span>
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Ranking ropa doblada — {MONTH_NAMES[month]} {year}</span>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {ranking.map((p, i) => (
+                <div key={p.name} className={`flex items-center gap-2 rounded-xl px-4 py-2.5 border ${i === 0 ? 'bg-yellow-50 border-yellow-200' : i === 1 ? 'bg-gray-50 border-gray-200' : i === 2 ? 'bg-orange-50 border-orange-200' : 'bg-purple-50 border-purple-100'}`}>
+                  <span className="text-lg">{medals[i] ?? '🏅'}</span>
+                  <div>
+                    <p className="text-sm font-bold text-gray-800">{p.name}</p>
+                    <p className="text-xs text-gray-500">{p.total} piezas · {p.shifts} turno{p.shifts !== 1 ? 's' : ''}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Table */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -320,7 +398,7 @@ export default function ShiftPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table data-testid="shift-table" className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
                   <th className={`${thCls} text-left`}>Fecha</th>
@@ -334,7 +412,7 @@ export default function ShiftPage() {
                   <th className={`${thCls} text-right`}>CC Ini</th>
                   <th className={`${thCls} text-right`}>CC Fin</th>
                   <th className={`${thCls} text-center`}>Estado</th>
-                  <th className={`${thCls} text-left`}>Observaciones</th>
+                  <th className={`${thCls} text-center`}>🧺 Ropa</th>
                   <th className={`${thCls}`} />
                 </tr>
               </thead>
@@ -380,7 +458,15 @@ export default function ShiftPage() {
                         </div>
                       </td>
 
-                      <td className={`${tdCls} text-xs text-gray-400 max-w-[160px] truncate`}>{r.observations ?? '—'}</td>
+                      <td className={`${tdCls} text-center`}>
+                        {linenTotal(r) > 0 ? (
+                          <span className="inline-flex items-center gap-1 bg-purple-50 text-purple-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                            🧺 {linenTotal(r)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300 text-xs">—</span>
+                        )}
+                      </td>
 
                       {/* Acciones */}
                       <td className="px-3 py-3 whitespace-nowrap">
@@ -422,9 +508,9 @@ export default function ShiftPage() {
 
       {/* Main Modal (New / Edit) */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div data-testid="shift-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
               <h3 className="font-bold text-gray-900">
                 {editId ? 'Editar Turno' : 'Registrar Cambio de Turno'}
               </h3>
@@ -432,7 +518,7 @@ export default function ShiftPage() {
                 <X size={20} />
               </button>
             </div>
-            <div className="px-6 py-4 space-y-3">
+            <div data-testid="shift-form" className="px-6 py-4 space-y-3 overflow-y-auto">
 
               {/* Row 1: Date | Turno | Llaves */}
               <div className="grid grid-cols-3 gap-3">
@@ -535,15 +621,32 @@ export default function ShiftPage() {
                 </button>
               </div>
 
-              {/* Observaciones */}
+              {/* Ropa doblada */}
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Observaciones</label>
-                <textarea value={form.observations}
-                  onChange={e => setForm(f => ({ ...f, observations: e.target.value }))}
-                  rows={2}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
-                  placeholder="Novedades del turno..."
-                />
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">🧺 Ropa doblada en este turno</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {LINEN_ITEMS.map(({ key, label, emoji }) => (
+                    <div key={key} className="bg-purple-50 rounded-xl p-3 flex items-center gap-2">
+                      <span className="text-base">{emoji}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-bold text-purple-600 uppercase tracking-wider truncate">{label}</p>
+                        <input
+                          type="number"
+                          min={0}
+                          data-testid={`linen-${key.replace('linen_', '').replace(/_/g, '-')}`}
+                          value={(form as any)[key]}
+                          onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                          className="w-full border border-purple-200 rounded-lg px-2 py-1 text-sm font-bold text-purple-900 focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white mt-1"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {LINEN_ITEMS.reduce((s, { key }) => s + (parseInt((form as any)[key]) || 0), 0) > 0 && (
+                  <p className="text-xs text-purple-600 font-bold mt-2 text-right">
+                    Total: {LINEN_ITEMS.reduce((s, { key }) => s + (parseInt((form as any)[key]) || 0), 0)} piezas
+                  </p>
+                )}
               </div>
 
               {formError && (
@@ -555,7 +658,7 @@ export default function ShiftPage() {
                 className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
                 Cancelar
               </button>
-              <button onClick={handleSave} disabled={saving}
+              <button data-testid="shift-btn-save" onClick={handleSave} disabled={saving}
                 className="px-5 py-2 text-sm font-semibold bg-amber-400 hover:bg-amber-300 text-gray-900 rounded-lg transition-colors disabled:opacity-50">
                 {saving ? 'Guardando...' : editId ? 'Actualizar' : 'Guardar'}
               </button>

@@ -1934,13 +1934,13 @@ export default function CalendarPage() {
 
           {/* Month navigation */}
           <div className="flex items-center gap-2">
-            <button onClick={prevMonth} className="p-2 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors">
+            <button data-testid="btn-prev-month" onClick={prevMonth} className="p-2 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors">
               <ChevronLeft size={18} />
             </button>
-            <span className="px-3 text-sm font-bold text-gray-900 min-w-[140px] text-center tracking-wide">
+            <span data-testid="month-label" className="px-3 text-sm font-bold text-gray-900 min-w-[140px] text-center tracking-wide">
               {MONTH_NAMES[month]} {year}
             </span>
-            <button onClick={nextMonth} className="p-2 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors">
+            <button data-testid="btn-next-month" onClick={nextMonth} className="p-2 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors">
               <ChevronRight size={18} />
             </button>
           </div>
@@ -2017,8 +2017,8 @@ export default function CalendarPage() {
           <div className="w-8 h-8 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-          <table className="border-collapse" style={{ minWidth: `${ROOM_W + numDays * CELL_W}px` }}>
+        <div ref={scrollRef} data-testid="calendar-grid" className="flex-1 overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+          <table data-testid="calendar-table" className="border-collapse" style={{ minWidth: `${ROOM_W + numDays * CELL_W}px` }}>
             <thead className="sticky top-0 z-20">
               <tr className="bg-gray-50">
                 {/* Room header */}
@@ -2058,14 +2058,14 @@ export default function CalendarPage() {
             </thead>
             <tbody>
               {rooms.map((room, ri) => (
-                <tr key={room.id} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                <tr key={room.id} data-testid={`room-row-${room.id}`} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
                   {/* Room label */}
-                  <td style={{ width: ROOM_W, minWidth: ROOM_W }} className={`sticky left-0 z-10 border-r-2 border-b border-gray-300 px-2 md:px-4 py-1 md:py-2 transition-colors ${
+                  <td data-testid={`room-label-${room.id}`} style={{ width: ROOM_W, minWidth: ROOM_W }} className={`sticky left-0 z-10 border-r-2 border-b border-gray-300 px-2 md:px-4 py-1 md:py-2 transition-colors ${
                     hoveredCell?.roomId === room.id ? 'bg-amber-50' : ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
                   }`}>
                     <div className={`font-bold text-xs md:text-sm transition-colors flex items-center gap-1 ${hoveredCell?.roomId === room.id ? 'text-amber-700' : 'text-gray-900'}`}>
                       {room.id}
-                      {['A1','A2','A3','A4','A9','B1','B2','B3','B4','B9'].includes(room.id) && <span title="Ducha eléctrica" className="text-[11px]">🚿⚡</span>}
+                      {['A1','A2','A3','A4','A9','B1','B2','B3','B4','B9'].includes(room.id) && <span data-testid={`shower-icon-${room.id}`} title="Ducha eléctrica" className="text-[11px]">🚿⚡</span>}
                     </div>
                     <div className="hidden md:block text-xs text-gray-400 truncate mt-0.5">{room.type}</div>
                   </td>
@@ -2110,6 +2110,10 @@ export default function CalendarPage() {
                       <td
                         key={d}
                         data-cell-id={`${room.id}-${dateStr}`}
+                        data-testid={`cell-${room.id}-${d}`}
+                        data-room={room.id}
+                        data-day={d}
+                        data-status={res?.status ?? 'empty'}
                         className={`border-r border-b border-gray-300 p-0.5 md:p-1 ${CELL_H} align-top transition-colors ${
                           hoveredCell?.roomId === room.id && hoveredCell?.day === d
                             ? 'bg-amber-100/60'
@@ -2207,7 +2211,7 @@ export default function CalendarPage() {
                               /* ── First day: full name + flags + both times ── */
                               <>
                                 {isHabUrgente && (
-                                  <div className="text-[9px] font-extrabold text-red-900 bg-red-200/80 rounded px-1 py-px mb-0.5 leading-tight text-center">
+                                  <div data-testid={`urgencia-alert-${room.id}`} className="text-[9px] font-extrabold text-red-900 bg-red-200/80 rounded px-1 py-px mb-0.5 leading-tight text-center">
                                     🚨 HABILITAR URGENTE
                                   </div>
                                 )}
@@ -4410,7 +4414,7 @@ export default function CalendarPage() {
                   .eq('status', 'habilitacion')
                   .or(`check_in.eq.${checkIn},check_out.eq.${checkIn}`);
                 fetchData();
-              }} className="w-full text-left px-4 py-2 text-sm font-bold text-green-700 hover:bg-green-50 border-b border-gray-100">
+              }} data-testid="btn-marcar-habilitado" className="w-full text-left px-4 py-2 text-sm font-bold text-green-700 hover:bg-green-50 border-b border-gray-100">
                 ✅ Marcar como habilitado
               </button>
             )}

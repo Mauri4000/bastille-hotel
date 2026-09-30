@@ -38,13 +38,14 @@ export default function LoginPage() {
         </div>
 
         {/* Card */}
-        <div className="bg-gray-800 rounded-2xl p-6 shadow-xl">
+        <div data-testid="login-card" className="bg-gray-800 rounded-2xl p-6 shadow-xl">
           <h2 className="text-white font-semibold text-lg mb-5">Iniciar sesión</h2>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form data-testid="login-form" onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm text-gray-400 mb-1.5">Correo electrónico</label>
               <input
+                data-testid="login-email"
                 type="email"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
@@ -57,6 +58,7 @@ export default function LoginPage() {
             <div>
               <label className="block text-sm text-gray-400 mb-1.5">Contraseña</label>
               <input
+                data-testid="login-password"
                 type="password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
@@ -67,10 +69,11 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <p className="text-red-400 text-sm bg-red-400/10 rounded-lg px-3 py-2">{error}</p>
+              <p data-testid="login-error" className="text-red-400 text-sm bg-red-400/10 rounded-lg px-3 py-2">{error}</p>
             )}
 
             <button
+              data-testid="login-submit"
               type="submit"
               disabled={loading}
               className="w-full bg-amber-400 hover:bg-amber-300 text-gray-900 font-semibold py-2.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

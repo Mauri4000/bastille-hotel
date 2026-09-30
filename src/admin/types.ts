@@ -105,7 +105,16 @@ export interface ShiftHandover {
   cash_register_final: number;
   petty_cash_initial: number;
   petty_cash_final: number;
+  /** @deprecated kept in DB but hidden in UI */
   observations: string | null;
+  // Linen / ropa doblada
+  linen_towels_large:  number;
+  linen_towels_small:  number;
+  linen_sheets_large:  number;
+  linen_sheets_small:  number;
+  linen_pillowcases:   number;
+  linen_tablecloths:   number;
+  linen_duvets:        number;
   created_at: string;
   profiles?: { name: string };
 }

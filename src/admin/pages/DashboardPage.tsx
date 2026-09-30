@@ -220,7 +220,7 @@ export default function DashboardPage() {
 
         {/* AGUA — hidden for marketing */}
         {!isMarketing && (
-        <div className={`rounded-xl border shadow-sm p-4 ${agua.is_closed ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+        <div data-testid="stat-card-agua" className={`rounded-xl border shadow-sm p-4 ${agua.is_closed ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
           <div className="flex items-center gap-2 mb-3">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${agua.is_closed ? 'bg-red-100' : 'bg-blue-100'}`}>
               <Droplets size={16} className={agua.is_closed ? 'text-red-500' : 'text-blue-500'} />
@@ -251,7 +251,7 @@ export default function DashboardPage() {
         )}
 
         {/* EMPRESAS */}
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+        <div data-testid="stat-card-empresas" className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
           <div className="flex items-center gap-2 mb-3">
             <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center">
               <Building2 size={16} className="text-indigo-600" />
@@ -291,7 +291,7 @@ export default function DashboardPage() {
         </div>
 
         {/* PERROS */}
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+        <div data-testid="stat-card-mascotas" className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
           <div className="flex items-center gap-2 mb-3">
             <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
               <PawPrint size={16} className="text-orange-600" />

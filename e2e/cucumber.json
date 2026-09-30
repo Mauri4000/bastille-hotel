@@ -1,0 +1,68 @@
+{
+  "default": {
+    "requireModule": ["ts-node/register"],
+    "require": [
+      "world/**/*.ts",
+      "hooks/**/*.ts",
+      "steps/**/*.ts"
+    ],
+    "paths": ["features/**/*.feature"],
+    "format": [
+      "progress-bar",
+      "html:reports/cucumber-report.html",
+      "json:reports/cucumber-report.json"
+    ],
+    "formatOptions": {
+      "snippetInterface": "async-await"
+    },
+    "publishQuiet": true
+  },
+  "smoke": {
+    "requireModule": ["ts-node/register"],
+    "require": [
+      "world/**/*.ts",
+      "hooks/**/*.ts",
+      "steps/**/*.ts"
+    ],
+    "paths": ["features/**/*.feature"],
+    "tags": "@smoke",
+    "format": [
+      "progress-bar",
+      "html:reports/smoke-report.html",
+      "json:reports/smoke-report.json"
+    ],
+    "publishQuiet": true
+  },
+  "e2e": {
+    "requireModule": ["ts-node/register"],
+    "require": [
+      "world/**/*.ts",
+      "hooks/**/*.ts",
+      "steps/**/*.ts"
+    ],
+    "paths": ["features/**/*.feature"],
+    "tags": "@e2e",
+    "format": [
+      "progress-bar",
+      "html:reports/e2e-report.html",
+      "json:reports/e2e-report.json"
+    ],
+    "publishQuiet": true
+  },
+  "regression": {
+    "requireModule": ["ts-node/register"],
+    "require": [
+      "world/**/*.ts",
+      "hooks/**/*.ts",
+      "steps/**/*.ts"
+    ],
+    "paths": ["features/**/*.feature"],
+    "tags": "@smoke or @e2e",
+    "format": [
+      "progress-bar",
+      "html:reports/regression-report.html",
+      "json:reports/regression-report.json"
+    ],
+    "publishQuiet": true
+  }
+}
