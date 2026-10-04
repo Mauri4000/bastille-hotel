@@ -716,7 +716,7 @@ export default function TransactionsPage() {
                           <td className="px-3 py-2.5 text-gray-700 text-xs min-w-[260px] max-w-xs border-r border-gray-200">
                             <div className="flex items-center gap-1.5 truncate">
                               <span className="truncate">{t.description || <span className="text-gray-300">—</span>}</span>
-                              {t.date && (
+                              {t.date && t.room_id && (
                                 <button
                                   onClick={() => {
                                     const [y, m] = t.date.split('-').map(Number);

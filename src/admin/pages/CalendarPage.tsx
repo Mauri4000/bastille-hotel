@@ -1447,8 +1447,9 @@ export default function CalendarPage() {
 
   async function saveCheckoutFields() {
     if (!checkoutModal.res) return;
+    const newDepartureTime = checkoutModal.departure_time || null;
     await supabase.from('reservations').update({
-      departure_time:  checkoutModal.departure_time || null,
+      departure_time:  newDepartureTime,
       wants_invoice:   checkoutModal.is_invoice,
       siaat_number:    checkoutModal.is_invoice ? (checkoutModal.siaat_number   || null) : null,
       invoice_number:  checkoutModal.is_invoice ? (checkoutModal.invoice_number || null) : null,
@@ -1459,6 +1460,16 @@ export default function CalendarPage() {
     }).eq('id', checkoutModal.res.id);
     logActivity(profile?.id, profile?.name, 'Checkout guardado', 'reservation', checkoutModal.res.id,
       `${checkoutModal.res.room_id} — ${checkoutModal.res.guest_name}`);
+    // Update snapshot so Cancel won't revert to old values
+    checkoutOriginalRef.current = checkoutOriginalRef.current
+      ? { ...checkoutOriginalRef.current, departure_time: newDepartureTime ?? '' }
+      : null;
+    // Optimistically update local state so card reflects immediately
+    setReservations(prev => prev.map(r =>
+      r.id === checkoutModal.res!.id
+        ? { ...r, departure_time: newDepartureTime } as any
+        : r
+    ));
     setCheckoutModal(m => ({ ...m, open: false }));
     fetchData();
   }

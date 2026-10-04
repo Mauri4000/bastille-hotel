@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { FileText, Download, RefreshCw, AlertCircle, Send } from 'lucide-react';
 import DatePicker from '../components/DatePicker';
+import MonthPicker from '../components/MonthPicker';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -1893,11 +1894,11 @@ ${mktTop3.map((p:any,i:number)=>`<div class="top3-card" style="border-top-color:
         <div className="px-6 py-4 flex flex-wrap items-end gap-4">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Mes y Año</label>
-            <input
-              type="month"
+            <MonthPicker
               value={mensualMonth}
-              onChange={e => setMensualMonth(e.target.value)}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+              onChange={setMensualMonth}
+              placeholder="Seleccionar mes"
+              accentClass="border-green-400 ring-green-100"
             />
           </div>
           <div>
@@ -1942,11 +1943,10 @@ ${mktTop3.map((p:any,i:number)=>`<div class="top3-card" style="border-top-color:
         <div className="px-6 py-4 flex flex-wrap items-end gap-4">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Mes y Año</label>
-            <input
-              type="month"
+            <MonthPicker
               value={familiarMonth}
-              onChange={e => setFamiliarMonth(e.target.value)}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+              onChange={setFamiliarMonth}
+              placeholder="Seleccionar mes"
             />
           </div>
           <button
