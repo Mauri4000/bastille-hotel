@@ -443,9 +443,9 @@ export default function TransactionsPage() {
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-base sm:text-xl font-bold text-gray-900 shrink-0">Ingresos & Egresos</h1>
           <div className="flex items-center gap-1 sm:gap-2">
-            <button onClick={prevMonth} className="p-1.5 sm:p-2 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600">‹</button>
+            <button data-testid="btn-prev-month" onClick={prevMonth} className="p-1.5 sm:p-2 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600">‹</button>
             <span className="text-xs sm:text-sm font-semibold text-gray-700 w-24 sm:w-36 text-center">{MONTH_NAMES[month]} {year}</span>
-            <button onClick={nextMonth} className="p-1.5 sm:p-2 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600">›</button>
+            <button data-testid="btn-next-month" onClick={nextMonth} className="p-1.5 sm:p-2 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600">›</button>
             <button
               data-testid="btn-add-transaction"
               onClick={openNew}
