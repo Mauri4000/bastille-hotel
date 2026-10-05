@@ -907,7 +907,7 @@ export default function TransactionsPage() {
               </div>
 
               {/* Category — hidden in traspaso mode */}
-              {!isTraspaso && <div>
+              {!isTraspaso && <div data-testid="section-category">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Categoría *</label>
                 <CustomSelect value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))}
                   options={categories.map(c => ({ value: c, label: c }))}
