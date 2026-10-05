@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 
 interface Rate {
   blue: { buy: number; sell: number };
@@ -7,7 +6,6 @@ interface Rate {
 }
 
 export default function CurrencyRate() {
-  const { t } = useTranslation();
   const [rate, setRate] = useState<Rate | null>(null);
   const [error, setError] = useState(false);
 
