@@ -320,7 +320,7 @@ export default function VitrinaPage() {
           <button onClick={fetchProducts} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-500">
             <RefreshCw size={16} />
           </button>
-          <button onClick={() => { setForm(emptyForm); setAddError(null); setShowAddModal(true); }}
+          <button data-testid="btn-add-product" onClick={() => { setForm(emptyForm); setAddError(null); setShowAddModal(true); }}
             className="flex items-center gap-1.5 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-semibold text-sm rounded-lg transition-colors">
             <Plus size={16} /> Nuevo producto
           </button>
@@ -446,7 +446,7 @@ export default function VitrinaPage() {
 
       {/* ── Add modal ── */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+        <div data-testid="modal-add-product" className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <h3 className="font-semibold text-gray-900">Nuevo producto</h3>
@@ -455,13 +455,13 @@ export default function VitrinaPage() {
             <form onSubmit={handleAddSubmit} className="px-5 py-4 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Nombre</label>
-                <input type="text" autoFocus value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                <input data-testid="input-product-name" type="text" autoFocus value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" placeholder="Ej. CHOCOLATE PEQUEÑO" />
               </div>
               <div className="flex gap-3">
                 <div className="flex-1">
                   <label className="block text-xs font-medium text-gray-600 mb-1">Precio (Bs.)</label>
-                  <input type="number" step="0.01" min="0" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))}
+                  <input data-testid="input-product-price" type="number" step="0.01" min="0" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" placeholder="0.00" />
                 </div>
                 <div className="flex-1">
@@ -506,7 +506,7 @@ export default function VitrinaPage() {
               <div className="flex items-center justify-end gap-2 pt-1">
                 <button type="button" onClick={() => setShowAddModal(false)}
                   className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">Cancelar</button>
-                <button type="submit" disabled={adding || uploading}
+                <button data-testid="btn-submit-product" type="submit" disabled={adding || uploading}
                   className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-gray-900 font-semibold text-sm rounded-lg transition-colors disabled:opacity-60">
                   {adding ? 'Guardando...' : 'Agregar'}
                 </button>

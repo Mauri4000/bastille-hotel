@@ -447,6 +447,7 @@ export default function TransactionsPage() {
             <span className="text-xs sm:text-sm font-semibold text-gray-700 w-24 sm:w-36 text-center">{MONTH_NAMES[month]} {year}</span>
             <button onClick={nextMonth} className="p-1.5 sm:p-2 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600">›</button>
             <button
+              data-testid="btn-add-transaction"
               onClick={openNew}
               className="flex items-center gap-1 ml-1 sm:ml-2 bg-amber-400 hover:bg-amber-300 text-gray-900 font-semibold px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition-colors"
             >
@@ -805,7 +806,7 @@ export default function TransactionsPage() {
 
       {/* ── Modal ── */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+        <div data-testid="transaction-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h3 className="font-bold text-gray-900">{editingTxId ? 'Editar Movimiento' : 'Nuevo Movimiento'}</h3>
@@ -898,7 +899,7 @@ export default function TransactionsPage() {
               {/* Amount */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Monto (Bs.) *</label>
-                <input type="number" min={0} step={0.01} value={form.amount}
+                <input data-testid="input-amount" type="number" min={0} step={0.01} value={form.amount}
                   onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                   placeholder="0.00"
@@ -1067,7 +1068,7 @@ export default function TransactionsPage() {
                 className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
                 Cancelar
               </button>
-              <button onClick={handleSave} disabled={saving}
+              <button data-testid="btn-save-transaction" onClick={handleSave} disabled={saving}
                 className="px-5 py-2 text-sm font-semibold bg-amber-400 hover:bg-amber-300 text-gray-900 rounded-lg transition-colors disabled:opacity-50">
                 {saving ? 'Guardando...' : 'Guardar'}
               </button>

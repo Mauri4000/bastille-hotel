@@ -8,7 +8,7 @@ import { rooms as allRooms } from "../data/rooms";
 const WA_NUMBER = "59178637098";
 const EMAIL = "bastillehotelsucre@gmail.com";
 const ADDRESS = "Aniceto Arce 247, Sucre, Bolivia";
-const PET_FEE_USD = 3;
+const PET_FEE_USD = 2.5;
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 function nightsBetween(a: string, b: string) {

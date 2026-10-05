@@ -215,5 +215,8 @@
       "pets": "Pets",
       "hallway": "Hallway"
     }
+  },
+  "currency": {
+    "label": "Exchange rate"
   }
 }

@@ -2373,7 +2373,7 @@ export default function CalendarPage() {
 
       {/* ── Modal ── */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+        <div data-testid="reservation-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
 
             {/* ── SALON modal header ── */}
@@ -2712,14 +2712,14 @@ export default function CalendarPage() {
                               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 font-mono"
                               placeholder="NIT empresa (para factura SIN)" />
                             <label className="block text-xs font-medium text-gray-500 mt-1">Nombre del huésped</label>
-                            <input type="text" value={form.guest_name}
+                            <input data-testid="input-guest-name" type="text" value={form.guest_name}
                               onChange={e => setForm(f => ({ ...f, guest_name: e.target.value }))}
                               onBlur={e => { if (!form.guest_gender) setForm(f => ({ ...f, guest_gender: guessGender(e.target.value) })); }}
                               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                               placeholder="Nombre del huésped que reserva" />
                           </>
                         ) : (
-                          <input type="text" value={form.guest_name}
+                          <input data-testid="input-guest-name" type="text" value={form.guest_name}
                             onChange={e => setForm(f => ({ ...f, guest_name: e.target.value }))}
                             onBlur={e => { if (!form.guest_gender) setForm(f => ({ ...f, guest_gender: guessGender(e.target.value) })); }}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
@@ -2743,19 +2743,19 @@ export default function CalendarPage() {
                       <div className="grid grid-cols-3 gap-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">N° noches <span className="text-red-400">*</span></label>
-                          <input type="number" min={1} max={60} value={form.num_nights}
+                          <input data-testid="input-num-nights" type="number" min={1} max={60} value={form.num_nights}
                             onChange={e => setForm(f => ({ ...f, num_nights: parseInt(e.target.value) || 1 }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">N° huéspedes</label>
-                          <input type="number" min={1} max={20} value={form.num_guests}
+                          <input data-testid="input-num-guests" type="number" min={1} max={20} value={form.num_guests}
                             onChange={e => setForm(f => ({ ...f, num_guests: parseInt(e.target.value) || 1 }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">Precio/noche (Bs.) <span className="text-red-400">*</span></label>
-                          <input type="number" min={0} step={0.5} value={form.price_per_night}
+                          <input data-testid="input-price-per-night" type="number" min={0} step={0.5} value={form.price_per_night}
                             onChange={e => setForm(f => ({ ...f, price_per_night: e.target.value }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                             placeholder="0.00" />
@@ -3342,12 +3342,14 @@ export default function CalendarPage() {
               </div>
               <div className="flex gap-3">
                 <button
+                  data-testid="btn-cancel-reservation"
                   onClick={() => setModalOpen(false)}
                   className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg transition-colors"
                 >
                   Cancelar
                 </button>
                 <button
+                  data-testid="btn-save-reservation"
                   onClick={handleSave}
                   disabled={saving}
                   className={`px-5 py-2 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 ${
@@ -3616,7 +3618,7 @@ export default function CalendarPage() {
       )}
 
       {checkoutModal.open && checkoutModal.res && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
+        <div data-testid="checkout-modal" className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-orange-50 rounded-t-2xl">
@@ -4336,15 +4338,15 @@ export default function CalendarPage() {
             </div>
 
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100 bg-white rounded-b-2xl">
-              <button onClick={cancelCheckout}
+              <button data-testid="btn-cancel-checkout" onClick={cancelCheckout}
                 className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg transition-colors">
                 Cancelar
               </button>
-              <button onClick={saveCheckoutFields}
+              <button data-testid="btn-save-checkout" onClick={saveCheckoutFields}
                 className="px-5 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-400 text-white rounded-lg transition-colors">
                 💾 Guardar cambios
               </button>
-              <button onClick={handleCheckout}
+              <button data-testid="btn-do-checkout" onClick={handleCheckout}
                 className="px-6 py-2 text-sm font-semibold bg-orange-500 hover:bg-orange-400 text-white rounded-lg transition-colors">
                 ✓ Check out
               </button>

@@ -5,6 +5,7 @@ import RoomCard from "./RoomCard";
 import { rooms } from "../data/rooms";
 import type { BookingFilters } from "./BookingSearch";
 import { useAvailability } from "../hooks/useAvailability";
+import CurrencyRate from "./CurrencyRate";
 
 const cardVariants = {
   hidden: { opacity: 0, y: 30 },
@@ -55,6 +56,9 @@ export default function Rooms({ filters }: Props) {
         {standardRooms.length > 0 && (
           <div data-testid="rooms-standard" className="mb-20">
             <div className="text-center mb-12">
+              <div className="flex justify-center mb-4">
+                <CurrencyRate />
+              </div>
               <h2 className="text-4xl font-bold text-gray-900 mb-3">
                 {t("rooms.title")}
               </h2>
