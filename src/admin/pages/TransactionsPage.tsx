@@ -1051,7 +1051,7 @@ export default function TransactionsPage() {
               {/* Description */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
-                <input type="text" value={form.description}
+                <input data-testid="input-description" type="text" value={form.description}
                   onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                   placeholder="Detalle del movimiento..."
@@ -1112,6 +1112,7 @@ export default function TransactionsPage() {
                 Cancelar
               </button>
               <button
+                data-testid="btn-confirm-delete"
                 onClick={confirmDialog.onConfirm}
                 className="px-5 py-2 text-sm font-semibold bg-red-500 hover:bg-red-400 text-white rounded-lg">
                 Eliminar
