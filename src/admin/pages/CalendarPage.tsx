@@ -1954,6 +1954,9 @@ export default function CalendarPage() {
             <button data-testid="btn-next-month" onClick={nextMonth} className="p-2 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors">
               <ChevronRight size={18} />
             </button>
+            <button data-testid="btn-today" onClick={() => { setMonth(new Date().getMonth()); setYear(new Date().getFullYear()); }} className="px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 text-xs font-semibold transition-colors">
+              Hoy
+            </button>
           </div>
 
           {/* Select + 3-dot actions */}
