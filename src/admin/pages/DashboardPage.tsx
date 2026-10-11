@@ -139,7 +139,7 @@ export default function DashboardPage() {
           <span className="text-2xl">🚨</span>
           <div className="flex-1">
             <p className="font-extrabold text-base tracking-wide">IMPRIMIR PARTES DIARIAS</p>
-            <p className="text-sm font-bold opacity-90 mt-0.5">🔔 AVISAR A LIZZ QUE IMPRIMA 🔔</p>
+            <p className="text-sm font-bold opacity-90 mt-0.5">🔔 AVISAR A MAURI QUE IMPRIMA 🔔</p>
           </div>
           <span className="text-2xl">🚨</span>
         </div>
