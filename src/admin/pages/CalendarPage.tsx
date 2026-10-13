@@ -3192,7 +3192,7 @@ export default function CalendarPage() {
                                 onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, phone: e.target.value.replace(/\D/g, '') } : g))}
                                 className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                               <input type="text" placeholder="CI / Pasaporte" value={ag.document}
-                                onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, document: e.target.value.replace(/[^a-zA-Z0-9]/g, '') } : g))}
+                                onChange={e => setAdditionalGuests(prev => prev.map((g, i) => i === idx ? { ...g, document: e.target.value.replace(/[^a-zA-Z0-9\-]/g, '') } : g))}
                                 onBlur={e => lookupAdditionalGuest(e.target.value, 'guest_document', idx)}
                                 className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                             </div>
