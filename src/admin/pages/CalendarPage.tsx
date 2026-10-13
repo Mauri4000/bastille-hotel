@@ -3118,7 +3118,7 @@ export default function CalendarPage() {
                               className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                             <input type="text" placeholder="CI / Pasaporte"
                               value={form.guest_document}
-                              onChange={e => setForm(f => ({ ...f, guest_document: e.target.value.replace(/[^a-zA-Z0-9]/g, '') }))}
+                              onChange={e => setForm(f => ({ ...f, guest_document: e.target.value.replace(/[^a-zA-Z0-9\-]/g, '') }))}
                               onBlur={e => lookupGuest(e.target.value, 'guest_document')}
                               className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
                           </div>
