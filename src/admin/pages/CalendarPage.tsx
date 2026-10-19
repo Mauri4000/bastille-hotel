@@ -721,6 +721,9 @@ export default function CalendarPage() {
   const [selectedIds,    setSelectedIds]    = useState<Set<string>>(new Set());
   const [selectedType,   setSelectedType]   = useState<ReservationStatus | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [bulkDateModal,  setBulkDateModal]  = useState<{ checkIn: string; checkOut: string; saving: boolean; error: string } | null>(null);
+  const [bulkNotesModal,    setBulkNotesModal]    = useState<{ text: string; saving: boolean; error: string } | null>(null);
+  const [bulkArrivalModal,  setBulkArrivalModal]  = useState<{ time: string; saving: boolean; error: string } | null>(null);
 
   // Scroll to today
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1842,6 +1845,72 @@ export default function CalendarPage() {
     });
   }
 
+  function openBulkDateModal() {
+    setActionMenuOpen(false);
+    const selected = reservations.filter(r => selectedIds.has(r.id));
+    const minCheckIn  = selected.map(r => r.check_in).sort()[0]  ?? toDateStr(new Date());
+    const maxCheckOut = selected.map(r => r.check_out).sort().reverse()[0] ?? toDateStr(new Date());
+    setBulkDateModal({ checkIn: minCheckIn, checkOut: maxCheckOut, saving: false, error: '' });
+  }
+
+  async function saveBulkDates() {
+    if (!bulkDateModal) return;
+    const { checkIn, checkOut } = bulkDateModal;
+    if (!checkIn || !checkOut || checkIn >= checkOut) {
+      setBulkDateModal(m => m ? { ...m, error: 'Fechas inválidas.' } : m);
+      return;
+    }
+    setBulkDateModal(m => m ? { ...m, saving: true, error: '' } : m);
+    const { error } = await supabase
+      .from('reservations')
+      .update({ check_in: checkIn, check_out: checkOut })
+      .in('id', [...selectedIds]);
+    if (error) {
+      setBulkDateModal(m => m ? { ...m, saving: false, error: error.message } : m);
+      return;
+    }
+    await logActivity('update', `Fechas masivas → ${checkIn}–${checkOut} (${selectedIds.size} reservas)`);
+    setBulkDateModal(null);
+    setSelectedIds(new Set());
+    setSelectedType(null);
+    setSelectMode(false);
+    fetchData();
+  }
+
+  async function saveBulkArrival() {
+    if (!bulkArrivalModal) return;
+    const { time } = bulkArrivalModal;
+    if (!time) { setBulkArrivalModal(m => m ? { ...m, error: 'Selecciona una hora.' } : m); return; }
+    setBulkArrivalModal(m => m ? { ...m, saving: true, error: '' } : m);
+    const { error } = await supabase.from('reservations').update({ arrival_time: time }).in('id', [...selectedIds]);
+    if (error) { setBulkArrivalModal(m => m ? { ...m, saving: false, error: error.message } : m); return; }
+    await logActivity('update', `Hora ingreso masiva → ${time} (${selectedIds.size} reservas)`);
+    setBulkArrivalModal(null);
+    setSelectedIds(new Set());
+    setSelectedType(null);
+    setSelectMode(false);
+    fetchData();
+  }
+
+  async function saveBulkNotes() {
+    if (!bulkNotesModal) return;
+    const { text } = bulkNotesModal;
+    if (!text.trim()) { setBulkNotesModal(m => m ? { ...m, error: 'Escribe una nota.' } : m); return; }
+    setBulkNotesModal(m => m ? { ...m, saving: true, error: '' } : m);
+    const selected = reservations.filter(r => selectedIds.has(r.id));
+    for (const res of selected) {
+      const merged = res.notes ? `${res.notes}\n${text.trim()}` : text.trim();
+      const { error } = await supabase.from('reservations').update({ notes: merged }).eq('id', res.id);
+      if (error) { setBulkNotesModal(m => m ? { ...m, saving: false, error: error.message } : m); return; }
+    }
+    await logActivity('update', `Nota masiva → ${selectedIds.size} reservas`);
+    setBulkNotesModal(null);
+    setSelectedIds(new Set());
+    setSelectedType(null);
+    setSelectMode(false);
+    fetchData();
+  }
+
   function deleteSelected() {
     if (selectedIds.size === 0) return;
     const typeLabel = selectedType === 'reserva'      ? 'reservas'
@@ -1987,6 +2056,21 @@ export default function CalendarPage() {
                     {selectedIds.size} seleccionado{selectedIds.size !== 1 ? 's' : ''}
                   </div>
                   <div className="border-t border-gray-100 my-1" />
+                  {selectedType === 'reserva' && (
+                    <button onClick={openBulkDateModal} className="w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50 font-medium flex items-center gap-2">
+                      📅 Cambiar fechas a todas
+                    </button>
+                  )}
+                  {selectedType === 'reserva' && (
+                    <button onClick={() => { setActionMenuOpen(false); setBulkNotesModal({ text: '', saving: false, error: '' }); }} className="w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50 font-medium flex items-center gap-2">
+                      📝 Agregar nota a todas
+                    </button>
+                  )}
+                  {selectedType === 'reserva' && (
+                    <button onClick={() => { setActionMenuOpen(false); setBulkArrivalModal({ time: '', saving: false, error: '' }); }} className="w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50 font-medium flex items-center gap-2">
+                      🕐 Hora de ingreso a todas
+                    </button>
+                  )}
                   <button onClick={deleteSelected} className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50 font-medium flex items-center gap-2">
                     <Trash2 size={14} />
                     {selectedType === 'reserva' ? 'Eliminar reservas'
@@ -5668,6 +5752,122 @@ export default function CalendarPage() {
                 {multiRoomModal.saving
                   ? <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Guardando...</>
                   : `✓ Reservar ${multiRoomModal.selectedRooms.size} hab.`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk date change modal ── */}
+      {bulkDateModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">📅 Cambiar fechas</h2>
+              <button onClick={() => setBulkDateModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-gray-500">
+              Se aplicarán las mismas fechas a las <span className="font-bold text-indigo-600">{selectedIds.size} reservas</span> seleccionadas.
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Check-in</label>
+                <DatePicker value={bulkDateModal.checkIn} accentClass="border-indigo-400 ring-indigo-100" useFixed
+                  onChange={v => setBulkDateModal(m => m ? { ...m, checkIn: v } : m)} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Check-out</label>
+                <DatePicker value={bulkDateModal.checkOut} accentClass="border-indigo-400 ring-indigo-100" useFixed
+                  onChange={v => setBulkDateModal(m => m ? { ...m, checkOut: v } : m)} />
+              </div>
+            </div>
+            {bulkDateModal.error && (
+              <p className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">⚠️ {bulkDateModal.error}</p>
+            )}
+            <div className="flex gap-3">
+              <button onClick={() => setBulkDateModal(null)}
+                className="flex-1 py-2 text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-lg">
+                Cancelar
+              </button>
+              <button onClick={saveBulkDates} disabled={bulkDateModal.saving}
+                className="flex-1 py-2 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg disabled:opacity-40 flex items-center justify-center gap-2">
+                {bulkDateModal.saving
+                  ? <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Guardando...</>
+                  : `✓ Aplicar a ${selectedIds.size} reservas`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk arrival time modal ── */}
+      {bulkArrivalModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-6 flex flex-col gap-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">🕐 Hora de ingreso</h2>
+              <button onClick={() => setBulkArrivalModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-gray-500">
+              Se aplicará la misma hora a las <span className="font-bold text-indigo-600">{selectedIds.size} reservas</span> seleccionadas.
+            </p>
+            <TimePicker value={bulkArrivalModal.time} onChange={v => setBulkArrivalModal(m => m ? { ...m, time: v } : m)} />
+            {bulkArrivalModal.error && (
+              <p className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">⚠️ {bulkArrivalModal.error}</p>
+            )}
+            <div className="flex gap-3">
+              <button onClick={() => setBulkArrivalModal(null)}
+                className="flex-1 py-2 text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-lg">
+                Cancelar
+              </button>
+              <button onClick={saveBulkArrival} disabled={bulkArrivalModal.saving}
+                className="flex-1 py-2 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg disabled:opacity-40 flex items-center justify-center gap-2">
+                {bulkArrivalModal.saving
+                  ? <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Guardando...</>
+                  : `✓ Aplicar a ${selectedIds.size} reservas`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk notes modal ── */}
+      {bulkNotesModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">📝 Agregar nota</h2>
+              <button onClick={() => setBulkNotesModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-gray-500">
+              Se añadirá esta nota a las <span className="font-bold text-indigo-600">{selectedIds.size} reservas</span> seleccionadas (sin borrar notas existentes).
+            </p>
+            <textarea
+              rows={4}
+              placeholder="Escribe la nota aquí..."
+              value={bulkNotesModal.text}
+              onChange={e => setBulkNotesModal(m => m ? { ...m, text: e.target.value } : m)}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            />
+            {bulkNotesModal.error && (
+              <p className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">⚠️ {bulkNotesModal.error}</p>
+            )}
+            <div className="flex gap-3">
+              <button onClick={() => setBulkNotesModal(null)}
+                className="flex-1 py-2 text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-lg">
+                Cancelar
+              </button>
+              <button onClick={saveBulkNotes} disabled={bulkNotesModal.saving}
+                className="flex-1 py-2 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg disabled:opacity-40 flex items-center justify-center gap-2">
+                {bulkNotesModal.saving
+                  ? <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Guardando...</>
+                  : `✓ Agregar a ${selectedIds.size} reservas`}
               </button>
             </div>
           </div>
