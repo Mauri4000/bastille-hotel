@@ -1869,7 +1869,7 @@ export default function CalendarPage() {
       setBulkDateModal(m => m ? { ...m, saving: false, error: error.message } : m);
       return;
     }
-    await logActivity('update', `Fechas masivas → ${checkIn}–${checkOut} (${selectedIds.size} reservas)`);
+    await logActivity(profile?.id, profile?.name, 'Fechas masivas', 'reservation', undefined, `${checkIn}–${checkOut} (${selectedIds.size} reservas)`);
     setBulkDateModal(null);
     setSelectedIds(new Set());
     setSelectedType(null);
@@ -1884,7 +1884,7 @@ export default function CalendarPage() {
     setBulkArrivalModal(m => m ? { ...m, saving: true, error: '' } : m);
     const { error } = await supabase.from('reservations').update({ arrival_time: time }).in('id', [...selectedIds]);
     if (error) { setBulkArrivalModal(m => m ? { ...m, saving: false, error: error.message } : m); return; }
-    await logActivity('update', `Hora ingreso masiva → ${time} (${selectedIds.size} reservas)`);
+    await logActivity(profile?.id, profile?.name, 'Hora ingreso masiva', 'reservation', undefined, `${time} (${selectedIds.size} reservas)`);
     setBulkArrivalModal(null);
     setSelectedIds(new Set());
     setSelectedType(null);
@@ -1903,7 +1903,7 @@ export default function CalendarPage() {
       const { error } = await supabase.from('reservations').update({ notes: merged }).eq('id', res.id);
       if (error) { setBulkNotesModal(m => m ? { ...m, saving: false, error: error.message } : m); return; }
     }
-    await logActivity('update', `Nota masiva → ${selectedIds.size} reservas`);
+    await logActivity(profile?.id, profile?.name, 'Nota masiva', 'reservation', undefined, `${selectedIds.size} reservas`);
     setBulkNotesModal(null);
     setSelectedIds(new Set());
     setSelectedType(null);
