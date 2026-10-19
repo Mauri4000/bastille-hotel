@@ -34,6 +34,7 @@ interface BnbRow {
   category: string;    // inferred or ''
   manualCategory: string;
   needsReview: boolean;
+  possibleDuplicate?: string; // description of matching manual entry
 }
 
 // Keyword → category map. Keywords are lowercase, matched against the referencia field.
@@ -398,7 +399,7 @@ export default function TransactionsPage() {
     try {
       const rows = parseBnbWorkbook(ab);
       if (!rows.length) { setBnbError('No se encontraron débitos en el archivo.'); return; }
-      // Fetch existing BNB transactions to detect duplicates
+      // Fetch existing BNB transactions to detect duplicates (by BNB codigo stored in notes)
       const { data: existing } = await supabase
         .from('transactions')
         .select('notes')
@@ -407,7 +408,35 @@ export default function TransactionsPage() {
       const existingCodes = new Set((existing ?? []).map(t => t.notes ?? '').filter(Boolean));
       const filtered = rows.filter(r => !existingCodes.has(r.codigo));
       if (!filtered.length) { setBnbError('Todos los movimientos de este extracto ya están registrados.'); return; }
-      setBnbRows(filtered);
+
+      // Detect possible manual duplicates: fetch all egreso transactions (any caja) for date range
+      const dates = filtered.map(r => r.fecha).sort();
+      const minDate = dates[0];
+      const maxDate = dates[dates.length - 1];
+      // Expand range by 1 day on each side
+      const expand = (d: string, days: number) => {
+        const dt = new Date(d); dt.setDate(dt.getDate() + days); return dt.toISOString().split('T')[0];
+      };
+      const { data: manualTxs } = await supabase
+        .from('transactions')
+        .select('date, amount, description, caja')
+        .eq('type', 'egreso')
+        .neq('caja', 'CUENTA BNB')
+        .gte('date', expand(minDate, -1))
+        .lte('date', expand(maxDate, 1));
+
+      const manualList = manualTxs ?? [];
+      const withFlags = filtered.map(r => {
+        // Check dates ±1 day, amount within 1 Bs
+        const match = manualList.find(m => {
+          const dateDiff = Math.abs(new Date(m.date).getTime() - new Date(r.fecha).getTime()) / 86400000;
+          const amountDiff = Math.abs(m.amount - r.monto);
+          return dateDiff <= 1 && amountDiff <= 1;
+        });
+        return { ...r, possibleDuplicate: match ? `${match.description} (${match.caja} · Bs. ${match.amount})` : undefined };
+      });
+
+      setBnbRows(withFlags);
       setBnbError('');
       setBnbModalOpen(true);
     } catch {
@@ -416,13 +445,17 @@ export default function TransactionsPage() {
   }
 
   async function handleBnbImport() {
-    const unresolved = bnbRows.filter(r => r.needsReview && !r.manualCategory);
+    const cutoff = bnbFromDate ? `${bnbFromDate}T${bnbFromTime || '00:00'}` : null;
+    const activeRows = cutoff
+      ? bnbRows.filter(r => `${r.fecha}T${r.hora || '00:00'}` > cutoff)
+      : bnbRows;
+    const unresolved = activeRows.filter(r => r.needsReview && !r.manualCategory);
     if (unresolved.length) {
       setBnbError(`Faltan ${unresolved.length} categoría(s) marcadas en rojo.`);
       return;
     }
     setBnbImporting(true); setBnbError('');
-    const payload = bnbRows.map(r => ({
+    const payload = activeRows.map(r => ({
       date:           r.fecha,
       time:           r.hora || null,
       description:    r.referencia + (r.nombreDestino ? ` — ${r.nombreDestino}` : ''),
@@ -447,6 +480,8 @@ export default function TransactionsPage() {
   const [bnbModalOpen,   setBnbModalOpen]   = useState(false);
   const [bnbImporting,   setBnbImporting]   = useState(false);
   const [bnbError,       setBnbError]       = useState('');
+  const [bnbFromDate,    setBnbFromDate]    = useState('');   // YYYY-MM-DD
+  const [bnbFromTime,    setBnbFromTime]    = useState('');   // HH:MM
   const bnbFileRef = useRef<HTMLInputElement>(null);
 
   // ── close modal (always resets keepOpen) ──
@@ -1355,7 +1390,38 @@ export default function TransactionsPage() {
                   )}
                 </p>
               </div>
-              <button onClick={() => { setBnbModalOpen(false); setBnbRows([]); setBnbError(''); }} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+              <button onClick={() => { setBnbModalOpen(false); setBnbRows([]); setBnbError(''); setBnbFromDate(''); setBnbFromTime(''); }} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+
+            {/* Date/time filter */}
+            <div className="px-6 py-2.5 border-b border-gray-100 flex items-center gap-3 bg-amber-50/60">
+              <div className="flex items-center gap-1.5 text-amber-600">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                <span className="text-xs font-semibold text-amber-700 whitespace-nowrap">Importar desde:</span>
+              </div>
+              <div className="w-44">
+                <DatePicker value={bnbFromDate} onChange={setBnbFromDate} placeholder="Fecha desde" useFixed />
+              </div>
+              <div className="w-36">
+                <TimePicker value={bnbFromTime} onChange={setBnbFromTime} placeholder="Hora desde" />
+              </div>
+              {(bnbFromDate || bnbFromTime) && (
+                <button
+                  onClick={() => { setBnbFromDate(''); setBnbFromTime(''); }}
+                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-400 transition-colors bg-white border border-gray-200 rounded-full px-2.5 py-1"
+                >
+                  <X size={10} /> Limpiar
+                </button>
+              )}
+              {bnbFromDate && (
+                <div className="ml-auto flex items-center gap-1.5 bg-amber-100 text-amber-700 text-xs font-semibold px-3 py-1 rounded-full">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                  {bnbRows.filter(r => {
+                    const cutoff = `${bnbFromDate}T${bnbFromTime || '00:00'}`;
+                    return `${r.fecha}T${r.hora || '00:00'}` > cutoff;
+                  }).length} / {bnbRows.length} movimientos
+                </div>
+              )}
             </div>
 
             {/* Table */}
@@ -1368,15 +1434,25 @@ export default function TransactionsPage() {
                     <th className="px-3 py-2 text-left">Cuenta destino</th>
                     <th className="px-3 py-2 text-right">Monto</th>
                     <th className="px-3 py-2 text-left min-w-[200px]">Categoría</th>
+                    <th className="px-2 py-2 text-left text-orange-500" title="Posible duplicado manual">⚠</th>
                     <th className="px-2 py-2"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {bnbRows.map((row, idx) => (
+                  {bnbRows.filter(row => {
+                    if (!bnbFromDate) return true;
+                    const cutoff = `${bnbFromDate}T${bnbFromTime || '00:00'}`;
+                    return `${row.fecha}T${row.hora || '00:00'}` > cutoff;
+                  }).map((row, idx) => (
                     <tr key={idx} className={`border-b border-gray-100 ${row.needsReview ? 'bg-red-50' : 'bg-white'}`}>
                       <td className="px-3 py-2 whitespace-nowrap text-gray-600">{row.fecha}<br /><span className="text-gray-400">{row.hora}</span></td>
                       <td className="px-3 py-2 text-gray-800 font-medium whitespace-normal break-words max-w-[130px]">
-                        {row.referencia}
+                        <input
+                          type="text"
+                          value={row.referencia}
+                          onChange={e => setBnbRows(prev => prev.map((r, i) => i === idx ? { ...r, referencia: e.target.value } : r))}
+                          className="w-full border border-gray-200 rounded px-1.5 py-0.5 text-xs text-gray-800 focus:outline-none focus:border-amber-400 bg-white"
+                        />
                         <div className="text-gray-400 text-[10px] mt-0.5">{row.codigo}</div>
                       </td>
                       <td className="px-3 py-2 text-gray-500 whitespace-normal break-words max-w-[160px] text-xs">{row.nombreDestino || row.cuentaDestino}</td>
@@ -1390,6 +1466,14 @@ export default function TransactionsPage() {
                           {row.needsReview && !row.manualCategory && <option value="">— Seleccionar —</option>}
                           {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
+                      </td>
+                      <td className="px-2 py-2 text-center">
+                        {row.possibleDuplicate && (
+                          <span
+                            title={`Posible duplicado: ${row.possibleDuplicate}`}
+                            className="inline-block text-orange-500 cursor-help text-sm"
+                          >⚠️</span>
+                        )}
                       </td>
                       <td className="px-2 py-2">
                         <button
@@ -1409,13 +1493,13 @@ export default function TransactionsPage() {
               {bnbError && <p className="text-red-500 text-sm">{bnbError}</p>}
               {!bnbError && <p className="text-xs text-gray-400">Los duplicados ya registrados fueron omitidos automáticamente.</p>}
               <div className="flex gap-3 ml-auto">
-                <button onClick={() => { setBnbModalOpen(false); setBnbRows([]); setBnbError(''); }}
+                <button onClick={() => { setBnbModalOpen(false); setBnbRows([]); setBnbError(''); setBnbFromDate(''); setBnbFromTime(''); }}
                   className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
                   Cancelar
                 </button>
                 <button onClick={handleBnbImport} disabled={bnbImporting}
                   className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors disabled:opacity-50">
-                  {bnbImporting ? 'Importando...' : `Importar ${bnbRows.length} movimientos`}
+                  {bnbImporting ? 'Importando...' : `Importar ${bnbFromDate ? bnbRows.filter(r => `${r.fecha}T${r.hora || '00:00'}` > `${bnbFromDate}T${bnbFromTime || '00:00'}`).length : bnbRows.length} movimientos`}
                 </button>
               </div>
             </div>

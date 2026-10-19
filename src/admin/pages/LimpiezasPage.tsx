@@ -89,12 +89,26 @@ function PhotoUploadSlot({ label, currentUrl, file, onChange }: {
   onChange: (f: File | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
   const preview  = file ? URL.createObjectURL(file) : currentUrl;
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault(); setDragging(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f && f.type.startsWith('image/')) onChange(f);
+  }
+
   return (
     <div className="flex-1">
       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{label}</p>
-      <div onClick={() => inputRef.current?.click()}
-        className={`relative rounded-xl border-2 border-dashed cursor-pointer overflow-hidden transition-colors ${preview ? 'border-sky-300' : 'border-gray-200 hover:border-sky-300'}`}
+      <div
+        onClick={() => inputRef.current?.click()}
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        className={`relative rounded-xl border-2 border-dashed cursor-pointer overflow-hidden transition-colors ${
+          dragging ? 'border-sky-400 bg-sky-50 scale-[1.02]' : preview ? 'border-sky-300' : 'border-gray-200 hover:border-sky-300'
+        }`}
         style={{ height: 100 }}>
         {preview ? (
           <>
@@ -104,8 +118,10 @@ function PhotoUploadSlot({ label, currentUrl, file, onChange }: {
             </div>
           </>
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center text-gray-300 gap-1">
-            <Camera size={22} /><span className="text-[10px]">Subir foto</span>
+          <div className="w-full h-full flex flex-col items-center justify-center gap-1 transition-colors"
+            style={{ color: dragging ? '#38bdf8' : '#d1d5db' }}>
+            <Camera size={22} />
+            <span className="text-[10px]">{dragging ? 'Suelta aquí' : 'Subir foto'}</span>
           </div>
         )}
         {file && <div className="absolute top-1 right-1 bg-green-500 text-white text-[9px] font-bold px-1 py-0.5 rounded">NUEVA</div>}
