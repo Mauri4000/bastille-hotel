@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Droplets, AlertTriangle, Building2, PawPrint, RefreshCw, ShoppingBag } from 'lucide-react';
+import { Building2, PawPrint, RefreshCw, ShoppingBag } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Reservation } from '../types';
@@ -11,19 +11,6 @@ interface VitrinaProduct {
   quantity: number;
   expiration_date: string | null;
   expiry_notes: string | null;
-}
-
-interface AguaState {
-  is_closed: boolean;
-  closed_at: string | null;
-}
-
-function daysSince(isoString: string): number {
-  return Math.floor((Date.now() - new Date(isoString).getTime()) / (1000 * 60 * 60 * 24));
-}
-
-function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
 // "2026-09-08" → "8 sep"
@@ -43,12 +30,22 @@ export default function DashboardPage() {
   const in14 = new Date(today); in14.setDate(in14.getDate() + 14);
   const in14Str = in14.toISOString().split('T')[0];
 
-  const [agua,        setAgua]        = useState<AguaState>({ is_closed: false, closed_at: null });
-  const [aguaLoading, setAguaLoading] = useState(false);
   const [empresas,    setEmpresas]    = useState<Reservation[]>([]);
   const [perros,      setPerros]      = useState<Reservation[]>([]);
   const [vitAlerts,   setVitAlerts]   = useState<{ lowStock: VitrinaProduct[]; expiring: VitrinaProduct[] }>({ lowStock: [], expiring: [] });
   const [loading,     setLoading]     = useState(true);
+  const [hiddenIds,   setHiddenIds]   = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('vitrina_hidden') ?? '[]')); } catch { return new Set(); }
+  });
+
+  function toggleHide(id: string) {
+    setHiddenIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      localStorage.setItem('vitrina_hidden', JSON.stringify([...next]));
+      return next;
+    });
+  }
 
   const isTuesday = today.getDay() === 2;
 
@@ -59,12 +56,10 @@ export default function DashboardPage() {
     const in30Str = in30.toISOString().split('T')[0];
 
     const [
-      { data: aguaRow },
       { data: empData },
       { data: petData },
       { data: vitData },
     ] = await Promise.all([
-      supabase.from('hotel_settings').select('value').eq('key', 'agua_comercial').maybeSingle(),
       supabase.from('reservations')
         .select('id,room_id,guest_name,check_in,check_out,status,is_empresa,empresa_name,num_guests')
         .lte('check_in', in14Str).gt('check_out', todayStr)
@@ -76,7 +71,6 @@ export default function DashboardPage() {
       supabase.from('vitrina_products').select('id,name,quantity,expiration_date,expiry_notes').order('name'),
     ]);
 
-    if (aguaRow?.value) setAgua(aguaRow.value as AguaState);
     setEmpresas((empData ?? []) as unknown as Reservation[]);
     setPerros((petData ?? []) as unknown as Reservation[]);
 
@@ -91,21 +85,6 @@ export default function DashboardPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function toggleAgua() {
-    setAguaLoading(true);
-    const newState: AguaState = agua.is_closed
-      ? { is_closed: false, closed_at: null }
-      : { is_closed: true, closed_at: new Date().toISOString() };
-    await supabase.from('hotel_settings').upsert(
-      { key: 'agua_comercial', value: newState, updated_at: new Date().toISOString() },
-      { onConflict: 'key' }
-    );
-    setAgua(newState);
-    setAguaLoading(false);
-  }
-
-  const daysClosed = agua.is_closed && agua.closed_at ? daysSince(agua.closed_at) : 0;
-  const tankAlert  = agua.is_closed && daysClosed >= 7;
   const greet      = today.getHours() < 12 ? 'Buenos días' : today.getHours() < 19 ? 'Buenas tardes' : 'Buenas noches';
 
   if (loading) return (
@@ -146,63 +125,93 @@ export default function DashboardPage() {
       )}
 
 
-      {/* ── Tank alert ── */}
-      {!isMarketing && tankAlert && (
-        <div className="flex items-center gap-3 bg-red-500 text-white rounded-xl px-5 py-4 shadow-lg animate-pulse">
-          <AlertTriangle size={22} className="flex-shrink-0" />
-          <span className="font-bold">⚠️ REVISAR NIVEL DEL TANQUE DE AGUA!</span>
-          <span className="ml-auto text-sm opacity-90">{daysClosed} días sin agua comercial</span>
-        </div>
-      )}
 
-      {/* ── Vitrina alerts ── */}
-      {!isMarketing && (vitAlerts.lowStock.length > 0 || vitAlerts.expiring.length > 0) && (
-        <div className="bg-white rounded-xl border border-orange-200 shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
-              <ShoppingBag size={16} className="text-orange-500" />
+{/* ── Vitrina alerts ── */}
+      {!isMarketing && (vitAlerts.lowStock.length > 0 || vitAlerts.expiring.length > 0) && (() => {
+        const visibleLow  = vitAlerts.lowStock.filter(p => !hiddenIds.has(p.id));
+        const hiddenLow   = vitAlerts.lowStock.filter(p =>  hiddenIds.has(p.id));
+        const visibleExp  = vitAlerts.expiring.filter(p => !hiddenIds.has(p.id));
+        const hiddenExp   = vitAlerts.expiring.filter(p =>  hiddenIds.has(p.id));
+        const shoppingList = visibleLow.map(p => p.name);
+        const totalHidden = hiddenLow.length + hiddenExp.length;
+        return (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center">
+                <ShoppingBag size={16} className="text-gray-500" />
+              </div>
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Vitrina — Alertas</span>
+              <span className="ml-auto bg-gray-100 text-gray-600 text-xs font-bold px-2 py-0.5 rounded-full">
+                {vitAlerts.lowStock.length + vitAlerts.expiring.length}
+              </span>
             </div>
-            <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Vitrina — Alertas</span>
-            <span className="ml-auto bg-orange-100 text-orange-700 text-xs font-bold px-2 py-0.5 rounded-full">
-              {vitAlerts.lowStock.length + vitAlerts.expiring.length}
-            </span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {/* Stock agotado */}
-            {vitAlerts.lowStock.length > 0 && (
-              <div>
-                <p className="text-[10px] font-bold text-red-500 uppercase tracking-wider mb-1.5">🔴 Agotados</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {vitAlerts.lowStock.map(p => (
-                    <button key={p.id} onClick={() => navigate('/admin/vitrina', { state: { highlightId: p.id } })}
-                      className="anim-hab-urgente text-[11px] font-bold text-red-900 rounded-full px-2.5 py-0.5 border border-red-300 whitespace-nowrap cursor-pointer hover:scale-105 transition-transform">
-                      {p.name}
-                    </button>
-                  ))}
-                </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Left: pills con ocultar */}
+              <div className="space-y-3">
+                {visibleLow.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Agotados</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {visibleLow.map(p => (
+                        <div key={p.id} className="flex items-center gap-0.5 bg-gray-50 border border-gray-200 rounded-full pr-1">
+                          <button onClick={() => navigate('/admin/vitrina', { state: { highlightId: p.id } })}
+                            className="text-[11px] font-semibold text-gray-700 px-2.5 py-0.5 hover:text-gray-900 transition-colors whitespace-nowrap">
+                            {p.name}
+                          </button>
+                          <button onClick={() => toggleHide(p.id)} title="Ocultar alerta"
+                            className="text-gray-300 hover:text-gray-500 transition-colors text-xs leading-none pb-px">✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {visibleExp.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-bold text-amber-500 uppercase tracking-wider mb-1.5">Vencimiento próximo (30 días)</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {visibleExp.map(p => {
+                        const daysLeft = Math.ceil((new Date(p.expiration_date! + 'T12:00:00').getTime() - today.getTime()) / 86400000);
+                        return (
+                          <div key={p.id} className="flex items-center gap-0.5 bg-amber-50 border border-amber-200 rounded-full pr-1">
+                            <button onClick={() => navigate('/admin/vitrina', { state: { highlightId: p.id } })}
+                              className="text-[11px] font-semibold text-amber-700 px-2.5 py-0.5 hover:text-amber-900 transition-colors whitespace-nowrap">
+                              {p.name} · {daysLeft <= 0 ? 'VENCIDO' : `${daysLeft}d`}
+                            </button>
+                            <button onClick={() => toggleHide(p.id)} title="Ocultar alerta"
+                              className="text-amber-300 hover:text-amber-500 transition-colors text-xs leading-none pb-px">✕</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {totalHidden > 0 && (
+                  <button onClick={() => { setHiddenIds(new Set()); localStorage.removeItem('vitrina_hidden'); }}
+                    className="text-[10px] text-gray-400 hover:text-gray-600 underline transition-colors">
+                    Mostrar {totalHidden} oculto{totalHidden !== 1 ? 's' : ''}
+                  </button>
+                )}
               </div>
-            )}
-            {/* Vencimiento próximo */}
-            {vitAlerts.expiring.length > 0 && (
-              <div>
-                <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-1.5">🟡 Vencimiento próximo (30 días)</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {vitAlerts.expiring.map(p => {
-                    const daysLeft = Math.ceil((new Date(p.expiration_date! + 'T12:00:00').getTime() - today.getTime()) / 86400000);
-                    const isVeryClose = daysLeft <= 7;
-                    return (
-                      <button key={p.id} onClick={() => navigate('/admin/vitrina', { state: { highlightId: p.id } })}
-                        className={`text-[11px] font-bold rounded-full px-2.5 py-0.5 border whitespace-nowrap cursor-pointer hover:scale-105 transition-transform ${isVeryClose ? 'anim-hab-urgente border-amber-400 text-red-900' : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
-                        {p.name} {daysLeft <= 0 ? '· VENCIDO' : `· ${daysLeft}d`}
-                      </button>
-                    );
-                  })}
+
+              {/* Right: lista de compras */}
+              {shoppingList.length > 0 && (
+                <div className="bg-gray-50 rounded-xl p-3">
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">🛒 Lista de compras</p>
+                  <ol className="space-y-1">
+                    {shoppingList.map((name, i) => (
+                      <li key={i} className="text-xs text-gray-700 flex items-start gap-1.5">
+                        <span className="font-bold text-gray-400 w-4 shrink-0">{i + 1}.</span>
+                        <span>{name}</span>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Marketing: TikTok reminder when empresas exist ── */}
       {isMarketing && empresas.length > 0 && (
@@ -215,40 +224,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ── 3 panels side by side (2 for marketing: no agua) ── */}
-      <div className={`grid grid-cols-1 gap-4 items-start ${isMarketing ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
-
-        {/* AGUA — hidden for marketing */}
-        {!isMarketing && (
-        <div data-testid="stat-card-agua" className={`rounded-xl border shadow-sm p-4 ${agua.is_closed ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
-          <div className="flex items-center gap-2 mb-3">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${agua.is_closed ? 'bg-red-100' : 'bg-blue-100'}`}>
-              <Droplets size={16} className={agua.is_closed ? 'text-red-500' : 'text-blue-500'} />
-            </div>
-            <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Agua Comercial</span>
-          </div>
-
-          {agua.is_closed ? (
-            <div className="mb-3">
-              <p className="font-bold text-red-700 text-sm">
-                Cerrada — {daysClosed === 0 ? 'hoy' : `hace ${daysClosed} día${daysClosed !== 1 ? 's' : ''}`}
-              </p>
-              {agua.closed_at && (
-                <p className="text-xs text-red-500 mt-0.5">Desde {fmtDate(agua.closed_at)}</p>
-              )}
-            </div>
-          ) : (
-            <p className="font-bold text-blue-700 text-sm mb-3">Llave abierta ✓</p>
-          )}
-
-          <button onClick={toggleAgua} disabled={aguaLoading}
-            className={`w-full py-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 ${
-              agua.is_closed ? 'bg-blue-500 hover:bg-blue-400 text-white' : 'bg-red-500 hover:bg-red-400 text-white'
-            }`}>
-            {aguaLoading ? '...' : agua.is_closed ? '✓ Abrir llave' : '🔒 Cerrar llave'}
-          </button>
-        </div>
-        )}
+      {/* ── 2 panels side by side ── */}
+      <div className="grid grid-cols-1 gap-4 items-start md:grid-cols-2">
 
         {/* EMPRESAS */}
         <div data-testid="stat-card-empresas" className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
