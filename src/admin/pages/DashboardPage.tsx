@@ -49,6 +49,20 @@ export default function DashboardPage() {
 
   const isTuesday = today.getDay() === 2;
 
+  // TikTok contacted state — persisted per day so it resets the next day
+  const todayKey = `tiktok_done_${todayStr}`;
+  const [tiktokDone, setTiktokDone] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(todayKey) ?? '[]')); } catch { return new Set(); }
+  });
+  function toggleTiktok(id: string) {
+    setTiktokDone(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      localStorage.setItem(todayKey, JSON.stringify([...next]));
+      return next;
+    });
+  }
+
   const load = useCallback(async () => {
     setLoading(true);
 
@@ -61,7 +75,7 @@ export default function DashboardPage() {
       { data: vitData },
     ] = await Promise.all([
       supabase.from('reservations')
-        .select('id,room_id,guest_name,check_in,check_out,status,is_empresa,empresa_name,num_guests')
+        .select('id,room_id,guest_name,guest_phone,check_in,check_out,status,is_empresa,empresa_name,num_guests')
         .lte('check_in', in14Str).gt('check_out', todayStr)
         .eq('is_empresa', true).in('status', ['ocupado', 'reserva']).order('check_in'),
       supabase.from('reservations')
@@ -214,15 +228,28 @@ export default function DashboardPage() {
       })()}
 
       {/* ── Marketing: TikTok reminder when empresas exist ── */}
-      {isMarketing && empresas.length > 0 && (
-        <div className="flex items-center justify-center gap-3 bg-red-600 text-white rounded-xl px-5 py-3 shadow-lg animate-pulse">
-          <span className="text-xl">🚨</span>
-          <p className="font-extrabold text-sm tracking-wide text-center">
-            Lau, no olvides gestionar los TikToks con los huéspedes empresas
-          </p>
-          <span className="text-xl">🚨</span>
-        </div>
-      )}
+      {isMarketing && empresas.length > 0 && (() => {
+        const todayEmpresas = empresas.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
+        const todayPerros   = perros.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
+        const todayAll = [...todayEmpresas, ...todayPerros];
+        const allDone = todayAll.length > 0 && todayAll.every(e => tiktokDone.has(e.id));
+        if (allDone) return (
+          <div className="flex items-center justify-center gap-3 bg-green-500 text-white rounded-xl px-5 py-3 shadow-lg">
+            <span className="text-xl">✅</span>
+            <p className="font-extrabold text-sm tracking-wide text-center">¡Excelente trabajo Sisi crack! TikToks gestionados 🎉</p>
+            <span className="text-xl">✅</span>
+          </div>
+        );
+        return (
+          <div className="flex items-center justify-center gap-3 bg-red-600 text-white rounded-xl px-5 py-3 shadow-lg animate-pulse">
+            <span className="text-xl">🚨</span>
+            <p className="font-extrabold text-sm tracking-wide text-center">
+              Sisi, no olvides gestionar los TikToks con los huéspedes empresas
+            </p>
+            <span className="text-xl">🚨</span>
+          </div>
+        );
+      })()}
 
       {/* ── 2 panels side by side ── */}
       <div className="grid grid-cols-1 gap-4 items-start md:grid-cols-2">
@@ -247,19 +274,39 @@ export default function DashboardPage() {
                 const isHoy = res.check_in <= todayStr && res.check_out > todayStr;
                 const entra = shortDate(res.check_in);
                 const sale  = shortDate(res.check_out);
+                const done  = tiktokDone.has(res.id);
                 return (
-                  <div key={res.id} className={`rounded-lg px-2.5 py-2 ${isHoy ? 'bg-indigo-50 border border-indigo-200' : 'bg-gray-50 border border-gray-100'}`}>
-                    <div className="flex items-center gap-1 mb-0.5 flex-wrap">
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isHoy ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
+                  <div key={res.id}
+                    className={`rounded-lg px-2.5 py-2 border transition-colors ${
+                      done ? 'bg-green-50 border-green-200' :
+                      isHoy ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50 border-gray-100'
+                    }`}>
+                    <div className="flex items-center gap-1 mb-0.5">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : isHoy ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
                       {isHoy
-                        ? <span className="text-[9px] font-bold text-indigo-600">HOY</span>
+                        ? <span className={`text-[9px] font-bold ${done ? 'text-green-600' : 'text-indigo-600'}`}>HOY</span>
                         : <span className="text-[9px] text-gray-400">{entra}→{sale}</span>
                       }
+                      {isMarketing && isHoy && (
+                        <button onClick={() => toggleTiktok(res.id)}
+                          title={done ? 'Marcar como pendiente' : 'TikTok gestionado'}
+                          className={`ml-auto text-base transition-transform hover:scale-110 ${done ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}>
+                          {done ? '✅' : '☑️'}
+                        </button>
+                      )}
                     </div>
                     {(res as any).empresa_name && (
-                      <p className="text-xs font-bold text-indigo-900 truncate leading-tight">{(res as any).empresa_name}</p>
+                      <p className={`text-xs font-bold truncate leading-tight ${done ? 'text-green-800' : 'text-indigo-900'}`}>{(res as any).empresa_name}</p>
                     )}
                     <p className="text-[10px] text-gray-500 truncate">{res.guest_name}</p>
+                    {(res as any).guest_phone ? (
+                      <a href={`https://wa.me/591${(res as any).guest_phone}`} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1 mt-0.5 text-[10px] font-semibold text-green-600 hover:text-green-700 transition-colors">
+                        📱 {(res as any).guest_phone}
+                      </a>
+                    ) : (
+                      <p className="text-[9px] text-gray-300 mt-0.5 italic">sin celular aún</p>
+                    )}
                   </div>
                 );
               })}
@@ -287,18 +334,29 @@ export default function DashboardPage() {
                 const isHoy = res.check_in <= todayStr && res.check_out > todayStr;
                 const entra = shortDate(res.check_in);
                 const sale  = shortDate(res.check_out);
+                const done  = tiktokDone.has(res.id);
                 return (
-                  <div key={res.id} className={`rounded-lg px-3 py-2.5 ${isHoy ? 'bg-orange-50 border border-orange-200' : 'bg-gray-50 border border-gray-100'}`}>
+                  <div key={res.id} className={`rounded-lg px-3 py-2.5 border transition-colors ${
+                    done ? 'bg-green-50 border-green-200' :
+                    isHoy ? 'bg-orange-50 border-orange-200' : 'bg-gray-50 border-gray-100'
+                  }`}>
                     <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${isHoy ? 'bg-orange-500 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
+                      <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : isHoy ? 'bg-orange-500 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
                       {isHoy
-                        ? <span className="text-[10px] font-bold text-orange-600">🐾 HOSPEDADO HOY</span>
+                        ? <span className={`text-[10px] font-bold ${done ? 'text-green-600' : 'text-orange-600'}`}>🐾 HOSPEDADO HOY</span>
                         : <span className="text-[10px] text-gray-400">llega {entra} · sale {sale}</span>
                       }
+                      {isMarketing && isHoy && (
+                        <button onClick={() => toggleTiktok(res.id)}
+                          title={done ? 'Marcar como pendiente' : 'TikTok gestionado'}
+                          className={`ml-auto text-base transition-transform hover:scale-110 ${done ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}>
+                          {done ? '✅' : '☑️'}
+                        </button>
+                      )}
                     </div>
                     <p className="text-sm font-semibold text-gray-800 truncate">{res.guest_name}</p>
                     {(res as any).pet_name ? (
-                      <p className="text-xs font-bold text-orange-600 mt-0.5">🐾 {(res as any).pet_name}</p>
+                      <p className={`text-xs font-bold mt-0.5 ${done ? 'text-green-700' : 'text-orange-600'}`}>🐾 {(res as any).pet_name}</p>
                     ) : (
                       <p className="text-[10px] text-red-400 italic mt-0.5 animate-pulse">Preguntar nombre de mascota para TikTok 🎵</p>
                     )}

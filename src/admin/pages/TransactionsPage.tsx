@@ -484,6 +484,129 @@ export default function TransactionsPage() {
   const [bnbFromTime,    setBnbFromTime]    = useState('');   // HH:MM
   const bnbFileRef = useRef<HTMLInputElement>(null);
 
+  // ── Personal Excel analysis state ──
+  interface PersonalRow { fecha: string; detalle: string; monto: number; }
+  const [personalModalOpen,  setPersonalModalOpen]  = useState(false);
+  const [personalRows,       setPersonalRows]       = useState<PersonalRow[]>([]);
+  const [personalError,      setPersonalError]      = useState('');
+  const [personalKeyword,    setPersonalKeyword]    = useState('mauri');
+  const [personalLoading,    setPersonalLoading]    = useState(false);
+  const [personalView,       setPersonalView]       = useState<'months' | 'detail'>('months');
+  const [personalExcluded,   setPersonalExcluded]   = useState<Set<number>>(new Set());
+  const personalFileRef = useRef<HTMLInputElement>(null);
+
+  function parseOneExcel(ab: ArrayBuffer, keyword: string): PersonalRow[] {
+    // cellDates:true converts Excel serial dates to JS Date objects
+    const wb = XLSX.read(ab, { type: 'array', cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    // raw:false → all cells as formatted strings; dateNF forces DD/MM/YYYY on date cells
+    const raw = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, dateNF: 'DD/MM/YYYY' }) as unknown[][];
+
+    // Find header row: first row with >3 non-empty cells
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(6, raw.length); i++) {
+      if ((raw[i]?.filter(c => String(c ?? '').trim()).length ?? 0) > 3) { headerIdx = i; break; }
+    }
+    const headers = (raw[headerIdx] ?? []).map(c => String(c ?? '').toLowerCase().trim());
+    const debitoCol = headers.findIndex(h => h.includes('debito') || h.includes('débito') || h.includes('cargo'));
+    const fechaCol  = headers.findIndex(h => h.includes('fecha'));
+    const montoColIdx = debitoCol >= 0 ? debitoCol : 7;
+    const fechaColIdx = fechaCol  >= 0 ? fechaCol  : 0;
+
+    const results: PersonalRow[] = [];
+    for (let i = headerIdx + 1; i < raw.length; i++) {
+      const row = raw[i];
+      if (!row || row.length < 2) continue;
+      const allText = row.map(c => String(c ?? '')).join('|').toLowerCase();
+      if (!allText.includes(keyword)) continue;
+
+      const fecha = String(row[fechaColIdx] ?? '').trim();
+      const detalle = row.map(c => String(c ?? '').trim()).filter(v => v.toLowerCase().includes(keyword)).join(' — ')
+        || String(row[3] ?? row[2] ?? '').trim();
+      const montoRaw = String(row[montoColIdx] ?? '').replace(/,/g, '').trim();
+      const monto = parseFloat(montoRaw);
+      if (!montoRaw || isNaN(monto) || monto <= 0) continue;
+      results.push({ fecha, detalle, monto });
+    }
+    return results;
+  }
+
+  function handlePersonalFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (!files.length) return;
+    setPersonalError('');
+    setPersonalLoading(true);
+
+    const keyword = personalKeyword.trim().toLowerCase() || 'mauri';
+    const allResults: PersonalRow[] = [];
+    let pending = files.length;
+
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        try {
+          const rows = parseOneExcel(ev.target!.result as ArrayBuffer, keyword);
+          allResults.push(...rows);
+        } catch { /* skip bad file */ }
+        pending--;
+        if (pending === 0) {
+          // Sort all rows by date
+          allResults.sort((a, b) => a.fecha.localeCompare(b.fecha));
+          if (allResults.length === 0) {
+            setPersonalError(`No se encontraron filas con "${keyword}" en los archivos.`);
+          }
+          setPersonalRows(allResults);
+          setPersonalExcluded(new Set());
+          setPersonalView('months');
+          setPersonalModalOpen(true);
+          setPersonalLoading(false);
+        }
+      };
+      reader.onerror = () => { pending--; if (pending === 0) setPersonalLoading(false); };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  // Group rows by YYYY-MM → label + total
+  function groupByMonth(rows: PersonalRow[]) {
+    const map = new Map<string, { label: string; total: number; count: number }>();
+    const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    function parseFechaKey(fecha: string): { key: string; label: string } {
+      // DD/MM/YYYY  or  D/M/YYYY
+      const slashDMY = fecha.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      // YYYY-MM-DD
+      const isoYMD   = fecha.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      // MM/DD/YYYY (US format fallback)
+      const slashMDY = fecha.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+
+      let mm = '', yyyy = '';
+      if (slashDMY) {
+        // BNB Bolivia uses DD/MM/YYYY
+        mm   = slashDMY[2].padStart(2,'0');
+        yyyy = slashDMY[3];
+      } else if (isoYMD) {
+        yyyy = isoYMD[1];
+        mm   = isoYMD[2];
+      } else if (slashMDY) {
+        mm   = slashMDY[1].padStart(2,'0');
+        yyyy = slashMDY[3];
+      } else {
+        return { key: 'otros', label: 'Otros' };
+      }
+      const monthIdx = parseInt(mm, 10) - 1;
+      if (monthIdx < 0 || monthIdx > 11) return { key: 'otros', label: 'Otros' };
+      return { key: `${yyyy}-${mm}`, label: `${MONTHS_ES[monthIdx]} ${yyyy}` };
+    }
+
+    for (const r of rows) {
+      const { key, label } = parseFechaKey(r.fecha);
+      const prev = map.get(key) ?? { label, total: 0, count: 0 };
+      map.set(key, { label, total: prev.total + r.monto, count: prev.count + 1 });
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) => ({ key: k, ...v }));
+  }
+
   // ── close modal (always resets keepOpen) ──
   function closeModal() { setModalOpen(false); setKeepOpen(false); }
 
@@ -774,6 +897,22 @@ export default function TransactionsPage() {
             >
               <Upload size={15} />
               Importar Excel QR
+            </button>
+          </div>
+        )}
+
+        {/* Personal Excel analysis — only on Personal BNB tab */}
+        {activeTab === 'bnb_personal' && (
+          <div className="flex justify-end items-center gap-3">
+            <input ref={personalFileRef} type="file" accept=".xls,.xlsx" multiple className="hidden" onChange={handlePersonalFile} />
+            {personalError && <p className="text-red-500 text-xs">{personalError}</p>}
+            <button
+              onClick={() => { setPersonalError(''); personalFileRef.current?.click(); }}
+              disabled={personalLoading}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-violet-600 hover:bg-violet-500 disabled:opacity-60 text-white rounded-xl shadow transition-colors"
+            >
+              <Upload size={15} />
+              {personalLoading ? 'Procesando...' : 'Analizar Excel personal'}
             </button>
           </div>
         )}
@@ -1506,6 +1645,191 @@ export default function TransactionsPage() {
           </div>
         </div>
       )}
+
+      {/* ── Personal Excel analysis modal ── */}
+      {personalModalOpen && (() => {
+        const activeRows = personalRows.filter((_, i) => !personalExcluded.has(i));
+        const months = groupByMonth(activeRows);
+        const grandTotal = activeRows.reduce((s, r) => s + r.monto, 0);
+        const excludedTotal = personalRows.filter((_, i) => personalExcluded.has(i)).reduce((s, r) => s + r.monto, 0);
+
+        function printReport() {
+          const kw = personalKeyword || 'mauri';
+          const now = new Date().toLocaleDateString('es-BO', { day: 'numeric', month: 'long', year: 'numeric' });
+          const monthRows = months.map(m => `
+            <tr>
+              <td style="padding:10px 16px;font-weight:600;color:#1f2937">${m.label}</td>
+              <td style="padding:10px 16px;text-align:center;color:#6b7280">${m.count}</td>
+              <td style="padding:10px 16px;text-align:right;font-weight:700;color:#5b21b6;font-size:15px">Bs. ${fmt(m.total)}</td>
+            </tr>`).join('');
+          const detailRows = activeRows.map(r => `
+            <tr>
+              <td style="padding:7px 16px;color:#6b7280;white-space:nowrap">${r.fecha}</td>
+              <td style="padding:7px 16px;color:#374151;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.detalle}</td>
+              <td style="padding:7px 16px;text-align:right;font-weight:600;color:#1f2937">Bs. ${fmt(r.monto)}</td>
+            </tr>`).join('');
+
+          const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"/>
+            <title>Reporte gastos personales</title>
+            <style>
+              body { font-family: -apple-system, Arial, sans-serif; color: #111; margin: 0; padding: 32px 40px; }
+              h1 { font-size: 22px; font-weight: 800; color: #1f2937; margin: 0 0 4px; }
+              .sub { font-size: 12px; color: #9ca3af; margin-bottom: 28px; }
+              h2 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #6b7280; margin: 28px 0 8px; }
+              table { width: 100%; border-collapse: collapse; }
+              thead tr { background: #f3f4f6; }
+              th { padding: 8px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #9ca3af; }
+              th:last-child { text-align: right; }
+              tbody tr { border-bottom: 1px solid #f3f4f6; }
+              tbody tr:nth-child(even) { background: #fafafa; }
+              .total-box { margin-top: 28px; text-align: right; border-top: 2px solid #e5e7eb; padding-top: 16px; }
+              .total-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #9ca3af; }
+              .total-amount { font-size: 28px; font-weight: 800; color: #5b21b6; margin-top: 4px; }
+              ${personalExcluded.size > 0 ? `.excl { font-size:11px; color:#9ca3af; margin-top:6px; }` : ''}
+              @media print { body { padding: 20px 28px; } }
+            </style></head><body>
+            <h1>Reporte de gastos personales</h1>
+            <p class="sub">Filtrado por "${kw}" · Generado el ${now}</p>
+
+            <h2>Resumen por mes</h2>
+            <table>
+              <thead><tr><th>Mes</th><th style="text-align:center">Transacciones</th><th style="text-align:right">Total</th></tr></thead>
+              <tbody>${monthRows}</tbody>
+            </table>
+
+            <h2>Detalle de transacciones (${activeRows.length})</h2>
+            <table>
+              <thead><tr><th>Fecha</th><th>Detalle</th><th style="text-align:right">Monto</th></tr></thead>
+              <tbody>${detailRows}</tbody>
+            </table>
+
+            <div class="total-box">
+              <div class="total-label">Total gastado</div>
+              <div class="total-amount">Bs. ${fmt(grandTotal)}</div>
+              ${personalExcluded.size > 0 ? `<p class="excl">${personalExcluded.size} transacciones excluidas (Bs. ${fmt(excludedTotal)}) no están incluidas en el total.</p>` : ''}
+            </div>
+            <script>window.onload=()=>{window.print();}<\/script>
+            </body></html>`;
+
+          const w = window.open('', '_blank');
+          if (w) { w.document.write(html); w.document.close(); }
+        }
+        return (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style={{ maxHeight: '90vh' }}>
+
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+                <div>
+                  <h2 className="text-base font-bold text-gray-900">Gastos personales — Reporte</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Filtrado por <span className="font-semibold text-violet-600">"{personalKeyword || 'mauri'}"</span>
+                    {' · '}{activeRows.length} transacciones · {months.length} mes{months.length !== 1 ? 'es' : ''}
+                    {personalExcluded.size > 0 && <span className="text-gray-300"> · {personalExcluded.size} excluidas</span>}
+                  </p>
+                </div>
+                <button onClick={() => { setPersonalModalOpen(false); setPersonalRows([]); }} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+              </div>
+
+              {/* Toolbar */}
+              <div className="px-6 py-3 border-b border-gray-100 flex-shrink-0 flex items-center gap-3">
+                <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Buscar por:</label>
+                <input type="text" value={personalKeyword} onChange={e => setPersonalKeyword(e.target.value)}
+                  placeholder="mauri"
+                  className="w-32 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-violet-400" />
+                <div className="flex bg-gray-100 rounded-lg p-0.5 ml-2">
+                  <button onClick={() => setPersonalView('months')}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${personalView === 'months' ? 'bg-white shadow text-violet-700' : 'text-gray-500 hover:text-gray-700'}`}>
+                    Por mes
+                  </button>
+                  <button onClick={() => setPersonalView('detail')}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${personalView === 'detail' ? 'bg-white shadow text-violet-700' : 'text-gray-500 hover:text-gray-700'}`}>
+                    Detalle
+                  </button>
+                </div>
+                <div className="ml-auto flex items-center gap-2">
+                  <button onClick={printReport}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg transition-colors whitespace-nowrap">
+                    🖨️ Imprimir / PDF
+                  </button>
+                  <button onClick={() => personalFileRef.current?.click()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-violet-100 text-violet-700 hover:bg-violet-200 rounded-lg transition-colors whitespace-nowrap">
+                    <Upload size={12} /> Agregar archivos
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="overflow-y-auto flex-1 px-6 py-4">
+                {personalRows.length === 0 ? (
+                  <p className="text-center text-gray-400 py-8 text-sm">No se encontraron coincidencias.</p>
+                ) : personalView === 'months' ? (
+                  <div className="space-y-2">
+                    {months.map(m => (
+                      <div key={m.key} className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3 hover:bg-violet-50 transition-colors cursor-pointer"
+                        onClick={() => setPersonalView('detail')}>
+                        <div>
+                          <p className="text-sm font-bold text-gray-800">{m.label}</p>
+                          <p className="text-xs text-gray-400">{m.count} transacción{m.count !== 1 ? 'es' : ''}</p>
+                        </div>
+                        <p className="text-lg font-bold text-violet-700">Bs. {fmt(m.total)}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-gray-400 border-b border-gray-100">
+                        <th className="text-left py-1.5 pr-3 font-semibold">Fecha</th>
+                        <th className="text-left py-1.5 pr-3 font-semibold">Detalle</th>
+                        <th className="text-right py-1.5 pr-2 font-semibold">Monto (Bs.)</th>
+                        <th className="w-6" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {personalRows.map((row, i) => {
+                        const excluded = personalExcluded.has(i);
+                        return (
+                          <tr key={i} className={excluded ? 'opacity-35' : ''}>
+                            <td className="py-1.5 pr-3 text-gray-500 whitespace-nowrap">{row.fecha}</td>
+                            <td className={`py-1.5 pr-3 max-w-[280px] truncate ${excluded ? 'line-through text-gray-400' : 'text-gray-700'}`} title={row.detalle}>{row.detalle}</td>
+                            <td className={`py-1.5 pr-2 text-right font-semibold ${excluded ? 'text-gray-400' : 'text-gray-900'}`}>{fmt(row.monto)}</td>
+                            <td className="py-1.5">
+                              <button
+                                onClick={() => setPersonalExcluded(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+                                title={excluded ? 'Incluir' : 'Excluir del total'}
+                                className={`transition-colors ${excluded ? 'text-violet-400 hover:text-violet-600' : 'text-gray-200 hover:text-red-400'}`}>
+                                {excluded ? '↩' : '✕'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl flex-shrink-0">
+                <div>
+                  <p className="text-sm text-gray-500">{activeRows.length} transacciones · {months.length} meses</p>
+                  {personalExcluded.size > 0 && (
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {personalExcluded.size} excluidas (Bs. {fmt(excludedTotal)})
+                      <button onClick={() => setPersonalExcluded(new Set())} className="ml-2 text-violet-500 hover:text-violet-700 underline">restaurar</button>
+                    </p>
+                  )}
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-0.5">Total gastado</p>
+                  <p className="text-2xl font-bold text-violet-700">Bs. {fmt(grandTotal)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
