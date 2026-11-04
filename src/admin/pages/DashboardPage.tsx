@@ -27,6 +27,8 @@ export default function DashboardPage() {
 
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
+  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toISOString().split('T')[0];
   const in14 = new Date(today); in14.setDate(in14.getDate() + 14);
   const in14Str = in14.toISOString().split('T')[0];
 
@@ -229,10 +231,10 @@ export default function DashboardPage() {
 
       {/* ── Marketing: TikTok reminder when empresas exist ── */}
       {isMarketing && empresas.length > 0 && (() => {
-        const todayEmpresas = empresas.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
-        const todayPerros   = perros.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
-        const todayAll = [...todayEmpresas, ...todayPerros];
-        const allDone = todayAll.length > 0 && todayAll.every(e => tiktokDone.has(e.id));
+        const hoyEmpresas = empresas.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
+        const hoyPerros   = perros.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
+        const hoyAll = [...hoyEmpresas, ...hoyPerros];
+        const allDone = hoyAll.length > 0 && hoyAll.every(e => tiktokDone.has(e.id));
         if (allDone) return (
           <div className="flex items-center justify-center gap-3 bg-green-500 text-white rounded-xl px-5 py-3 shadow-lg">
             <span className="text-xl">✅</span>
@@ -271,7 +273,8 @@ export default function DashboardPage() {
           ) : (
             <div className="grid grid-cols-2 gap-2">
               {empresas.map(res => {
-                const isHoy = res.check_in <= todayStr && res.check_out > todayStr;
+                const isHoy       = res.check_in <= todayStr && res.check_out > todayStr;
+                const saleManana  = res.check_out === tomorrowStr;
                 const entra = shortDate(res.check_in);
                 const sale  = shortDate(res.check_out);
                 const done  = tiktokDone.has(res.id);
@@ -279,13 +282,16 @@ export default function DashboardPage() {
                   <div key={res.id}
                     className={`rounded-lg px-2.5 py-2 border transition-colors ${
                       done ? 'bg-green-50 border-green-200' :
+                      saleManana ? 'bg-violet-50 border-violet-200' :
                       isHoy ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50 border-gray-100'
                     }`}>
                     <div className="flex items-center gap-1 mb-0.5">
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : isHoy ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
-                      {isHoy
-                        ? <span className={`text-[9px] font-bold ${done ? 'text-green-600' : 'text-indigo-600'}`}>HOY</span>
-                        : <span className="text-[9px] text-gray-400">{entra}→{sale}</span>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : saleManana ? 'bg-violet-600 text-white' : isHoy ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
+                      {saleManana
+                        ? <span className={`text-[9px] font-bold ${done ? 'text-green-600' : 'text-violet-600'}`}>sale mañana · {sale}</span>
+                        : isHoy
+                          ? <span className="text-[9px] font-bold text-indigo-600">HOY · sale {sale}</span>
+                          : <span className="text-[9px] text-gray-400">{entra}→{sale}</span>
                       }
                       {isMarketing && isHoy && (
                         <button onClick={() => toggleTiktok(res.id)}
@@ -331,20 +337,24 @@ export default function DashboardPage() {
           ) : (
             <div className="space-y-2">
               {perros.map(res => {
-                const isHoy = res.check_in <= todayStr && res.check_out > todayStr;
+                const isHoy      = res.check_in <= todayStr && res.check_out > todayStr;
+                const saleManana = res.check_out === tomorrowStr;
                 const entra = shortDate(res.check_in);
                 const sale  = shortDate(res.check_out);
                 const done  = tiktokDone.has(res.id);
                 return (
                   <div key={res.id} className={`rounded-lg px-3 py-2.5 border transition-colors ${
                     done ? 'bg-green-50 border-green-200' :
+                    saleManana ? 'bg-violet-50 border-violet-200' :
                     isHoy ? 'bg-orange-50 border-orange-200' : 'bg-gray-50 border-gray-100'
                   }`}>
                     <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : isHoy ? 'bg-orange-500 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
-                      {isHoy
-                        ? <span className={`text-[10px] font-bold ${done ? 'text-green-600' : 'text-orange-600'}`}>🐾 HOSPEDADO HOY</span>
-                        : <span className="text-[10px] text-gray-400">llega {entra} · sale {sale}</span>
+                      <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : saleManana ? 'bg-violet-600 text-white' : isHoy ? 'bg-orange-500 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
+                      {saleManana
+                        ? <span className={`text-[10px] font-bold ${done ? 'text-green-600' : 'text-violet-600'}`}>🐾 sale mañana · {sale}</span>
+                        : isHoy
+                          ? <span className="text-[10px] font-bold text-orange-600">🐾 HOY · sale {sale}</span>
+                          : <span className="text-[10px] text-gray-400">llega {entra} · sale {sale}</span>
                       }
                       {isMarketing && isHoy && (
                         <button onClick={() => toggleTiktok(res.id)}
