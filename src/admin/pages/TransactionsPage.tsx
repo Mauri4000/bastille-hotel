@@ -484,6 +484,65 @@ export default function TransactionsPage() {
   const [bnbFromTime,    setBnbFromTime]    = useState('');   // HH:MM
   const bnbFileRef = useRef<HTMLInputElement>(null);
 
+  // ── BNB ingresos verification ──
+  interface BnbCreditRow { fecha: string; detalle: string; monto: number; }
+  const [bnbIngresosTotal,   setBnbIngresosTotal]   = useState<number | null>(null);
+  const [bnbIngresosRows,    setBnbIngresosRows]    = useState<BnbCreditRow[]>([]);
+  const [bnbIngresosError,   setBnbIngresosError]   = useState('');
+  const [bnbSaldoInicial,    setBnbSaldoInicial]    = useState('');
+  const [bnbShowDiff,        setBnbShowDiff]        = useState(false);
+  const bnbIngresosRef = useRef<HTMLInputElement>(null);
+
+  function handleBnbIngresosFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setBnbIngresosError('');
+    setBnbIngresosTotal(null);
+    setBnbIngresosRows([]);
+    setBnbShowDiff(false);
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const ab = ev.target!.result as ArrayBuffer;
+        const wb = XLSX.read(ab, { type: 'array', cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, dateNF: 'DD/MM/YYYY' }) as unknown[][];
+
+        let headerIdx = 0;
+        for (let i = 0; i < Math.min(6, raw.length); i++) {
+          if ((raw[i]?.filter(c => String(c ?? '').trim()).length ?? 0) > 3) { headerIdx = i; break; }
+        }
+        const headers = (raw[headerIdx] ?? []).map(c => String(c ?? '').toLowerCase().trim());
+        const creditoCol = headers.findIndex(h => h.includes('credito') || h.includes('crédito') || h.includes('abono'));
+        const fechaCol   = headers.findIndex(h => h.includes('fecha'));
+        const detalleCol = headers.findIndex(h => h.includes('detalle') || h.includes('descripcion') || h.includes('descripción') || h.includes('concepto'));
+        if (creditoCol < 0) { setBnbIngresosError('No se encontró columna de crédito en el archivo.'); return; }
+
+        let total = 0;
+        const rows: BnbCreditRow[] = [];
+        for (let i = headerIdx + 1; i < raw.length; i++) {
+          const row = raw[i] as unknown[];
+          if (!row) continue;
+          const val = parseFloat(String(row[creditoCol] ?? '').replace(/,/g, '').trim());
+          if (!isNaN(val) && val > 0) {
+            total += val;
+            rows.push({
+              fecha:   fechaCol   >= 0 ? String(row[fechaCol]   ?? '') : '',
+              detalle: detalleCol >= 0 ? String(row[detalleCol] ?? '') : '',
+              monto:   val,
+            });
+          }
+        }
+        setBnbIngresosTotal(Math.round(total * 100) / 100);
+        setBnbIngresosRows(rows);
+      } catch {
+        setBnbIngresosError('No se pudo leer el archivo.');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
   // ── Personal Excel analysis state ──
   interface PersonalRow { fecha: string; detalle: string; monto: number; }
   const [personalModalOpen,  setPersonalModalOpen]  = useState(false);
@@ -888,9 +947,93 @@ export default function TransactionsPage() {
 
         {/* BNB Import button — only on BNB Mauri tab */}
         {activeTab === 'bnb' && (
-          <div className="flex justify-end">
+          <div className="flex justify-end items-center gap-3 flex-wrap">
             <input ref={bnbFileRef} type="file" accept=".xls,.xlsx" className="hidden" onChange={handleBnbFile} />
-            {bnbError && <p className="text-red-500 text-xs mr-3 self-center">{bnbError}</p>}
+            <input ref={bnbIngresosRef} type="file" accept=".xls,.xlsx" className="hidden" onChange={handleBnbIngresosFile} />
+            {bnbError && <p className="text-red-500 text-xs self-center">{bnbError}</p>}
+            {/* Saldo inicial manual */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 font-semibold whitespace-nowrap">Saldo oct:</label>
+              <input type="number" min="0" step="0.01" value={bnbSaldoInicial}
+                onChange={e => setBnbSaldoInicial(e.target.value)}
+                placeholder="0.00"
+                className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-emerald-400" />
+            </div>
+            {/* Ingresos verification result */}
+            {bnbIngresosTotal !== null && (() => {
+              const saldo     = parseFloat(bnbSaldoInicial) || 0;
+              const bancoTotal = Math.round((bnbIngresosTotal + saldo) * 100) / 100;
+              const sistTotal  = Math.round(totalIncome * 100) / 100;
+              const diff       = Math.round((bancoTotal - sistTotal) * 100) / 100;
+              const matches    = Math.abs(diff) < 0.01;
+
+              // Cross-reference: for each Excel credit row, check if a system ingreso with same amount exists
+              const systemAmounts = filtered
+                .filter(t => t.type === 'ingreso')
+                .map(t => Math.round(t.amount * 100) / 100);
+              const unmatched = bnbIngresosRows.filter(r => {
+                const idx = systemAmounts.indexOf(Math.round(r.monto * 100) / 100);
+                if (idx !== -1) { systemAmounts.splice(idx, 1); return false; }
+                return true;
+              });
+
+              return (
+                <div className="flex flex-col gap-2 w-full">
+                  <div className={`flex flex-wrap items-center gap-2 rounded-xl px-3 py-2 text-xs border ${matches ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
+                    {/* Bank side */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold opacity-70">🏦 Banco real:</span>
+                      {saldo > 0 && <><span className="text-[10px] opacity-60">saldo oct {fmt(saldo)} + créd {fmt(bnbIngresosTotal)}</span><span className="opacity-40">=</span></>}
+                      <span className={`text-sm font-bold ${matches ? 'text-emerald-800' : 'text-amber-900'}`}>Bs. {fmt(bancoTotal)}</span>
+                    </div>
+                    <span className="opacity-30">|</span>
+                    {/* System side */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold opacity-70">📋 Sistema:</span>
+                      <span className={`text-sm font-bold ${matches ? 'text-emerald-800' : 'text-amber-900'}`}>Bs. {fmt(sistTotal)}</span>
+                    </div>
+                    {/* Difference */}
+                    {!matches && (
+                      <>
+                        <span className="opacity-30">|</span>
+                        <span className="font-bold text-red-600">⚠️ Diferencia: Bs. {fmt(Math.abs(diff))} {diff > 0 ? '(banco +)' : '(sistema +)'}</span>
+                        {unmatched.length > 0 && (
+                          <button onClick={() => setBnbShowDiff(v => !v)} className="text-amber-700 underline text-[10px] hover:text-amber-900">
+                            {bnbShowDiff ? 'ocultar' : `ver posibles causas (${unmatched.length})`}
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {matches && <span className="text-emerald-600 font-bold">✓ Cuadra</span>}
+                    <button onClick={() => { setBnbIngresosTotal(null); setBnbIngresosRows([]); setBnbShowDiff(false); }} className="ml-auto opacity-40 hover:opacity-70"><X size={13} /></button>
+                  </div>
+                  {/* Unmatched cross-reference panel */}
+                  {bnbShowDiff && unmatched.length > 0 && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-800">
+                      <p className="font-semibold mb-1.5">Créditos del banco sin registro en el sistema:</p>
+                      <div className="flex flex-col gap-1">
+                        {unmatched.map((r, i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <span className="text-red-400 font-mono">{r.fecha}</span>
+                            <span className="flex-1 truncate">{r.detalle || '—'}</span>
+                            <span className="font-bold text-red-700">Bs. {fmt(r.monto)}</span>
+                          </div>
+                        ))}
+                        <p className="text-red-500 mt-1 text-[10px]">Estos podrían ser los ingresos no registrados en el sistema.</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            {bnbIngresosError && <p className="text-red-500 text-xs self-center">{bnbIngresosError}</p>}
+            <button
+              onClick={() => { setBnbIngresosError(''); setBnbIngresosTotal(null); bnbIngresosRef.current?.click(); }}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow transition-colors"
+            >
+              <Upload size={15} />
+              Verificar ingresos
+            </button>
             <button
               onClick={() => { setBnbError(''); bnbFileRef.current?.click(); }}
               className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow transition-colors"

@@ -1,9 +1,16 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Building2, PawPrint, RefreshCw, ShoppingBag } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Reservation } from '../types';
+
+// Second Supabase client pointing at Cretassic Hostal DB
+const hostalSupabase = createClient(
+  import.meta.env.VITE_HOSTAL_SUPABASE_URL as string,
+  import.meta.env.VITE_HOSTAL_SUPABASE_ANON_KEY as string,
+);
 
 interface VitrinaProduct {
   id: string;
@@ -19,6 +26,121 @@ function shortDate(iso: string) {
   return d.toLocaleDateString('es-BO', { day: 'numeric', month: 'short' });
 }
 
+// ─── Shared card components ────────────────────────────────────────────────────
+
+interface EmpresaCardsProps {
+  empresas: Reservation[];
+  todayStr: string;
+  tomorrowStr: string;
+  tiktokDone: Set<string>;
+  toggleTiktok: (id: string) => void;
+  isMarketing: boolean;
+}
+function EmpresaCards({ empresas, todayStr, tomorrowStr, tiktokDone, toggleTiktok, isMarketing }: EmpresaCardsProps) {
+  if (empresas.length === 0) return <p className="text-sm text-gray-400">Ninguna en los próximos 14 días.</p>;
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {empresas.map(res => {
+        const isHoy      = res.check_in <= todayStr && res.check_out > todayStr;
+        const saleManana = res.check_out === tomorrowStr;
+        const entra = shortDate(res.check_in);
+        const sale  = shortDate(res.check_out);
+        const done  = tiktokDone.has(res.id);
+        return (
+          <div key={res.id}
+            className={`rounded-lg px-2.5 py-2 border transition-colors ${
+              done ? 'bg-green-50 border-green-200' :
+              saleManana ? 'bg-violet-50 border-violet-200' :
+              isHoy ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50 border-gray-100'
+            }`}>
+            <div className="flex items-center gap-1 mb-0.5">
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : saleManana ? 'bg-violet-600 text-white' : isHoy ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
+              {saleManana
+                ? <span className={`text-[9px] font-bold ${done ? 'text-green-600' : 'text-violet-600'}`}>sale mañana · {sale}</span>
+                : isHoy
+                  ? <span className="text-[9px] font-bold text-indigo-600">HOY · sale {sale}</span>
+                  : <span className="text-[9px] text-gray-400">{entra}→{sale}</span>
+              }
+              {isMarketing && isHoy && (
+                <button onClick={() => toggleTiktok(res.id)}
+                  title={done ? 'Marcar como pendiente' : 'TikTok gestionado'}
+                  className={`ml-auto text-base transition-transform hover:scale-110 ${done ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}>
+                  {done ? '✅' : '☑️'}
+                </button>
+              )}
+            </div>
+            {(res as any).empresa_name && (
+              <p className={`text-xs font-bold truncate leading-tight ${done ? 'text-green-800' : 'text-indigo-900'}`}>{(res as any).empresa_name}</p>
+            )}
+            <p className="text-[10px] text-gray-500 truncate">{res.guest_name}</p>
+            {(res as any).guest_phone ? (
+              <a href={`https://wa.me/591${(res as any).guest_phone}`} target="_blank" rel="noreferrer"
+                className="inline-flex items-center gap-1 mt-0.5 text-[10px] font-semibold text-green-600 hover:text-green-700 transition-colors">
+                📱 {(res as any).guest_phone}
+              </a>
+            ) : (
+              <p className="text-[9px] text-gray-300 mt-0.5 italic">sin celular aún</p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface MascotaCardsProps {
+  perros: Reservation[];
+  todayStr: string;
+  tomorrowStr: string;
+  tiktokDone: Set<string>;
+  toggleTiktok: (id: string) => void;
+  isMarketing: boolean;
+}
+function MascotaCards({ perros, todayStr, tomorrowStr, tiktokDone, toggleTiktok, isMarketing }: MascotaCardsProps) {
+  if (perros.length === 0) return <p className="text-sm text-gray-400">Ninguna en los próximos 14 días.</p>;
+  return (
+    <div className="space-y-2">
+      {perros.map(res => {
+        const isHoy      = res.check_in <= todayStr && res.check_out > todayStr;
+        const saleManana = res.check_out === tomorrowStr;
+        const entra = shortDate(res.check_in);
+        const sale  = shortDate(res.check_out);
+        const done  = tiktokDone.has(res.id);
+        return (
+          <div key={res.id} className={`rounded-lg px-3 py-2.5 border transition-colors ${
+            done ? 'bg-green-50 border-green-200' :
+            saleManana ? 'bg-violet-50 border-violet-200' :
+            isHoy ? 'bg-orange-50 border-orange-200' : 'bg-gray-50 border-gray-100'
+          }`}>
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : saleManana ? 'bg-violet-600 text-white' : isHoy ? 'bg-orange-500 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
+              {saleManana
+                ? <span className={`text-[10px] font-bold ${done ? 'text-green-600' : 'text-violet-600'}`}>🐾 sale mañana · {sale}</span>
+                : isHoy
+                  ? <span className="text-[10px] font-bold text-orange-600">🐾 HOY · sale {sale}</span>
+                  : <span className="text-[10px] text-gray-400">llega {entra} · sale {sale}</span>
+              }
+              {isMarketing && isHoy && (
+                <button onClick={() => toggleTiktok(res.id)}
+                  title={done ? 'Marcar como pendiente' : 'TikTok gestionado'}
+                  className={`ml-auto text-base transition-transform hover:scale-110 ${done ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}>
+                  {done ? '✅' : '☑️'}
+                </button>
+              )}
+            </div>
+            <p className="text-sm font-semibold text-gray-800 truncate">{res.guest_name}</p>
+            {(res as any).pet_name ? (
+              <p className={`text-xs font-bold mt-0.5 ${done ? 'text-green-700' : 'text-orange-600'}`}>🐾 {(res as any).pet_name}</p>
+            ) : (
+              <p className="text-[10px] text-red-400 italic mt-0.5 animate-pulse">Preguntar nombre de mascota para TikTok 🎵</p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { profile } = useAuth();
@@ -26,17 +148,21 @@ export default function DashboardPage() {
   const navigate = useNavigate();
 
   const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
-  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+  const todayStr    = today.toISOString().split('T')[0];
+  const tomorrow    = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowStr = tomorrow.toISOString().split('T')[0];
   const in14 = new Date(today); in14.setDate(in14.getDate() + 14);
   const in14Str = in14.toISOString().split('T')[0];
 
-  const [empresas,    setEmpresas]    = useState<Reservation[]>([]);
-  const [perros,      setPerros]      = useState<Reservation[]>([]);
-  const [vitAlerts,   setVitAlerts]   = useState<{ lowStock: VitrinaProduct[]; expiring: VitrinaProduct[] }>({ lowStock: [], expiring: [] });
-  const [loading,     setLoading]     = useState(true);
-  const [hiddenIds,   setHiddenIds]   = useState<Set<string>>(() => {
+  // ── Property tab ──
+  const [property, setProperty] = useState<'hotel' | 'hostal'>('hotel');
+
+  // ── Hotel data ──
+  const [empresas,  setEmpresas]  = useState<Reservation[]>([]);
+  const [perros,    setPerros]    = useState<Reservation[]>([]);
+  const [vitAlerts, setVitAlerts] = useState<{ lowStock: VitrinaProduct[]; expiring: VitrinaProduct[] }>({ lowStock: [], expiring: [] });
+  const [loading,   setLoading]   = useState(true);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem('vitrina_hidden') ?? '[]')); } catch { return new Set(); }
   });
 
@@ -49,25 +175,44 @@ export default function DashboardPage() {
     });
   }
 
+  // ── Hostal data ──
+  const [hostalEmpresas, setHostalEmpresas] = useState<Reservation[]>([]);
+  const [hostalPerros,   setHostalPerros]   = useState<Reservation[]>([]);
+  const [hostalLoading,  setHostalLoading]  = useState(false);
+  const [hostalLoaded,   setHostalLoaded]   = useState(false);
+
   const isTuesday = today.getDay() === 2;
 
-  // TikTok contacted state — persisted per day so it resets the next day
-  const todayKey = `tiktok_done_${todayStr}`;
+  // TikTok contacted state — per property, per day
+  const hotelTodayKey  = `tiktok_done_${todayStr}`;
+  const hostalTodayKey = `tiktok_done_hostal_${todayStr}`;
   const [tiktokDone, setTiktokDone] = useState<Set<string>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem(todayKey) ?? '[]')); } catch { return new Set(); }
+    try { return new Set(JSON.parse(localStorage.getItem(hotelTodayKey) ?? '[]')); } catch { return new Set(); }
   });
+  const [hostalTiktokDone, setHostalTiktokDone] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(hostalTodayKey) ?? '[]')); } catch { return new Set(); }
+  });
+
   function toggleTiktok(id: string) {
     setTiktokDone(prev => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
-      localStorage.setItem(todayKey, JSON.stringify([...next]));
+      localStorage.setItem(hotelTodayKey, JSON.stringify([...next]));
+      return next;
+    });
+  }
+  function toggleHostalTiktok(id: string) {
+    setHostalTiktokDone(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      localStorage.setItem(hostalTodayKey, JSON.stringify([...next]));
       return next;
     });
   }
 
+  // ── Load hotel data ──
   const load = useCallback(async () => {
     setLoading(true);
-
     const in30 = new Date(today); in30.setDate(in30.getDate() + 30);
     const in30Str = in30.toISOString().split('T')[0];
 
@@ -95,15 +240,48 @@ export default function DashboardPage() {
       lowStock: vits.filter(v => v.quantity === 0),
       expiring: vits.filter(v => v.expiration_date && v.expiration_date <= in30Str),
     });
-
     setLoading(false);
+  }, []); // eslint-disable-line
+
+  // ── Load hostal data ──
+  const loadHostal = useCallback(async () => {
+    setHostalLoading(true);
+    const [
+      { data: empData },
+      { data: petData },
+    ] = await Promise.all([
+      hostalSupabase.from('reservations')
+        .select('id,room_id,guest_name,guest_phone,check_in,check_out,status,is_empresa,empresa_name,num_guests')
+        .lte('check_in', in14Str).gt('check_out', todayStr)
+        .eq('is_empresa', true).in('status', ['ocupado', 'reserva']).order('check_in'),
+      hostalSupabase.from('reservations')
+        .select('id,room_id,guest_name,check_in,check_out,status,has_pet,num_guests')
+        .lte('check_in', in14Str).gt('check_out', todayStr)
+        .eq('has_pet', true).in('status', ['ocupado', 'reserva']).order('check_in'),
+    ]);
+    setHostalEmpresas((empData ?? []) as unknown as Reservation[]);
+    setHostalPerros((petData ?? []) as unknown as Reservation[]);
+    setHostalLoading(false);
+    setHostalLoaded(true);
   }, []); // eslint-disable-line
 
   useEffect(() => { load(); }, [load]);
 
-  const greet      = today.getHours() < 12 ? 'Buenos días' : today.getHours() < 19 ? 'Buenas tardes' : 'Buenas noches';
+  // Load hostal data when first switching to hostal tab
+  useEffect(() => {
+    if (property === 'hostal' && !hostalLoaded) loadHostal();
+  }, [property, hostalLoaded, loadHostal]);
 
-  if (loading) return (
+  const greet = today.getHours() < 12 ? 'Buenos días' : today.getHours() < 19 ? 'Buenas tardes' : 'Buenas noches';
+
+  // Active data depending on property
+  const activeEmpresas    = property === 'hotel' ? empresas    : hostalEmpresas;
+  const activePerros      = property === 'hotel' ? perros      : hostalPerros;
+  const activeTiktokDone  = property === 'hotel' ? tiktokDone  : hostalTiktokDone;
+  const activeToggleTiktok = property === 'hotel' ? toggleTiktok : toggleHostalTiktok;
+  const activeLoading     = property === 'hotel' ? loading     : hostalLoading;
+
+  if (loading && property === 'hotel') return (
     <div className="flex items-center justify-center h-64">
       <div className="w-8 h-8 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
     </div>
@@ -112,7 +290,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-5">
 
-      {/* ── Greeting ── */}
+      {/* ── Greeting + refresh ── */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">
@@ -122,14 +300,30 @@ export default function DashboardPage() {
             {today.toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
           </p>
         </div>
-        <button onClick={load}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors px-3 py-1.5 rounded-lg border border-gray-200 hover:border-gray-300">
-          <RefreshCw size={12} /> Actualizar
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Property switcher */}
+          <div className="flex items-center bg-gray-100 rounded-xl p-1 gap-0.5">
+            <button
+              onClick={() => setProperty('hotel')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${property === 'hotel' ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+              🏨 Hotel
+            </button>
+            <button
+              onClick={() => setProperty('hostal')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${property === 'hostal' ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+              🏠 Hostal
+            </button>
+          </div>
+          <button
+            onClick={property === 'hotel' ? load : loadHostal}
+            className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors px-3 py-1.5 rounded-lg border border-gray-200 hover:border-gray-300">
+            <RefreshCw size={12} /> Actualizar
+          </button>
+        </div>
       </div>
 
-      {/* ── MARTES: Imprimir partes diarias ── */}
-      {isTuesday && (
+      {/* ── MARTES: Imprimir partes diarias (hotel only) ── */}
+      {isTuesday && property === 'hotel' && (
         <div className="flex items-center gap-4 bg-red-600 text-white rounded-xl px-5 py-4 shadow-lg animate-pulse">
           <span className="text-2xl">🚨</span>
           <div className="flex-1">
@@ -140,10 +334,9 @@ export default function DashboardPage() {
         </div>
       )}
 
-
-
-{/* ── Vitrina alerts ── */}
-      {!isMarketing && (vitAlerts.lowStock.length > 0 || vitAlerts.expiring.length > 0) && (() => {
+      {/* ── Vitrina alerts (hotel only) ── */}
+      {!isMarketing && property === 'hotel' && (vitAlerts.lowStock.length > 0 || vitAlerts.expiring.length > 0) && (() => {
+        const in30 = new Date(today); in30.setDate(in30.getDate() + 30);
         const visibleLow  = vitAlerts.lowStock.filter(p => !hiddenIds.has(p.id));
         const hiddenLow   = vitAlerts.lowStock.filter(p =>  hiddenIds.has(p.id));
         const visibleExp  = vitAlerts.expiring.filter(p => !hiddenIds.has(p.id));
@@ -163,7 +356,6 @@ export default function DashboardPage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Left: pills con ocultar */}
               <div className="space-y-3">
                 {visibleLow.length > 0 && (
                   <div>
@@ -209,8 +401,6 @@ export default function DashboardPage() {
                   </button>
                 )}
               </div>
-
-              {/* Right: lista de compras */}
               {shoppingList.length > 0 && (
                 <div className="bg-gray-50 rounded-xl p-3">
                   <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">🛒 Lista de compras</p>
@@ -229,16 +419,17 @@ export default function DashboardPage() {
         );
       })()}
 
-      {/* ── Marketing: TikTok reminder when empresas exist ── */}
-      {isMarketing && empresas.length > 0 && (() => {
-        const hoyEmpresas = empresas.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
-        const hoyPerros   = perros.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
+      {/* ── TikTok banner ── */}
+      {isMarketing && activeEmpresas.length > 0 && (() => {
+        const hoyEmpresas = activeEmpresas.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
+        const hoyPerros   = activePerros.filter(e => e.check_in <= todayStr && e.check_out > todayStr);
         const hoyAll = [...hoyEmpresas, ...hoyPerros];
-        const allDone = hoyAll.length > 0 && hoyAll.every(e => tiktokDone.has(e.id));
+        const allDone = hoyAll.length > 0 && hoyAll.every(e => activeTiktokDone.has(e.id));
+        const propertyLabel = property === 'hostal' ? 'del hostal' : 'del hotel';
         if (allDone) return (
           <div className="flex items-center justify-center gap-3 bg-green-500 text-white rounded-xl px-5 py-3 shadow-lg">
             <span className="text-xl">✅</span>
-            <p className="font-extrabold text-sm tracking-wide text-center">¡Excelente trabajo Sisi crack! TikToks gestionados 🎉</p>
+            <p className="font-extrabold text-sm tracking-wide text-center">¡Excelente trabajo Sisi crack! TikToks {propertyLabel} gestionados 🎉</p>
             <span className="text-xl">✅</span>
           </div>
         );
@@ -246,138 +437,68 @@ export default function DashboardPage() {
           <div className="flex items-center justify-center gap-3 bg-red-600 text-white rounded-xl px-5 py-3 shadow-lg animate-pulse">
             <span className="text-xl">🚨</span>
             <p className="font-extrabold text-sm tracking-wide text-center">
-              Sisi, no olvides gestionar los TikToks con los huéspedes empresas
+              Sisi, no olvides gestionar los TikToks con los huéspedes empresas {propertyLabel}
             </p>
             <span className="text-xl">🚨</span>
           </div>
         );
       })()}
 
-      {/* ── 2 panels side by side ── */}
-      <div className="grid grid-cols-1 gap-4 items-start md:grid-cols-2">
+      {/* ── Loading spinner for hostal ── */}
+      {activeLoading && property === 'hostal' && (
+        <div className="flex items-center justify-center h-32">
+          <div className="w-8 h-8 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
+        </div>
+      )}
 
-        {/* EMPRESAS */}
-        <div data-testid="stat-card-empresas" className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center">
-              <Building2 size={16} className="text-indigo-600" />
+      {/* ── Empresas + Mascotas grid ── */}
+      {!activeLoading && (
+        <div className="grid grid-cols-1 gap-4 items-start md:grid-cols-2">
+
+          {/* EMPRESAS */}
+          <div data-testid="stat-card-empresas" className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center">
+                <Building2 size={16} className="text-indigo-600" />
+              </div>
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Empresas</span>
+              {activeEmpresas.length > 0 && (
+                <span className="ml-auto bg-indigo-100 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full">{activeEmpresas.length}</span>
+              )}
             </div>
-            <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Empresas</span>
-            {empresas.length > 0 && (
-              <span className="ml-auto bg-indigo-100 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full">{empresas.length}</span>
-            )}
+            <EmpresaCards
+              empresas={activeEmpresas}
+              todayStr={todayStr}
+              tomorrowStr={tomorrowStr}
+              tiktokDone={activeTiktokDone}
+              toggleTiktok={activeToggleTiktok}
+              isMarketing={isMarketing}
+            />
           </div>
 
-          {empresas.length === 0 ? (
-            <p className="text-sm text-gray-400">Ninguna en los próximos 14 días.</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              {empresas.map(res => {
-                const isHoy       = res.check_in <= todayStr && res.check_out > todayStr;
-                const saleManana  = res.check_out === tomorrowStr;
-                const entra = shortDate(res.check_in);
-                const sale  = shortDate(res.check_out);
-                const done  = tiktokDone.has(res.id);
-                return (
-                  <div key={res.id}
-                    className={`rounded-lg px-2.5 py-2 border transition-colors ${
-                      done ? 'bg-green-50 border-green-200' :
-                      saleManana ? 'bg-violet-50 border-violet-200' :
-                      isHoy ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50 border-gray-100'
-                    }`}>
-                    <div className="flex items-center gap-1 mb-0.5">
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : saleManana ? 'bg-violet-600 text-white' : isHoy ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
-                      {saleManana
-                        ? <span className={`text-[9px] font-bold ${done ? 'text-green-600' : 'text-violet-600'}`}>sale mañana · {sale}</span>
-                        : isHoy
-                          ? <span className="text-[9px] font-bold text-indigo-600">HOY · sale {sale}</span>
-                          : <span className="text-[9px] text-gray-400">{entra}→{sale}</span>
-                      }
-                      {isMarketing && isHoy && (
-                        <button onClick={() => toggleTiktok(res.id)}
-                          title={done ? 'Marcar como pendiente' : 'TikTok gestionado'}
-                          className={`ml-auto text-base transition-transform hover:scale-110 ${done ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}>
-                          {done ? '✅' : '☑️'}
-                        </button>
-                      )}
-                    </div>
-                    {(res as any).empresa_name && (
-                      <p className={`text-xs font-bold truncate leading-tight ${done ? 'text-green-800' : 'text-indigo-900'}`}>{(res as any).empresa_name}</p>
-                    )}
-                    <p className="text-[10px] text-gray-500 truncate">{res.guest_name}</p>
-                    {(res as any).guest_phone ? (
-                      <a href={`https://wa.me/591${(res as any).guest_phone}`} target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1 mt-0.5 text-[10px] font-semibold text-green-600 hover:text-green-700 transition-colors">
-                        📱 {(res as any).guest_phone}
-                      </a>
-                    ) : (
-                      <p className="text-[9px] text-gray-300 mt-0.5 italic">sin celular aún</p>
-                    )}
-                  </div>
-                );
-              })}
+          {/* MASCOTAS */}
+          <div data-testid="stat-card-mascotas" className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
+                <PawPrint size={16} className="text-orange-600" />
+              </div>
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Mascotas</span>
+              {activePerros.length > 0 && (
+                <span className="ml-auto bg-orange-100 text-orange-700 text-xs font-bold px-2 py-0.5 rounded-full">{activePerros.length}</span>
+              )}
             </div>
-          )}
-        </div>
-
-        {/* PERROS */}
-        <div data-testid="stat-card-mascotas" className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
-              <PawPrint size={16} className="text-orange-600" />
-            </div>
-            <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Mascotas</span>
-            {perros.length > 0 && (
-              <span className="ml-auto bg-orange-100 text-orange-700 text-xs font-bold px-2 py-0.5 rounded-full">{perros.length}</span>
-            )}
+            <MascotaCards
+              perros={activePerros}
+              todayStr={todayStr}
+              tomorrowStr={tomorrowStr}
+              tiktokDone={activeTiktokDone}
+              toggleTiktok={activeToggleTiktok}
+              isMarketing={isMarketing}
+            />
           </div>
 
-          {perros.length === 0 ? (
-            <p className="text-sm text-gray-400">Ninguna en los próximos 14 días.</p>
-          ) : (
-            <div className="space-y-2">
-              {perros.map(res => {
-                const isHoy      = res.check_in <= todayStr && res.check_out > todayStr;
-                const saleManana = res.check_out === tomorrowStr;
-                const entra = shortDate(res.check_in);
-                const sale  = shortDate(res.check_out);
-                const done  = tiktokDone.has(res.id);
-                return (
-                  <div key={res.id} className={`rounded-lg px-3 py-2.5 border transition-colors ${
-                    done ? 'bg-green-50 border-green-200' :
-                    saleManana ? 'bg-violet-50 border-violet-200' :
-                    isHoy ? 'bg-orange-50 border-orange-200' : 'bg-gray-50 border-gray-100'
-                  }`}>
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${done ? 'bg-green-500 text-white' : saleManana ? 'bg-violet-600 text-white' : isHoy ? 'bg-orange-500 text-white' : 'bg-gray-300 text-gray-700'}`}>{res.room_id}</span>
-                      {saleManana
-                        ? <span className={`text-[10px] font-bold ${done ? 'text-green-600' : 'text-violet-600'}`}>🐾 sale mañana · {sale}</span>
-                        : isHoy
-                          ? <span className="text-[10px] font-bold text-orange-600">🐾 HOY · sale {sale}</span>
-                          : <span className="text-[10px] text-gray-400">llega {entra} · sale {sale}</span>
-                      }
-                      {isMarketing && isHoy && (
-                        <button onClick={() => toggleTiktok(res.id)}
-                          title={done ? 'Marcar como pendiente' : 'TikTok gestionado'}
-                          className={`ml-auto text-base transition-transform hover:scale-110 ${done ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}>
-                          {done ? '✅' : '☑️'}
-                        </button>
-                      )}
-                    </div>
-                    <p className="text-sm font-semibold text-gray-800 truncate">{res.guest_name}</p>
-                    {(res as any).pet_name ? (
-                      <p className={`text-xs font-bold mt-0.5 ${done ? 'text-green-700' : 'text-orange-600'}`}>🐾 {(res as any).pet_name}</p>
-                    ) : (
-                      <p className="text-[10px] text-red-400 italic mt-0.5 animate-pulse">Preguntar nombre de mascota para TikTok 🎵</p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
-
-      </div>
+      )}
     </div>
   );
 }
