@@ -151,6 +151,71 @@ export default function CalendarPage() {
   const [rooms,        setRooms]        = useState<Room[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [loading,      setLoading]      = useState(true);
+
+  // ── TV services ──
+  interface TvService { tv_type: 'xuper' | 'hydra'; installed_at: string; last_reset_at: string | null; }
+  const [tvServices, setTvServices] = useState<Record<string, TvService>>({});
+  const [tvModal, setTvModal]       = useState<{
+    roomId: string;
+    tv_type: 'xuper' | 'hydra';
+    installed_at: string;
+    last_reset_at: string | null;
+    saving: boolean;
+    error: string;
+  } | null>(null);
+
+  function tvDotColor(roomId: string): 'green' | 'red' | null {
+    const tv = tvServices[roomId];
+    if (!tv) return null;
+    if (tv.tv_type === 'hydra') return 'green';
+    const ref = tv.last_reset_at || tv.installed_at;
+    const days = Math.floor((Date.now() - new Date(ref + 'T12:00:00').getTime()) / 86400000);
+    return days >= 7 ? 'red' : 'green';
+  }
+
+  function openTvModal(roomId: string) {
+    const tv = tvServices[roomId];
+    setTvModal({
+      roomId,
+      tv_type:      tv?.tv_type      ?? 'xuper',
+      installed_at: tv?.installed_at ?? new Date().toISOString().split('T')[0],
+      last_reset_at: tv?.last_reset_at ?? null,
+      saving: false,
+      error:  '',
+    });
+  }
+
+  async function saveTvService() {
+    if (!tvModal) return;
+    setTvModal(m => m ? { ...m, saving: true, error: '' } : m);
+    const payload = {
+      room_id:       tvModal.roomId,
+      tv_type:       tvModal.tv_type,
+      installed_at:  tvModal.installed_at,
+      last_reset_at: tvModal.tv_type === 'hydra' ? null : tvModal.last_reset_at,
+      updated_at:    new Date().toISOString(),
+    };
+    const existing = tvServices[tvModal.roomId];
+    const { error } = existing
+      ? await supabase.from('room_tv_services').update(payload).eq('room_id', tvModal.roomId)
+      : await supabase.from('room_tv_services').insert(payload);
+    if (error) { setTvModal(m => m ? { ...m, saving: false, error: error.message } : m); return; }
+    setTvServices(prev => ({ ...prev, [tvModal.roomId]: payload as TvService }));
+    setTvModal(null);
+  }
+
+  async function deleteTvService(roomId: string) {
+    await supabase.from('room_tv_services').delete().eq('room_id', roomId);
+    setTvServices(prev => { const n = { ...prev }; delete n[roomId]; return n; });
+    setTvModal(null);
+  }
+
+  async function markTvReset(roomId: string) {
+    const today = new Date().toISOString().split('T')[0];
+    await supabase.from('room_tv_services').update({ last_reset_at: today, updated_at: new Date().toISOString() }).eq('room_id', roomId);
+    setTvServices(prev => prev[roomId] ? { ...prev, [roomId]: { ...prev[roomId], last_reset_at: today } } : prev);
+    setTvModal(m => m ? { ...m, last_reset_at: today } : m);
+  }
   const [fetchError,   setFetchError]   = useState<string | null>(null);
 
   // Modal
@@ -373,6 +438,7 @@ export default function CalendarPage() {
       check_out:  checkOut,
       status:     'reserva' as ReservationStatus,
       notes:      quickNotaModal.text,
+      created_by: profile?.id ?? null,
     });
     if (error) { setQuickNotaError('Error: ' + error.message); return; }
     setQuickNotaModal(null);
@@ -541,7 +607,17 @@ export default function CalendarPage() {
   const [hoveredCell, setHoveredCell] = useState<{ roomId: string; day: number } | null>(null);
 
   // Note tooltip (Excel-style hover)
-  const [noteTooltip, setNoteTooltip] = useState<{ notes: string; x: number; y: number } | null>(null);
+  const [noteTooltip, setNoteTooltip] = useState<{ notes: string; createdBy: string | null; x: number; y: number } | null>(null);
+  const [profilesMap, setProfilesMap] = useState<Record<string, string>>({});
+
+  // Load all profiles once for creator name lookup
+  useEffect(() => {
+    supabase.from('profiles').select('id,name').then(({ data }) => {
+      const m: Record<string, string> = {};
+      for (const p of (data ?? [])) m[p.id] = p.name;
+      setProfilesMap(m);
+    });
+  }, []);
 
   // ── Multi-room reservation handler ──
   async function handleSaveMultiRoom() {
@@ -785,6 +861,14 @@ export default function CalendarPage() {
 
     setRooms(roomData ?? []);
     setReservations(resData ?? []);
+
+    // Load TV services (non-blocking)
+    supabase.from('room_tv_services').select('*').then(({ data: tvData }) => {
+      const map: Record<string, TvService> = {};
+      for (const t of (tvData ?? [])) map[t.room_id] = t as TvService;
+      setTvServices(map);
+    });
+
     setLoading(false);
   }, [year, month]);
 
@@ -2164,6 +2248,25 @@ export default function CalendarPage() {
                     <div className={`font-bold text-xs md:text-sm transition-colors flex items-center gap-1 ${hoveredCell?.roomId === room.id ? 'text-amber-700' : 'text-gray-900'}`}>
                       {room.id}
                       {['A1','A2','A3','A4','A9','B1','B2','B3','B4','B9'].includes(room.id) && <span data-testid={`shower-icon-${room.id}`} title="Ducha eléctrica" className="text-[11px]">🚿⚡</span>}
+                      {/* TV indicator */}
+                      {(() => {
+                        const tv  = tvServices[room.id];
+                        const dot = tvDotColor(room.id);
+                        if (!dot) return (
+                          <button onClick={e => { e.stopPropagation(); openTvModal(room.id); }}
+                            title="Configurar TV"
+                            className="hidden md:inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-100 text-gray-400 text-[9px] font-bold hover:bg-gray-200 transition-colors">M</button>
+                        );
+                        const isHydra = tv?.tv_type === 'hydra';
+                        const colorCls = isHydra
+                          ? 'bg-purple-500 hover:bg-purple-600'
+                          : dot === 'red' ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600';
+                        return (
+                          <button onClick={e => { e.stopPropagation(); openTvModal(room.id); }}
+                            title={isHydra ? 'Xuper TV Hydra ∞' : dot === 'red' ? 'TV necesita reset' : 'TV OK'}
+                            className={`inline-flex items-center justify-center w-4 h-4 rounded-full text-white text-[9px] font-bold transition-colors ${colorCls}`}>M</button>
+                        );
+                      })()}
                     </div>
                     <div className="hidden md:block text-xs text-gray-400 truncate mt-0.5">{room.type}</div>
                   </td>
@@ -2228,9 +2331,10 @@ export default function CalendarPage() {
                             onMouseEnter={e => {
                               setHoveredCell({ roomId: room.id, day: d });
                               const rawNotes = (res as any).notes ?? '';
-                              if (!isNota && rawNotes && !rawNotes.includes('__room_change')) {
+                              const createdBy = (res as any).created_by ? (profilesMap[(res as any).created_by] ?? null) : null;
+                              if (rawNotes && !rawNotes.includes('__room_change')) {
                                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                setNoteTooltip({ notes: rawNotes, x: rect.right + 8, y: rect.top });
+                                setNoteTooltip({ notes: rawNotes, createdBy, x: rect.right + 8, y: rect.top });
                               }
                             }}
                             onMouseLeave={() => { setHoveredCell(null); setNoteTooltip(null); }}
@@ -4449,7 +4553,12 @@ export default function CalendarPage() {
           style={{ top: noteTooltip.y, left: noteTooltip.x }}
         >
           <div className="bg-yellow-50 border border-yellow-300 rounded-lg shadow-xl px-3 py-2 max-w-[240px]">
-            <div className="text-[10px] font-bold text-yellow-700 mb-1 uppercase tracking-wide">📝 Nota</div>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[10px] font-bold text-yellow-700 uppercase tracking-wide">📝 Nota</div>
+              {noteTooltip.createdBy && (
+                <div className="text-[10px] text-yellow-600 font-semibold">✍️ {noteTooltip.createdBy}</div>
+              )}
+            </div>
             <p className="text-xs text-gray-800 leading-relaxed whitespace-pre-wrap">{noteTooltip.notes}</p>
           </div>
         </div>
@@ -4467,6 +4576,13 @@ export default function CalendarPage() {
               maxHeight: Math.min(400, window.innerHeight - cardMenu.y - 16),
             }}
           >
+            {/* Creator info */}
+            {(cardMenu.res as any).created_by && profilesMap[(cardMenu.res as any).created_by] && (
+              <div className="px-4 py-1.5 text-[10px] text-gray-400 border-b border-gray-100">
+                ✍️ Creado por <span className="font-semibold text-gray-600">{profilesMap[(cardMenu.res as any).created_by]}</span>
+              </div>
+            )}
+
             {/* ── Nota card: simplified menu ── */}
             {cardMenu.res.guest_name?.startsWith('📝') ? (
               <>
@@ -5889,6 +6005,82 @@ export default function CalendarPage() {
         <option value="Negocios" />
         <option value="Otro" />
       </datalist>
+
+      {/* ── TV Service Modal ── */}
+      {tvModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40" onClick={() => setTvModal(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-5 w-80 max-w-full" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-900 text-sm">📺 TV — {tvModal.roomId}</h3>
+              <button onClick={() => setTvModal(null)} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+            </div>
+
+            {/* Type selector */}
+            <div className="flex gap-2 mb-4">
+              {(['xuper', 'hydra'] as const).map(t => (
+                <button key={t} onClick={() => setTvModal(m => m ? { ...m, tv_type: t } : m)}
+                  className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${tvModal.tv_type === t ? (t === 'hydra' ? 'bg-purple-600 text-white border-purple-600' : 'bg-blue-600 text-white border-blue-600') : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'}`}>
+                  {t === 'hydra' ? '∞ Xuper TV Hydra' : '📺 Xuper TV'}
+                </button>
+              ))}
+            </div>
+
+            {/* Install date */}
+            <div className="mb-3">
+              <label className="text-xs font-semibold text-gray-500 block mb-1">Fecha de instalación</label>
+              <DatePicker
+                value={tvModal.installed_at}
+                onChange={v => setTvModal(m => m ? { ...m, installed_at: v } : m)}
+                placeholder="Fecha de instalación"
+                accentClass="border-blue-400 ring-blue-100"
+              />
+            </div>
+
+            {/* Reset section — only for xuper */}
+            {tvModal.tv_type === 'xuper' && (() => {
+              const ref = tvModal.last_reset_at || tvModal.installed_at;
+              const days = ref ? Math.floor((Date.now() - new Date(ref + 'T12:00:00').getTime()) / 86400000) : null;
+              const daysLeft = days !== null ? 7 - days : null;
+              return (
+                <div className="mb-3 bg-gray-50 rounded-xl p-3">
+                  <p className="text-xs font-semibold text-gray-500 mb-1">Último reset</p>
+                  <p className="text-xs text-gray-700">{tvModal.last_reset_at ?? 'Nunca (usa fecha instalación)'}</p>
+                  {daysLeft !== null && (
+                    <p className={`text-xs font-bold mt-1 ${daysLeft <= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {daysLeft <= 0 ? `⚠️ Vencido hace ${Math.abs(daysLeft)} día${Math.abs(daysLeft) !== 1 ? 's' : ''}` : `✓ Quedan ${daysLeft} día${daysLeft !== 1 ? 's' : ''}`}
+                    </p>
+                  )}
+                  <button onClick={() => markTvReset(tvModal.roomId)}
+                    className="mt-2 w-full py-1.5 text-xs font-bold bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors">
+                    ✓ Marcar reset hoy
+                  </button>
+                </div>
+              );
+            })()}
+
+            {tvModal.tv_type === 'hydra' && (
+              <div className="mb-3 bg-purple-50 rounded-xl p-3">
+                <p className="text-xs text-purple-700 font-semibold">∞ Hydra no requiere reset</p>
+              </div>
+            )}
+
+            {tvModal.error && <p className="text-red-500 text-xs mb-2">{tvModal.error}</p>}
+
+            <div className="flex gap-2">
+              <button onClick={saveTvService} disabled={tvModal.saving}
+                className="flex-1 py-2 text-xs font-bold bg-gray-900 text-white rounded-xl hover:bg-gray-700 transition-colors disabled:opacity-50">
+                {tvModal.saving ? 'Guardando…' : 'Guardar'}
+              </button>
+              {tvServices[tvModal.roomId] && (
+                <button onClick={() => deleteTvService(tvModal.roomId)}
+                  className="py-2 px-3 text-xs font-bold bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors">
+                  Quitar
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

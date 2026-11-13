@@ -33,3 +33,9 @@ dist-ssr
 # Scripts with credentials — never commit
 scripts/
 
+import_blacklist.py
+LISTA NEGRA.xlsx
+supabase_blacklist.sql
+MauricioDavalos_Logia.docx
+MauricioDavalos_Logia.pdf
+cv_logia.js

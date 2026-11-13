@@ -3,7 +3,7 @@ import type React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, CalendarDays, ArrowLeftRight,
-  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles, TrendingUp, Wallet, Receipt, CalendarCheck, PackageSearch,
+  ClipboardList, Users, LogOut, Menu, X, Hotel, BarChart2, History, BookUser, ShoppingBag, GraduationCap, Sparkles, TrendingUp, Wallet, Receipt, CalendarCheck, PackageSearch, UserX,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -27,6 +27,7 @@ const navItems: NavItem[] = [
   { to: '/admin/historial',    icon: History,         label: 'Historial',          adminOnly: true },
   { to: '/admin/spanish',      icon: GraduationCap,   label: 'Spanish School' },
   { to: '/admin/danos',        icon: PackageSearch,   label: 'Cosas Dañadas' },
+  { to: '/admin/blacklist',    icon: UserX,           label: 'Lista Negra' },
   // Marketing: visible only to admin and marketing role
   { to: '/admin/marketing',          icon: TrendingUp,    label: 'Marketing',           roles: ['admin', 'marketing'] },
   { to: '/admin/marketing-calendar', icon: CalendarCheck, label: 'Calendario Tareas',   roles: ['admin', 'marketing'] },
